@@ -80,6 +80,7 @@ def _allowed_robin_prefixes_for(module_name: str) -> set[str] | None:
 def check_module(module_name: str, imported_names: set[str]) -> list[str]:
     """Return violation strings for one module's imports. [] means compliant."""
     violations: list[str] = []
+    own_package = module_name.split(".", 1)[0]
 
     for imported in imported_names:
         for forbidden in FORBIDDEN_PREFIXES:
@@ -94,6 +95,8 @@ def check_module(module_name: str, imported_names: set[str]) -> list[str]:
 
     for imported in imported_names:
         if not imported.startswith("robin_"):
+            continue
+        if _prefix_matches(imported, own_package):
             continue
         if any(_prefix_matches(imported, edge) for edge in allowed):
             continue
@@ -196,6 +199,19 @@ def test_any_module_importing_soundhub_is_rejected(tmp_path):
     )
     violations = check_file(module, tmp_path)
     assert violations, "no robin_* module may import soundhub_*"
+
+
+def test_contracts_importing_its_own_submodule_is_accepted(tmp_path):
+    module = _write_module(
+        tmp_path,
+        "robin_contracts",
+        ["from robin_contracts.canonical import sha256_v1"],
+    )
+    violations = check_file(module, tmp_path)
+    assert not violations, (
+        f"robin_contracts.__init__ may import its own submodule robin_contracts.canonical: "
+        f"{violations}"
+    )
 
 
 def test_inference_engine_importing_contracts_is_accepted(tmp_path):
