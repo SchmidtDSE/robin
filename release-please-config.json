@@ -1,0 +1,49 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    "contracts": {
+      "package-name": "robin-contracts",
+      "release-type": "python",
+      "changelog-path": "CHANGELOG.md"
+    },
+    "inference_engine": {
+      "package-name": "robin-inference-engine",
+      "release-type": "python",
+      "changelog-path": "CHANGELOG.md",
+      "component": "runtime"
+    },
+    "run_manager": {
+      "package-name": "robin-run-manager",
+      "release-type": "python",
+      "changelog-path": "CHANGELOG.md",
+      "component": "runtime"
+    },
+    "worker": {
+      "package-name": "robin-worker",
+      "release-type": "python",
+      "changelog-path": "CHANGELOG.md",
+      "component": "runtime"
+    },
+    "adapters": {
+      "package-name": "robin-adapters",
+      "release-type": "python",
+      "changelog-path": "CHANGELOG.md",
+      "component": "runtime"
+    },
+    "robin": {
+      "package-name": "robin-bioacoustics",
+      "release-type": "python",
+      "changelog-path": "CHANGELOG.md",
+      "component": "runtime"
+    }
+  },
+  "plugins": [
+    {
+      "type": "linked-versions",
+      "groupName": "runtime",
+      "components": ["runtime"]
+    }
+  ],
+  "separate-pull-requests": true,
+  "include-component-in-tag": true
+}
