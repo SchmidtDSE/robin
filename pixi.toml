@@ -71,5 +71,9 @@ python -m venv .wheelcheck/venv-robin_bioacoustics &&
 .wheelcheck/venv-robin_bioacoustics/bin/pip install --no-index --find-links .wheelcheck/dist robin-bioacoustics &&
 echo "=== import: robin-bioacoustics (expect no code) ===" &&
 .wheelcheck/venv-robin_bioacoustics/bin/python -I -c "import importlib.util as u; ok = u.find_spec('robin_bioacoustics') is None; print('OK: no robin_bioacoustics module importable from robin-bioacoustics alone' if ok else 'FAIL: robin_bioacoustics module unexpectedly importable'); raise SystemExit(0 if ok else 1)" &&
-rm -rf .wheelcheck
+rm -rf .wheelcheck/venv-robin_contracts .wheelcheck/venv-robin_inference_engine .wheelcheck/venv-robin_run_manager .wheelcheck/venv-robin_worker .wheelcheck/venv-robin_adapters .wheelcheck/venv-robin_bioacoustics
 """
+
+[tasks.install-shapes]
+cmd = "pytest tests/install -v"
+

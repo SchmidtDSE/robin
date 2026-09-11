@@ -1,0 +1,114 @@
+name: install-shapes
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-wheels:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.8.14
+        with:
+          pixi-version: v0.70.0
+          frozen: true
+          environments: test
+      - run: pixi run -e test wheels
+      - uses: actions/upload-artifact@v4
+        with:
+          name: robin-wheels
+          path: .wheelcheck/dist/*.whl
+          if-no-files-found: error
+
+  install-shape-pr:
+    if: github.event_name == 'pull_request'
+    needs: build-wheels
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python: ["3.11", "3.12", "3.13"]
+        shape: [contracts, inference-engine, run-manager, worker, adapters, meta-all]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: robin-wheels
+          path: .wheelcheck/dist
+      - run: python -m venv .venv-shape
+      - run: .venv-shape/bin/pip install --upgrade pip pytest
+      - run: python tests/install/check_install_shape.py ${{ matrix.shape }} --wheels-dir .wheelcheck/dist --venv .venv-shape
+      - run: ROBIN_WHEELS_DIR=$PWD/.wheelcheck/dist .venv-shape/bin/pytest tests/install/test_shape_$(echo ${{ matrix.shape }} | tr - _).py -v
+
+  install-shape-main:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build-wheels
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64 — full shape set on every supported Python.
+          - { os: ubuntu-latest,    python: "3.11", shape: contracts }
+          - { os: ubuntu-latest,    python: "3.11", shape: inference-engine }
+          - { os: ubuntu-latest,    python: "3.11", shape: run-manager }
+          - { os: ubuntu-latest,    python: "3.11", shape: worker }
+          - { os: ubuntu-latest,    python: "3.11", shape: adapters }
+          - { os: ubuntu-latest,    python: "3.11", shape: meta-all }
+          - { os: ubuntu-latest,    python: "3.12", shape: contracts }
+          - { os: ubuntu-latest,    python: "3.12", shape: inference-engine }
+          - { os: ubuntu-latest,    python: "3.12", shape: run-manager }
+          - { os: ubuntu-latest,    python: "3.12", shape: worker }
+          - { os: ubuntu-latest,    python: "3.12", shape: adapters }
+          - { os: ubuntu-latest,    python: "3.12", shape: meta-all }
+          - { os: ubuntu-latest,    python: "3.13", shape: contracts }
+          - { os: ubuntu-latest,    python: "3.13", shape: inference-engine }
+          - { os: ubuntu-latest,    python: "3.13", shape: run-manager }
+          - { os: ubuntu-latest,    python: "3.13", shape: worker }
+          - { os: ubuntu-latest,    python: "3.13", shape: adapters }
+          - { os: ubuntu-latest,    python: "3.13", shape: meta-all }
+          # macOS arm64 — contracts / inference-engine / run-manager / meta-all.
+          - { os: macos-14,         python: "3.11", shape: contracts }
+          - { os: macos-14,         python: "3.11", shape: inference-engine }
+          - { os: macos-14,         python: "3.11", shape: run-manager }
+          - { os: macos-14,         python: "3.11", shape: meta-all }
+          - { os: macos-14,         python: "3.12", shape: contracts }
+          - { os: macos-14,         python: "3.12", shape: inference-engine }
+          - { os: macos-14,         python: "3.12", shape: run-manager }
+          - { os: macos-14,         python: "3.12", shape: meta-all }
+          - { os: macos-14,         python: "3.13", shape: contracts }
+          - { os: macos-14,         python: "3.13", shape: inference-engine }
+          - { os: macos-14,         python: "3.13", shape: run-manager }
+          - { os: macos-14,         python: "3.13", shape: meta-all }
+          # Linux arm64 — contracts / inference-engine only.
+          - { os: ubuntu-24.04-arm, python: "3.11", shape: contracts }
+          - { os: ubuntu-24.04-arm, python: "3.11", shape: inference-engine }
+          - { os: ubuntu-24.04-arm, python: "3.12", shape: contracts }
+          - { os: ubuntu-24.04-arm, python: "3.12", shape: inference-engine }
+          - { os: ubuntu-24.04-arm, python: "3.13", shape: contracts }
+          - { os: ubuntu-24.04-arm, python: "3.13", shape: inference-engine }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: robin-wheels
+          path: .wheelcheck/dist
+      - run: python -m venv .venv-shape
+      - run: .venv-shape/bin/pip install --upgrade pip pytest
+      - run: python tests/install/check_install_shape.py ${{ matrix.shape }} --wheels-dir .wheelcheck/dist --venv .venv-shape
+      - run: ROBIN_WHEELS_DIR=$PWD/.wheelcheck/dist .venv-shape/bin/pytest tests/install/test_shape_$(echo ${{ matrix.shape }} | tr - _).py -v

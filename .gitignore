@@ -93,3 +93,6 @@ AGENTS.md
 
 # Pixi
 .pixi/
+
+# Wheel-build scratch (wheels persist under .wheelcheck/dist/ for CI upload)
+.wheelcheck/
