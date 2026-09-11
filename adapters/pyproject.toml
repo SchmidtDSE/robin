@@ -1,0 +1,12 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "robin-adapters"
+version = "0.0.0"
+description = "Concrete backend adapters for ROBIN's ports."
+requires-python = ">=3.11"
+license = { text = "BSD-3-Clause" }
+authors = [{ name = "Schmidt Center for Data Science and the Environment" }]
+dependencies = ["robin-contracts >=0.0,<0.1"]

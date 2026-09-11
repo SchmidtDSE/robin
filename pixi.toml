@@ -1,0 +1,75 @@
+[workspace]
+name = "robin"
+channels = ["conda-forge"]
+platforms = ["linux-64", "osx-arm64", "linux-aarch64"]
+
+[dependencies]
+python = ">=3.11,<3.14"
+
+[feature.test.dependencies]
+pytest = "*"
+python-build = "*"
+
+[feature.test.pypi-dependencies]
+robin-contracts = { path = "contracts", editable = true }
+robin-inference-engine = { path = "inference_engine", editable = true }
+robin-run-manager = { path = "run_manager", editable = true }
+robin-worker = { path = "worker", editable = true }
+robin-adapters = { path = "adapters", editable = true }
+robin-bioacoustics = { path = "robin", editable = true }
+
+[environments]
+test = ["test"]
+
+[tasks]
+boundary = "pytest tests/boundary -v"
+imports = "python -c \"import robin_contracts, robin_inference_engine, robin_run_manager, robin_worker, robin_adapters\""
+
+[tasks.wheels]
+cmd = """
+rm -rf .wheelcheck &&
+mkdir -p .wheelcheck/dist &&
+echo === build: robin_contracts === &&
+python -m build --outdir .wheelcheck/dist contracts &&
+echo === build: robin_inference_engine === &&
+python -m build --outdir .wheelcheck/dist inference_engine &&
+echo === build: robin_run_manager === &&
+python -m build --outdir .wheelcheck/dist run_manager &&
+echo === build: robin_worker === &&
+python -m build --outdir .wheelcheck/dist worker &&
+echo === build: robin_adapters === &&
+python -m build --outdir .wheelcheck/dist adapters &&
+echo === build: robin_bioacoustics === &&
+python -m build --outdir .wheelcheck/dist robin &&
+echo === install: robin-contracts === &&
+python -m venv .wheelcheck/venv-robin_contracts &&
+.wheelcheck/venv-robin_contracts/bin/pip install --no-index --find-links .wheelcheck/dist robin-contracts &&
+echo === import: robin_contracts === &&
+.wheelcheck/venv-robin_contracts/bin/python -I -c "import robin_contracts; print('OK: imported robin_contracts')" &&
+echo === install: robin-inference-engine === &&
+python -m venv .wheelcheck/venv-robin_inference_engine &&
+.wheelcheck/venv-robin_inference_engine/bin/pip install --no-index --find-links .wheelcheck/dist robin-inference-engine &&
+echo === import: robin_inference_engine === &&
+.wheelcheck/venv-robin_inference_engine/bin/python -I -c "import robin_inference_engine; print('OK: imported robin_inference_engine')" &&
+echo === install: robin-run-manager === &&
+python -m venv .wheelcheck/venv-robin_run_manager &&
+.wheelcheck/venv-robin_run_manager/bin/pip install --no-index --find-links .wheelcheck/dist robin-run-manager &&
+echo === import: robin_run_manager === &&
+.wheelcheck/venv-robin_run_manager/bin/python -I -c "import robin_run_manager; print('OK: imported robin_run_manager')" &&
+echo === install: robin-worker === &&
+python -m venv .wheelcheck/venv-robin_worker &&
+.wheelcheck/venv-robin_worker/bin/pip install --no-index --find-links .wheelcheck/dist robin-worker &&
+echo === import: robin_worker === &&
+.wheelcheck/venv-robin_worker/bin/python -I -c "import robin_worker; print('OK: imported robin_worker')" &&
+echo === install: robin-adapters === &&
+python -m venv .wheelcheck/venv-robin_adapters &&
+.wheelcheck/venv-robin_adapters/bin/pip install --no-index --find-links .wheelcheck/dist robin-adapters &&
+echo === import: robin_adapters === &&
+.wheelcheck/venv-robin_adapters/bin/python -I -c "import robin_adapters; print('OK: imported robin_adapters')" &&
+echo === install: robin-bioacoustics === &&
+python -m venv .wheelcheck/venv-robin_bioacoustics &&
+.wheelcheck/venv-robin_bioacoustics/bin/pip install --no-index --find-links .wheelcheck/dist robin-bioacoustics &&
+echo "=== import: robin-bioacoustics (expect no code) ===" &&
+.wheelcheck/venv-robin_bioacoustics/bin/python -I -c "import importlib.util as u; ok = u.find_spec('robin_bioacoustics') is None; print('OK: no robin_bioacoustics module importable from robin-bioacoustics alone' if ok else 'FAIL: robin_bioacoustics module unexpectedly importable'); raise SystemExit(0 if ok else 1)" &&
+rm -rf .wheelcheck
+"""

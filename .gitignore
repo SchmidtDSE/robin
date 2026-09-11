@@ -90,3 +90,6 @@ docs/reference/apidocs/
 specs/
 CLAUDE.md
 AGENTS.md
+
+# Pixi
+.pixi/

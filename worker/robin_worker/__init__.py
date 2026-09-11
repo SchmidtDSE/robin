@@ -1,0 +1,1 @@
+"""ROBIN worker assembly."""
