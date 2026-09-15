@@ -9,6 +9,7 @@ python = ">=3.11,<3.14"
 [feature.test.dependencies]
 pytest = "*"
 python-build = "*"
+pip = "*"
 
 [feature.test.pypi-dependencies]
 robin-contracts = { path = "contracts", editable = true }
@@ -24,6 +25,8 @@ test = ["test"]
 [tasks]
 boundary = "pytest tests/boundary -v"
 imports = "python -c \"import robin_contracts, robin_inference_engine, robin_run_manager, robin_worker, robin_adapters\""
+test-contracts = "pytest contracts/tests -v"
+test = "pytest contracts/tests tests/boundary -v"
 
 [tasks.wheels]
 cmd = """
@@ -41,6 +44,8 @@ echo === build: robin_adapters === &&
 python -m build --outdir .wheelcheck/dist adapters &&
 echo === build: robin_bioacoustics === &&
 python -m build --outdir .wheelcheck/dist robin &&
+echo === seed: transitive deps === &&
+python -m pip download --dest .wheelcheck/dist "pydantic>=2.12,<3" &&
 echo === install: robin-contracts === &&
 python -m venv .wheelcheck/venv-robin_contracts &&
 .wheelcheck/venv-robin_contracts/bin/pip install --no-index --find-links .wheelcheck/dist robin-contracts &&
