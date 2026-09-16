@@ -19,3 +19,11 @@ def test_execution_spec_is_not_exported():
 
 def test_manifest_is_not_exported():
     assert getattr(robin_contracts, "InferenceManifestV1", None) is None
+
+
+def test_embedding_transform_reexports_are_importable():
+    from robin_contracts import EmbeddingTransform, Identity, L2Norm
+
+    assert EmbeddingTransform is not None
+    assert Identity is not None
+    assert L2Norm is not None
