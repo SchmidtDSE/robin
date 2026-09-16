@@ -27,3 +27,11 @@ def test_embedding_transform_reexports_are_importable():
     assert EmbeddingTransform is not None
     assert Identity is not None
     assert L2Norm is not None
+
+
+def test_input_reexports_are_importable():
+    from robin_contracts import AudioClip, Embedding, Input
+
+    assert AudioClip is not None
+    assert Embedding is not None
+    assert Input is not None
