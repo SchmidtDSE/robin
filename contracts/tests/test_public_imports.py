@@ -35,3 +35,11 @@ def test_input_reexports_are_importable():
     assert AudioClip is not None
     assert Embedding is not None
     assert Input is not None
+
+
+def test_card_reexports_are_importable():
+    from robin_contracts import HeadCard, ModelCard, ModelRef
+
+    assert HeadCard is not None
+    assert ModelCard is not None
+    assert ModelRef is not None

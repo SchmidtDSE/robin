@@ -2,7 +2,12 @@ import math
 
 import pytest
 
-from robin_contracts.canonical import CanonicalizationError, sha256_v1
+from robin_contracts.canonical import (
+    CanonicalizationError,
+    canonical_json_bytes,
+    sha256_v1,
+)
+from robin_contracts.embedding_transforms import L2Norm
 
 
 def test_canonical_digest_is_key_order_independent():
@@ -22,3 +27,22 @@ def test_canonical_digest_rejects_positive_infinity():
 def test_canonical_digest_rejects_negative_infinity():
     with pytest.raises(CanonicalizationError):
         sha256_v1({"value": float("-inf")})
+
+
+def test_canonical_encoding_covers_every_value_shape():
+    """Every branch of the encoder in one line of output. A card's digest is the
+    hash of exactly these bytes, so a change here moves every stored identity."""
+    encoded = canonical_json_bytes({
+        "f": 5.0,
+        "neg_zero": -0.0,
+        "small": 0.01,
+        "t": (1, 2),
+        "nested": L2Norm(),
+        "null": None,
+        "flag": False,
+    })
+
+    assert encoded == (
+        b'{"f":5.0,"flag":false,"neg_zero":0.0,"nested":{"kind":"l2"},'
+        b'"null":null,"small":0.01,"t":[1,2]}'
+    )

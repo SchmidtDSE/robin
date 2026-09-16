@@ -5,6 +5,7 @@ from robin_contracts.canonical import (
     canonical_json_bytes,
     sha256_v1,
 )
+from robin_contracts.cards import HeadCard, ModelCard, ModelRef
 from robin_contracts.embedding_transforms import (
     EmbeddingTransform,
     Identity,
@@ -17,9 +18,12 @@ __all__ = [
     "CanonicalizationError",
     "Embedding",
     "EmbeddingTransform",
+    "HeadCard",
     "Identity",
     "Input",
     "L2Norm",
+    "ModelCard",
+    "ModelRef",
     "canonical_json_bytes",
     "sha256_v1",
 ]

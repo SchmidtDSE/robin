@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from robin_contracts.canonical import canonical_json_bytes
 from robin_contracts.inputs import AudioClip, Embedding, Input
 
 
@@ -53,3 +54,11 @@ def test_audio_clip_rejects_extra_fields():
 def test_embedding_rejects_extra_fields():
     with pytest.raises(ValidationError):
         Embedding(recording_id=1, start=0.0, end=3.0, values=(0.1,), extra="nope")
+
+
+def test_audio_clip_canonical_wire_format():
+    clip = AudioClip(recording_id=1, path=Path("/data/rec.wav"))
+
+    assert canonical_json_bytes(clip) == (
+        b'{"kind":"audio","path":"/data/rec.wav","recording_id":1}'
+    )
