@@ -6,7 +6,7 @@ from robin_contracts.canonical import canonical_json_bytes
 from robin_contracts.embedding_transforms import Identity, L2Norm
 from robin_contracts.inputs import AudioClip
 
-FIXTURES_DIR = Path(__file__).resolve().parents[1] / "robin_contracts" / "compatibility" / "fixtures"
+FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 
 
 def _fixture_bytes(name: str) -> bytes:
