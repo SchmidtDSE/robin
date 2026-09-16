@@ -23,7 +23,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: robin-wheels
-          path: .wheelcheck/dist/*.whl
+          path: .wheelcheck/dist/robin_*.whl
           if-no-files-found: error
 
   install-shape-pr:
@@ -46,6 +46,8 @@ jobs:
         with:
           name: robin-wheels
           path: .wheelcheck/dist
+      # Resolve compiled dependencies for this runner's platform and Python.
+      - run: python -m pip download --only-binary=:all: --dest .wheelcheck/dist .wheelcheck/dist/robin_*.whl
       - run: python -m venv .venv-shape
       - run: .venv-shape/bin/pip install --upgrade pip pytest
       - run: python tests/install/check_install_shape.py ${{ matrix.shape }} --wheels-dir .wheelcheck/dist --venv .venv-shape
@@ -108,6 +110,8 @@ jobs:
         with:
           name: robin-wheels
           path: .wheelcheck/dist
+      # Resolve compiled dependencies for this runner's platform and Python.
+      - run: python -m pip download --only-binary=:all: --dest .wheelcheck/dist .wheelcheck/dist/robin_*.whl
       - run: python -m venv .venv-shape
       - run: .venv-shape/bin/pip install --upgrade pip pytest
       - run: python tests/install/check_install_shape.py ${{ matrix.shape }} --wheels-dir .wheelcheck/dist --venv .venv-shape
