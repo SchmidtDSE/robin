@@ -50,3 +50,54 @@ def test_registry_reexports_are_importable():
 
     assert RegistryEntry is not None
     assert TaxonRegistry is not None
+
+
+def test_record_reexports_are_importable():
+    from robin_contracts import ClassScore, WindowOutput
+
+    assert ClassScore is not None
+    assert WindowOutput is not None
+
+
+def test_protocol_reexports_are_importable():
+    from robin_contracts import (
+        JsonScalar,
+        Log,
+        Model,
+        ModelCapabilities,
+        ModelContext,
+        ScoreRetention,
+        noop,
+    )
+
+    assert JsonScalar is not None
+    assert Log is not None
+    assert Model is not None
+    assert ModelCapabilities is not None
+    assert ModelContext is not None
+    assert ScoreRetention is not None
+    assert noop is not None
+
+
+def test_spec_reexports_are_importable():
+    from robin_contracts import (
+        AudioSpec,
+        BackendResampled,
+        PadPolicy,
+        Recipe,
+        RecipeFingerprint,
+        Resampling,
+        RunnerResampled,
+        WindowGeometry,
+        window_count,
+    )
+
+    assert AudioSpec is not None
+    assert BackendResampled is not None
+    assert PadPolicy is not None
+    assert Recipe is not None
+    assert RecipeFingerprint is not None
+    assert Resampling is not None
+    assert RunnerResampled is not None
+    assert WindowGeometry is not None
+    assert window_count is not None
