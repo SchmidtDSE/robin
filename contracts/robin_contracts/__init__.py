@@ -12,6 +12,7 @@ from robin_contracts.embedding_transforms import (
     L2Norm,
 )
 from robin_contracts.inputs import AudioClip, Embedding, Input
+from robin_contracts.registry import RegistryEntry, TaxonRegistry
 
 __all__ = [
     "AudioClip",
@@ -24,6 +25,8 @@ __all__ = [
     "L2Norm",
     "ModelCard",
     "ModelRef",
+    "RegistryEntry",
+    "TaxonRegistry",
     "canonical_json_bytes",
     "sha256_v1",
 ]

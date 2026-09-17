@@ -43,3 +43,10 @@ def test_card_reexports_are_importable():
     assert HeadCard is not None
     assert ModelCard is not None
     assert ModelRef is not None
+
+
+def test_registry_reexports_are_importable():
+    from robin_contracts import RegistryEntry, TaxonRegistry
+
+    assert RegistryEntry is not None
+    assert TaxonRegistry is not None

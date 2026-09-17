@@ -7,7 +7,7 @@ isolated virtual environment and assert two things:
 - Every *forbidden* import raises ``ModuleNotFoundError``.
 
 Every shape additionally asserts that seven heavy runtime dependencies
-that no SP02 distribution declares (``tensorflow``, ``torch``,
+that no current distribution declares (``tensorflow``, ``torch``,
 ``birdnet``, ``psycopg``, ``boto3``, ``duckdb``, ``pyarrow``) remain
 absent from the install.
 
@@ -134,7 +134,7 @@ def check_shape(shape_name: str, wheels_dir: Path, venv: Path) -> None:
     for module in shape.forbidden_robin:
         _assert_not_importable(python, module, reason=f"forbidden for shape {shape.name!r}")
     for module in _FORBIDDEN_RUNTIMES:
-        _assert_not_importable(python, module, reason="never a runtime dependency in SP02")
+        _assert_not_importable(python, module, reason="not a declared runtime dependency")
 
 
 def _create_venv(venv: Path) -> None:

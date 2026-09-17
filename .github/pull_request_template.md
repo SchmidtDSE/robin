@@ -9,9 +9,9 @@ Name the exact commands a reviewer runs (e.g. `pixi run -e test boundary`,
 `pixi run -e test install-shapes`). Note anything that was skipped and why.
 -->
 
-## Acceptance rows advanced
+## Requirements addressed
 
 <!--
-Reference row numbers from `_NOTES/extraction/ACCEPTANCE.md` (e.g. A02, A26)
-and say what advanced. Leave empty if no acceptance row moves.
+Describe the requirements this change satisfies and link to relevant issues
+or public documentation when available. Leave empty if not applicable.
 -->

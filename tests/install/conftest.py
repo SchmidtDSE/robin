@@ -2,7 +2,7 @@
 
 The tests install built wheels into per-test virtual environments and
 assert that the resulting install answers the required/forbidden import
-matrix for each SP02-supported shape.
+matrix for each supported install shape.
 """
 
 from __future__ import annotations
