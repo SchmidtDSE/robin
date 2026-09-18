@@ -15,7 +15,7 @@ The ecosystem includes:
 
 Platform adapters connect ROBIN to existing catalogs, storage, and access policies. SoundHub is the first integration; the core tools are designed to work independently.
 
-**Status:** ROBIN is being designed and extracted from the SoundHub model runner. Package boundaries and public interfaces are still evolving.
+**Status:** ROBIN is being designed and extracted from the SoundHub model runner branch `mdc/refactor` by @gottacatchenall. Package boundaries and public interfaces are still evolving.
 
 ## License
 
