@@ -143,3 +143,23 @@ def test_spec_reexports_are_importable():
     assert RunnerResampled is not None
     assert WindowGeometry is not None
     assert window_count is not None
+
+
+def test_result_reexports_are_importable():
+    from robin_contracts import (
+        ArtifactRecord,
+        FailureReport,
+        InferenceFailure,
+        InferenceResult,
+        InferenceSuccess,
+        RecordingCoverage,
+        ZeroWindowReason,
+    )
+
+    assert ArtifactRecord is not None
+    assert FailureReport is not None
+    assert InferenceFailure is not None
+    assert InferenceResult is not None
+    assert InferenceSuccess is not None
+    assert RecordingCoverage is not None
+    assert ZeroWindowReason is not None

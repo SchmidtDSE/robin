@@ -50,31 +50,31 @@ def _positive_duration(value: float) -> float:
     return value
 
 
-_BytesDigest = Annotated[str, AfterValidator(_bytes_digest)]
-_CanonicalDigest = Annotated[str, AfterValidator(_canonical_digest)]
-_Text = Annotated[str, AfterValidator(_non_empty)]
+BytesDigest = Annotated[str, AfterValidator(_bytes_digest)]
+CanonicalDigest = Annotated[str, AfterValidator(_canonical_digest)]
+NonEmptyText = Annotated[str, AfterValidator(_non_empty)]
 
 
 class RecordingRef(BaseModel, frozen=True, extra="forbid"):
     """One recording: its processing index, its identity, and where its audio is."""
 
     index: Annotated[int, Field(ge=0)]
-    namespace: _Text
-    value: _Text
+    namespace: NonEmptyText
+    value: NonEmptyText
     # A null revision means the audio version is genuinely unknown; an empty string
     # would be an invented value wearing a different type.
-    source_revision: _Text | None = None
-    audio_uri: _Text
-    audio_digest: _BytesDigest | None = None
+    source_revision: NonEmptyText | None = None
+    audio_uri: NonEmptyText
+    audio_digest: BytesDigest | None = None
     duration_seconds: Annotated[float, AfterValidator(_positive_duration)] | None = None
 
 
 class FileDigest(BaseModel, frozen=True, extra="forbid"):
     """One file this work pins by content: its role, where it is, what it hashes to."""
 
-    role: _Text
-    uri: _Text
-    digest: _BytesDigest
+    role: NonEmptyText
+    uri: NonEmptyText
+    digest: BytesDigest
     size_bytes: Annotated[int, Field(ge=0)]
 
 
@@ -82,9 +82,9 @@ class ModelSelection(BaseModel, frozen=True, extra="forbid"):
     """The exact model this work runs: its card, its files, and its label binding."""
 
     ref: ModelRef
-    card_digest: _CanonicalDigest
+    card_digest: CanonicalDigest
     files: tuple[FileDigest, ...]
-    registry_fingerprint: _BytesDigest | None = None
+    registry_fingerprint: BytesDigest | None = None
     backbone: ModelRef | None = None  # set iff this is a head
 
 
@@ -99,10 +99,10 @@ class EmbeddingArtifactInput(BaseModel, frozen=True, extra="forbid"):
 
     kind: Literal["embedding_artifact"] = "embedding_artifact"
     contract_id: EmbeddingsContractId
-    uri: _Text
-    checksum: _BytesDigest
-    recording_map_uri: _Text
-    recording_map_checksum: _BytesDigest
+    uri: NonEmptyText
+    checksum: BytesDigest
+    recording_map_uri: NonEmptyText
+    recording_map_checksum: BytesDigest
 
 
 class InferenceWork(BaseModel, frozen=True, extra="forbid"):

@@ -32,6 +32,15 @@ from robin_contracts.protocols import (
 )
 from robin_contracts.records import ClassScore, WindowOutput
 from robin_contracts.registry import RegistryEntry, TaxonRegistry
+from robin_contracts.results import (
+    ArtifactRecord,
+    FailureReport,
+    InferenceFailure,
+    InferenceResult,
+    InferenceSuccess,
+    RecordingCoverage,
+    ZeroWindowReason,
+)
 from robin_contracts.specs import (
     AudioSpec,
     BackendResampled,
@@ -55,6 +64,7 @@ from robin_contracts.work import (
 )
 
 __all__ = [
+    "ArtifactRecord",
     "AudioClip",
     "AudioInput",
     "AudioSpec",
@@ -67,9 +77,13 @@ __all__ = [
     "EmbeddingArtifactInput",
     "EmbeddingTransform",
     "EmbeddingsRequest",
+    "FailureReport",
     "FileDigest",
     "HeadCard",
     "Identity",
+    "InferenceFailure",
+    "InferenceResult",
+    "InferenceSuccess",
     "InferenceWork",
     "Input",
     "JsonScalar",
@@ -85,6 +99,7 @@ __all__ = [
     "PadPolicy",
     "Recipe",
     "RecipeFingerprint",
+    "RecordingCoverage",
     "RecordingRef",
     "RegistryEntry",
     "Resampling",
@@ -96,6 +111,7 @@ __all__ = [
     "TopKPolicy",
     "WindowGeometry",
     "WindowOutput",
+    "ZeroWindowReason",
     "canonical_json_bytes",
     "noop",
     "partition",
