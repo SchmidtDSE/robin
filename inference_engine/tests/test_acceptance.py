@@ -183,11 +183,47 @@ def test_accept_refuses_a_start_at_or_past_the_recording_duration(start):
     assert exc.value.code == errors.WINDOW_OUTSIDE_RECORDING
 
 
-def test_accept_allows_a_trailing_pad_window_past_the_audio():
+@pytest.mark.parametrize("duration", [10.0, None])
+@pytest.mark.parametrize("start", [-6.0, -3.0, -0.01])
+def test_accept_refuses_a_negative_start_even_on_the_hop_grid(start, duration):
+    boundary = build_boundary(durations={0: duration})
+
+    with pytest.raises(errors.EngineError) as exc:
+        boundary.accept(build_window(start=start, end=start + 3.0))
+
+    assert exc.value.code == errors.WINDOW_OUTSIDE_RECORDING
+
+
+@pytest.mark.parametrize(("duration", "start"), [(1.0, 0.0), (10.0, 9.0)])
+def test_accept_refuses_a_partial_window_under_drop_policy(duration, start):
+    boundary = build_boundary(
+        geometry=WindowGeometry(window=3.0, hop=3.0, pad="drop"),
+        durations={0: duration},
+    )
+
+    with pytest.raises(errors.EngineError) as exc:
+        boundary.accept(build_window(start=start, end=start + 3.0))
+
+    assert exc.value.code == errors.WINDOW_OUTSIDE_RECORDING
+
+
+def test_accept_allows_a_complete_window_under_drop_policy():
+    boundary = build_boundary(
+        geometry=WindowGeometry(window=3.0, hop=3.0, pad="drop"),
+        durations={0: 3.0},
+    )
+
+    accepted = boundary.accept(build_window(start=0.0, end=3.0))
+
+    assert (accepted.start, accepted.end) == (0.0, 3.0)
+
+
+@pytest.mark.parametrize("pad", ["centre_crop_end_pad", "time_scaled"])
+def test_accept_allows_a_trailing_pad_window_past_the_audio(pad):
     # The refused half is a 0.05 s band: the duration check runs after the geometry
     # check has already pinned end - start to the window, so a duration sitting a hair
     # above a hop multiple is the only shape that reaches it.
-    geometry = WindowGeometry(window=3.0, hop=1.0, pad="centre_crop_end_pad")
+    geometry = WindowGeometry(window=3.0, hop=1.0, pad=pad)
 
     accepted = build_boundary(geometry=geometry, durations={0: 9.05}).accept(
         build_window(start=9.0, end=12.0)
@@ -203,8 +239,12 @@ def test_accept_allows_a_trailing_pad_window_past_the_audio():
     assert exc.value.code == errors.WINDOW_OUTSIDE_RECORDING
 
 
-def test_accept_checks_no_duration_when_the_recording_declares_none():
-    accepted = build_boundary(durations={0: None}).accept(build_window(start=90.0, end=93.0))
+@pytest.mark.parametrize("pad", ["drop", "centre_crop_end_pad", "time_scaled"])
+def test_accept_checks_no_duration_when_the_recording_declares_none(pad):
+    accepted = build_boundary(
+        geometry=WindowGeometry(window=3.0, hop=3.0, pad=pad),
+        durations={0: None},
+    ).accept(build_window(start=90.0, end=93.0))
 
     assert accepted.start == 90.0
 

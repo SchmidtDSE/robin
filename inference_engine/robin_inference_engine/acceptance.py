@@ -168,6 +168,12 @@ class AcceptanceBoundary:
             )
 
     def _check_within_recording(self, window: WindowOutput) -> None:
+        if window.start < 0:
+            raise self._refuse(
+                errors.WINDOW_OUTSIDE_RECORDING,
+                window,
+                f"start {window.start} is before the recording",
+            )
         duration = self._durations[self._open_recording]
         if duration is None:
             return
@@ -176,6 +182,13 @@ class AcceptanceBoundary:
                 errors.WINDOW_OUTSIDE_RECORDING,
                 window,
                 f"start {window.start} is at or past the recording's {duration} s",
+            )
+        if self._geometry.pad == "drop" and window.end > duration:
+            raise self._refuse(
+                errors.WINDOW_OUTSIDE_RECORDING,
+                window,
+                f"end {window.end} is past the recording's {duration} s "
+                "under the drop policy",
             )
         if window.end > duration + self._geometry.window:
             raise self._refuse(
