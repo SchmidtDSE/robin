@@ -48,6 +48,7 @@ python -m build --outdir .wheelcheck/dist robin &&
 echo === seed: transitive deps === &&
 python -m pip download --dest .wheelcheck/dist "pydantic>=2.12,<3" &&
 python -m pip download --dest .wheelcheck/dist "numpy>=2.1,<3" &&
+python -m pip download --dest .wheelcheck/dist "pyarrow>=23.0.1,<24" &&
 echo === install: robin-contracts === &&
 python -m venv .wheelcheck/venv-robin_contracts &&
 .wheelcheck/venv-robin_contracts/bin/pip install --no-index --find-links .wheelcheck/dist robin-contracts &&

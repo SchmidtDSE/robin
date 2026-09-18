@@ -47,6 +47,7 @@ SCORES_NOT_EMITTED = "scores_not_emitted"
 EMBEDDINGS_NOT_EMITTED = "embeddings_not_emitted"
 RETENTION_UNSUPPORTED = "retention_unsupported"
 FULL_RETENTION_REDUCED = "full_retention_reduced"
+SCORE_FLOOR_DISAGREES = "score_floor_disagrees"
 MIN_SCORE_OUT_OF_DOMAIN = "min_score_out_of_domain"
 EMBEDDING_EMISSION_DISAGREES = "embedding_emission_disagrees"
 EMBEDDING_DIM_DISAGREES = "embedding_dim_disagrees"
@@ -59,6 +60,7 @@ VALIDATE_REQUEST_FAILURES = (
     EMBEDDINGS_NOT_EMITTED,
     RETENTION_UNSUPPORTED,
     FULL_RETENTION_REDUCED,
+    SCORE_FLOOR_DISAGREES,
     MIN_SCORE_OUT_OF_DOMAIN,
     EMBEDDING_EMISSION_DISAGREES,
     EMBEDDING_DIM_DISAGREES,
@@ -77,6 +79,30 @@ INFER = "infer"
 UNEXPLAINED_ZERO_WINDOWS = "unexplained_zero_windows"
 
 INFER_FAILURES = (UNEXPLAINED_ZERO_WINDOWS,)
+
+
+# ---------------------------------------------------------------------------
+# read_input_artifact: what the engine refuses to believe about stored bytes.
+#
+# ---------------------------------------------------------------------------
+
+READ_INPUT_ARTIFACT = "read_input_artifact"
+
+ARTIFACT_CHECKSUM_MISMATCH = "artifact_checksum_mismatch"
+ARTIFACT_CONTRACT_UNEXPECTED = "artifact_contract_unexpected"
+ARTIFACT_SCHEMA_INVALID = "artifact_schema_invalid"
+ARTIFACT_METADATA_INCOMPLETE = "artifact_metadata_incomplete"
+ARTIFACT_MALFORMED = "artifact_malformed"
+ARTIFACT_UNREADABLE = "artifact_unreadable"
+
+READ_INPUT_ARTIFACT_FAILURES = (
+    ARTIFACT_CHECKSUM_MISMATCH,
+    ARTIFACT_CONTRACT_UNEXPECTED,
+    ARTIFACT_SCHEMA_INVALID,
+    ARTIFACT_METADATA_INCOMPLETE,
+    ARTIFACT_MALFORMED,
+    ARTIFACT_UNREADABLE,
+)
 
 
 # ---------------------------------------------------------------------------

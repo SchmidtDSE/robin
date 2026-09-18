@@ -6,10 +6,11 @@ isolated virtual environment and assert two things:
 - Every *required* import for the shape succeeds.
 - Every *forbidden* import raises ``ModuleNotFoundError``.
 
-Every shape additionally asserts that seven heavy runtime dependencies
-that no current distribution declares (``tensorflow``, ``torch``,
-``birdnet``, ``psycopg``, ``boto3``, ``duckdb``, ``pyarrow``) remain
-absent from the install.
+Heavy runtime dependencies are checked per shape. Every entry in
+``_HEAVY_RUNTIMES`` a shape does not declare must be absent from the
+install, and every one it does declare must be importable: asserting
+presence is what ties the list to the dependency, where a permitted-only
+list would let a declared dependency disappear with this check still green.
 
 Invoked from CI as::
 
@@ -38,6 +39,7 @@ class Shape:
     install: tuple[str, ...]
     required: tuple[str, ...]
     forbidden_robin: tuple[str, ...]
+    runtimes: tuple[str, ...]
 
 
 _ROBIN_COMPONENTS = (
@@ -48,7 +50,7 @@ _ROBIN_COMPONENTS = (
     "robin_adapters",
 )
 
-_FORBIDDEN_RUNTIMES = (
+_HEAVY_RUNTIMES = (
     "tensorflow",
     "torch",
     "birdnet",
@@ -62,9 +64,23 @@ _FORBIDDEN_RUNTIMES = (
 SHAPES: dict[str, Shape] = {}
 
 
-def _register(name: str, install: tuple[str, ...], required: tuple[str, ...]) -> None:
+def _register(
+    name: str,
+    install: tuple[str, ...],
+    required: tuple[str, ...],
+    runtimes: tuple[str, ...] = (),
+) -> None:
+    unknown = [module for module in runtimes if module not in _HEAVY_RUNTIMES]
+    if unknown:
+        raise InstallShapeError(f"shape {name!r} declares unknown runtimes {unknown}")
     forbidden = tuple(m for m in _ROBIN_COMPONENTS if m not in required)
-    SHAPES[name] = Shape(name=name, install=install, required=required, forbidden_robin=forbidden)
+    SHAPES[name] = Shape(
+        name=name,
+        install=install,
+        required=required,
+        forbidden_robin=forbidden,
+        runtimes=runtimes,
+    )
 
 
 _register(
@@ -76,6 +92,7 @@ _register(
     "inference-engine",
     install=("robin-inference-engine",),
     required=("robin_inference_engine", "robin_contracts"),
+    runtimes=("pyarrow",),
 )
 _register(
     "run-manager",
@@ -86,6 +103,7 @@ _register(
     "worker",
     install=("robin-worker",),
     required=_ROBIN_COMPONENTS,
+    runtimes=("pyarrow",),
 )
 _register(
     "adapters",
@@ -96,6 +114,7 @@ _register(
     "meta-all",
     install=("robin-bioacoustics[all]",),
     required=_ROBIN_COMPONENTS,
+    runtimes=("pyarrow",),
 )
 
 
@@ -133,8 +152,14 @@ def check_shape(shape_name: str, wheels_dir: Path, venv: Path) -> None:
         _assert_importable(python, module)
     for module in shape.forbidden_robin:
         _assert_not_importable(python, module, reason=f"forbidden for shape {shape.name!r}")
-    for module in _FORBIDDEN_RUNTIMES:
-        _assert_not_importable(python, module, reason="not a declared runtime dependency")
+    for module in shape.runtimes:
+        _assert_importable(python, module)
+    for module in _HEAVY_RUNTIMES:
+        if module in shape.runtimes:
+            continue
+        _assert_not_importable(
+            python, module, reason=f"not declared by shape {shape.name!r}"
+        )
 
 
 def _create_venv(venv: Path) -> None:

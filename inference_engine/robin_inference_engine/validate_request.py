@@ -46,6 +46,7 @@ def refuse_instance(
         _refuse_scores_the_instance_does_not_emit(capabilities)
         _refuse_an_unsupported_retention(scores, capabilities)
         _refuse_a_reduced_full_stream(scores, capabilities)
+        _refuse_a_floor_the_instance_does_not_impose(scores, capabilities)
     _refuse_a_floor_outside_the_score_domain(work, capabilities)
     _refuse_an_embedding_emission_its_card_forbids(capabilities, card)
     _refuse_an_embedding_width_its_card_contradicts(capabilities, card)
@@ -167,6 +168,23 @@ def _refuse_a_reduced_full_stream(
             errors.FULL_RETENTION_REDUCED,
             f"full retention was requested but this instance declares "
             f"native_score_floor {floor}, above the domain minimum {minimum}",
+        )
+
+
+def _refuse_a_floor_the_instance_does_not_impose(
+    scores: ScoresRequest, capabilities: ModelCapabilities
+) -> None:
+    """A reduced stream is published under the request's floor, so they must be one floor."""
+    # Exact, because both sides are declared constants rather than measurements: a
+    # tolerance would let a genuinely different floor through in either direction.
+    if scores.retention == "full":
+        return
+    if scores.min_score != capabilities.native_score_floor:
+        raise _refused(
+            errors.SCORE_FLOOR_DISAGREES,
+            f"{scores.retention} retention would be published under the requested "
+            f"floor {scores.min_score}, but this instance declares native_score_floor "
+            f"{capabilities.native_score_floor}",
         )
 
 

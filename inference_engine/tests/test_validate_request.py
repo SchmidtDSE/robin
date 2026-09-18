@@ -179,13 +179,121 @@ def test_full_retention_is_refused_when_the_instance_declares_only_top_k():
     assert exc.value.code == errors.RETENTION_UNSUPPORTED
 
 
+def test_a_thresholded_request_at_the_instance_floor_is_accepted():
+    work = build_work(outputs=(build_scores(retention="thresholded", min_score=0.005),))
+
+    assert (
+        refuse_instance(
+            work,
+            capabilities=build_capabilities(native_score_floor=0.005),
+            card=build_card(),
+        )
+        is None
+    )
+
+
+def test_a_thresholded_request_above_the_instance_floor_is_refused():
+    work = build_work(outputs=(build_scores(retention="thresholded", min_score=0.5),))
+
+    with pytest.raises(errors.EngineError) as exc:
+        refuse_instance(
+            work,
+            capabilities=build_capabilities(native_score_floor=0.005),
+            card=build_card(),
+        )
+
+    assert exc.value.code == errors.SCORE_FLOOR_DISAGREES
+    assert "0.5" in exc.value.detail and "0.005" in exc.value.detail
+
+
+def test_a_thresholded_request_below_the_instance_floor_is_refused():
+    # The over-claiming direction: a reader would conclude that an absent label scored
+    # under 0.001 when the boundary the rows were produced at was 0.005.
+    work = build_work(outputs=(build_scores(retention="thresholded", min_score=0.001),))
+
+    with pytest.raises(errors.EngineError) as exc:
+        refuse_instance(
+            work,
+            capabilities=build_capabilities(native_score_floor=0.005),
+            card=build_card(),
+        )
+
+    assert exc.value.code == errors.SCORE_FLOOR_DISAGREES
+
+
+def test_a_reduced_request_against_an_instance_with_no_floor_is_refused():
+    work = build_work(outputs=(build_scores(retention="thresholded", min_score=0.005),))
+
+    with pytest.raises(errors.EngineError) as exc:
+        refuse_instance(
+            work,
+            capabilities=build_capabilities(native_score_floor=None),
+            card=build_card(),
+        )
+
+    assert exc.value.code == errors.SCORE_FLOOR_DISAGREES
+
+
+def test_a_top_k_request_checks_its_floor_too():
+    work = build_work(
+        outputs=(build_scores(retention="top_k", min_score=0.5, top_k=5),)
+    )
+
+    with pytest.raises(errors.EngineError) as exc:
+        refuse_instance(
+            work,
+            capabilities=build_capabilities(native_score_floor=0.005),
+            card=build_card(),
+        )
+
+    assert exc.value.code == errors.SCORE_FLOOR_DISAGREES
+
+    at_the_floor = build_work(
+        outputs=(build_scores(retention="top_k", min_score=0.005, top_k=5),)
+    )
+    assert (
+        refuse_instance(
+            at_the_floor,
+            capabilities=build_capabilities(native_score_floor=0.005),
+            card=build_card(),
+        )
+        is None
+    )
+
+
+def test_a_full_request_is_unaffected_by_the_floor_check():
+    assert (
+        refuse_instance(
+            build_work(),
+            capabilities=build_capabilities(native_score_floor=0.0),
+            card=build_card(),
+        )
+        is None
+    )
+
+    with pytest.raises(errors.EngineError) as exc:
+        refuse_instance(
+            build_work(),
+            capabilities=build_capabilities(native_score_floor=0.005),
+            card=build_card(),
+        )
+
+    assert exc.value.code == errors.FULL_RETENTION_REDUCED
+
+
 @pytest.mark.parametrize("floor", [1.5, -0.1])
 def test_a_min_score_outside_the_score_domain_is_refused(floor):
     from_request = build_work(
         outputs=(build_scores(retention="thresholded", min_score=floor),)
     )
+    # The instance declares the same floor, so what refuses is the domain and not the
+    # disagreement: a request the instance does not impose is a different defect.
     with pytest.raises(errors.EngineError) as exc:
-        refuse_instance(from_request, capabilities=build_capabilities(), card=build_card())
+        refuse_instance(
+            from_request,
+            capabilities=build_capabilities(native_score_floor=floor),
+            card=build_card(),
+        )
     assert exc.value.code == errors.MIN_SCORE_OUT_OF_DOMAIN
 
     from_policy = build_work(
@@ -389,9 +497,14 @@ REFUSING_CALLS = {
         capabilities=build_capabilities(native_score_floor=0.05),
         card=build_card(),
     ),
+    "score_floor_disagrees": lambda: refuse_instance(
+        build_work(outputs=(build_scores(retention="thresholded", min_score=0.5),)),
+        capabilities=build_capabilities(native_score_floor=0.005),
+        card=build_card(),
+    ),
     "min_score_out_of_domain": lambda: refuse_instance(
         build_work(outputs=(build_scores(retention="thresholded", min_score=1.5),)),
-        capabilities=build_capabilities(),
+        capabilities=build_capabilities(native_score_floor=1.5),
         card=build_card(),
     ),
     "min_score_out_of_domain_from_a_top_k_policy": lambda: refuse_instance(

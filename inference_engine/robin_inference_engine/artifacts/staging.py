@@ -1,0 +1,86 @@
+"""A finished artifact file, and the checks every reader holds one to."""
+
+import hashlib
+from dataclasses import dataclass
+from pathlib import Path
+
+from robin_contracts.results import ArtifactContractId, ArtifactKind
+from robin_inference_engine import errors
+
+CHECKSUM_CHUNK_BYTES = 1 << 20
+
+
+@dataclass(frozen=True, slots=True)
+class StagedArtifact:
+    """A finished artifact on local disk, before a writer port publishes it.
+
+    It has no uri and no size: the destination is the publisher's choice, and the
+    size is measured from the finished file once it is published.
+    """
+
+    kind: ArtifactKind
+    contract_id: ArtifactContractId
+    path: Path
+    checksum: str
+    rows: int
+
+
+def malformed(detail: str) -> errors.EngineError:
+    """Bytes that cannot be read as this contract's container at all."""
+    return errors.EngineError(
+        errors.ARTIFACT_MALFORMED, errors.READ_INPUT_ARTIFACT, detail
+    )
+
+
+def invalid_schema(detail: str) -> errors.EngineError:
+    """Bytes that are read, but do not match what the contract declares."""
+    return errors.EngineError(
+        errors.ARTIFACT_SCHEMA_INVALID, errors.READ_INPUT_ARTIFACT, detail
+    )
+
+
+def unreadable(name: str, exc: OSError) -> errors.EngineError:
+    """A file this reader could not open or read at all."""
+    return errors.EngineError(
+        errors.ARTIFACT_UNREADABLE,
+        errors.READ_INPUT_ARTIFACT,
+        f"{name} could not be read: {exc}",
+    )
+
+
+def require_checksum(name: str, *, actual: str, expected: str) -> None:
+    """Refuse an artifact whose bytes do not hash to the checksum it was named by.
+
+    Each reader hashes the way its own artifact allows, streamed or in memory, and
+    hands the result here.
+    """
+    if actual != expected:
+        raise errors.EngineError(
+            errors.ARTIFACT_CHECKSUM_MISMATCH,
+            errors.READ_INPUT_ARTIFACT,
+            f"{name} was read as {actual} but was named as {expected}",
+        )
+
+
+def require_contract(declared: object, *, expected: ArtifactContractId) -> None:
+    """Refuse an artifact that declares a contract other than the one being read."""
+    if declared != expected:
+        raise errors.EngineError(
+            errors.ARTIFACT_CONTRACT_UNEXPECTED,
+            errors.READ_INPUT_ARTIFACT,
+            f"expected contract {expected} but the artifact declares {declared!r}",
+        )
+
+
+def checksum_bytes(payload: bytes) -> str:
+    """The `sha256:` checksum of bytes already in memory."""
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def checksum_file(path: Path) -> str:
+    """The `sha256:` checksum of a file, read a chunk at a time so any size is safe."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(CHECKSUM_CHUNK_BYTES):
+            digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
