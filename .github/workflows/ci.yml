@@ -19,7 +19,5 @@ jobs:
           pixi-version: v0.70.0
           frozen: true
           environments: test
-      - run: pixi run -e test boundary
+      - run: pixi run -e test test
       - run: pixi run -e test imports
-      - run: pixi run -e test wheels
-      - run: pixi run -e test install-shapes

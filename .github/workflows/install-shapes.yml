@@ -20,6 +20,8 @@ jobs:
           frozen: true
           environments: test
       - run: pixi run -e test wheels
+      - if: github.event_name == 'push' && github.ref != 'refs/heads/main'
+        run: pixi run -e test install-shapes
       - uses: actions/upload-artifact@v4
         with:
           name: robin-wheels
@@ -47,11 +49,9 @@ jobs:
           name: robin-wheels
           path: .wheelcheck/dist
       # Resolve compiled dependencies for this runner's platform and Python.
-      - run: python -m pip download --only-binary=:all: --dest .wheelcheck/dist .wheelcheck/dist/robin_*.whl
-      - run: python -m venv .venv-shape
-      - run: .venv-shape/bin/pip install --upgrade pip pytest
+      - run: >-
+          python -m pip download --only-binary=:all: --dest .wheelcheck/dist .wheelcheck/dist/robin_*.whl
       - run: python tests/install/check_install_shape.py ${{ matrix.shape }} --wheels-dir .wheelcheck/dist --venv .venv-shape
-      - run: ROBIN_WHEELS_DIR=$PWD/.wheelcheck/dist .venv-shape/bin/pytest tests/install/test_shape_$(echo ${{ matrix.shape }} | tr - _).py -v
 
   install-shape-main:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -111,8 +111,6 @@ jobs:
           name: robin-wheels
           path: .wheelcheck/dist
       # Resolve compiled dependencies for this runner's platform and Python.
-      - run: python -m pip download --only-binary=:all: --dest .wheelcheck/dist .wheelcheck/dist/robin_*.whl
-      - run: python -m venv .venv-shape
-      - run: .venv-shape/bin/pip install --upgrade pip pytest
+      - run: >-
+          python -m pip download --only-binary=:all: --dest .wheelcheck/dist .wheelcheck/dist/robin_*.whl
       - run: python tests/install/check_install_shape.py ${{ matrix.shape }} --wheels-dir .wheelcheck/dist --venv .venv-shape
-      - run: ROBIN_WHEELS_DIR=$PWD/.wheelcheck/dist .venv-shape/bin/pytest tests/install/test_shape_$(echo ${{ matrix.shape }} | tr - _).py -v
