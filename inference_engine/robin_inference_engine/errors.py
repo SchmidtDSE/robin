@@ -1,5 +1,9 @@
 """Typed engine failures. A caller decides what to do from the code, not the message."""
 
+# ---------------------------------------------------------------------------
+# accept_window: what the engine refuses from an adapter's output.
+# ---------------------------------------------------------------------------
+
 ACCEPT_WINDOW = "accept_window"
 
 UNKNOWN_RECORDING_INDEX = "unknown_recording_index"
@@ -16,7 +20,7 @@ MALFORMED_EMBEDDING = "malformed_embedding"
 EMBEDDING_NOT_FINITE = "embedding_not_finite"
 WINDOW_OUT_OF_ORDER = "window_out_of_order"
 
-ACCEPTANCE_CODES = (
+ACCEPT_WINDOW_FAILURES = (
     UNKNOWN_RECORDING_INDEX,
     WINDOW_BOUNDS_INVALID,
     DUPLICATE_WINDOW,
@@ -31,6 +35,42 @@ ACCEPTANCE_CODES = (
     EMBEDDING_NOT_FINITE,
     WINDOW_OUT_OF_ORDER,
 )
+
+
+# ---------------------------------------------------------------------------
+# validate_request: what the engine refuses to attempt at all.
+# ---------------------------------------------------------------------------
+
+VALIDATE_REQUEST = "validate_request"
+
+SCORES_NOT_EMITTED = "scores_not_emitted"
+EMBEDDINGS_NOT_EMITTED = "embeddings_not_emitted"
+RETENTION_UNSUPPORTED = "retention_unsupported"
+FULL_RETENTION_REDUCED = "full_retention_reduced"
+MIN_SCORE_OUT_OF_DOMAIN = "min_score_out_of_domain"
+EMBEDDING_EMISSION_DISAGREES = "embedding_emission_disagrees"
+EMBEDDING_DIM_DISAGREES = "embedding_dim_disagrees"
+REGISTRY_REQUIRED = "registry_required"
+REGISTRY_FINGERPRINT_MISMATCH = "registry_fingerprint_mismatch"
+HEAD_CLASS_NOT_IN_REGISTRY = "head_class_not_in_registry"
+
+VALIDATE_REQUEST_FAILURES = (
+    SCORES_NOT_EMITTED,
+    EMBEDDINGS_NOT_EMITTED,
+    RETENTION_UNSUPPORTED,
+    FULL_RETENTION_REDUCED,
+    MIN_SCORE_OUT_OF_DOMAIN,
+    EMBEDDING_EMISSION_DISAGREES,
+    EMBEDDING_DIM_DISAGREES,
+    REGISTRY_REQUIRED,
+    REGISTRY_FINGERPRINT_MISMATCH,
+    HEAD_CLASS_NOT_IN_REGISTRY,
+)
+
+
+# ---------------------------------------------------------------------------
+# The failure itself, raised by every stage.
+# ---------------------------------------------------------------------------
 
 
 class EngineError(Exception):
