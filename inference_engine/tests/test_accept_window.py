@@ -8,7 +8,7 @@ from robin_contracts.records import ClassScore, WindowOutput
 from robin_contracts.registry import RegistryEntry, TaxonRegistry
 from robin_contracts.specs import WindowGeometry
 from robin_inference_engine import errors
-from robin_inference_engine.acceptance import AcceptanceBoundary
+from robin_inference_engine.accept_window import AcceptanceBoundary
 
 FINGERPRINT = "sha256:" + "0" * 64
 

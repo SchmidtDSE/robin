@@ -18,7 +18,7 @@ from robin_contracts.protocols import ModelCapabilities
 from robin_contracts.registry import TaxonRegistry
 from robin_contracts.work import InferenceWork
 from robin_inference_engine import errors
-from robin_inference_engine.acceptance import PROBABILITY_RANGE
+from robin_inference_engine.accept_window import PROBABILITY_RANGE
 
 
 def refuse_request(

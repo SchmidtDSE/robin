@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from robin_contracts.registry import RegistryEntry
-from robin_inference_engine.registry import load_registry
+from robin_inference_engine.load_registry import load_registry
 
 COLUMNS = [
     "class_index",
