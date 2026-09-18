@@ -3,10 +3,14 @@
 import hashlib
 import json
 import math
+import re
 from dataclasses import asdict, is_dataclass
 from typing import Any, Mapping
 
 from pydantic import BaseModel
+
+
+_SHA256_V1 = re.compile(r"sha256:v1:[0-9a-f]{64}")
 
 
 class CanonicalizationError(ValueError):
@@ -43,3 +47,8 @@ def canonical_json_bytes(value: Any) -> bytes:
 def sha256_v1(value: Any) -> str:
     """Return the versioned SHA-256 digest of canonical JSON."""
     return "sha256:v1:" + hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+
+
+def is_sha256_v1(value: str) -> bool:
+    """Whether `value` is spelled the way `sha256_v1` spells what it returns."""
+    return _SHA256_V1.fullmatch(value) is not None

@@ -79,6 +79,48 @@ def test_protocol_reexports_are_importable():
     assert noop is not None
 
 
+def test_output_contract_reexports_are_importable():
+    from robin_contracts import (
+        DetectionPolicy,
+        DetectionsRequest,
+        EmbeddingsRequest,
+        OutputRequest,
+        ScoresRequest,
+        ThresholdPolicy,
+        TopKPolicy,
+    )
+
+    assert DetectionPolicy is not None
+    assert DetectionsRequest is not None
+    assert EmbeddingsRequest is not None
+    assert OutputRequest is not None
+    assert ScoresRequest is not None
+    assert ThresholdPolicy is not None
+    assert TopKPolicy is not None
+
+
+def test_work_reexports_are_importable():
+    from robin_contracts import (
+        AudioInput,
+        EmbeddingArtifactInput,
+        FileDigest,
+        InferenceWork,
+        ModelSelection,
+        RecordingRef,
+        partition,
+        work_digest,
+    )
+
+    assert AudioInput is not None
+    assert EmbeddingArtifactInput is not None
+    assert FileDigest is not None
+    assert InferenceWork is not None
+    assert ModelSelection is not None
+    assert RecordingRef is not None
+    assert partition is not None
+    assert work_digest is not None
+
+
 def test_spec_reexports_are_importable():
     from robin_contracts import (
         AudioSpec,

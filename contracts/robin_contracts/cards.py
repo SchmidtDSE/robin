@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from robin_contracts.canonical import sha256_v1
+from robin_contracts.canonical import is_sha256_v1, sha256_v1
 from robin_contracts.embedding_transforms import EmbeddingTransform
 
 
@@ -17,11 +17,18 @@ class ModelRef(BaseModel):
     version: str
     digest: str
 
-    @field_validator("name", "version", "digest")
+    @field_validator("name", "version")
     @classmethod
     def _non_empty(cls, value: str) -> str:
         if not value:
             raise ValueError("model reference fields must be non-empty")
+        return value
+
+    @field_validator("digest")
+    @classmethod
+    def _a_card_digest(cls, value: str) -> str:
+        if not is_sha256_v1(value):
+            raise ValueError(f"expected 'sha256:v1:' and 64 hex characters, got {value!r}")
         return value
 
     @property
