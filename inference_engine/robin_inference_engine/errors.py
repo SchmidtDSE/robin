@@ -69,6 +69,17 @@ VALIDATE_REQUEST_FAILURES = (
 
 
 # ---------------------------------------------------------------------------
+# infer: what the engine refuses to call a completed recording.
+# ---------------------------------------------------------------------------
+
+INFER = "infer"
+
+UNEXPLAINED_ZERO_WINDOWS = "unexplained_zero_windows"
+
+INFER_FAILURES = (UNEXPLAINED_ZERO_WINDOWS,)
+
+
+# ---------------------------------------------------------------------------
 # The failure itself, raised by every stage.
 # ---------------------------------------------------------------------------
 
