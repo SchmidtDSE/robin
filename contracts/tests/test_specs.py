@@ -1,4 +1,5 @@
 import pytest
+from pydantic import ValidationError
 
 from robin_contracts.canonical import canonical_json_bytes
 from robin_contracts.cards import ModelRef
@@ -73,6 +74,26 @@ def test_audio_spec_geometry_carries_window_hop_and_pad():
     geometry = build_audio(window=3.0, hop=1.0, pad="drop").geometry
 
     assert geometry == WindowGeometry(window=3.0, hop=1.0, pad="drop")
+
+
+@pytest.mark.parametrize("field", ["window", "hop"])
+@pytest.mark.parametrize("value", [0.0, -1.0, float("nan"), float("inf"), float("-inf")])
+def test_window_geometry_rejects_nonpositive_or_nonfinite_values(field, value):
+    fields = {"window": 3.0, "hop": 3.0, "pad": "drop"}
+
+    with pytest.raises(ValidationError) as exc:
+        WindowGeometry(**(fields | {field: value}))
+
+    assert exc.value.errors()[0]["loc"] == (field,)
+
+
+@pytest.mark.parametrize("field", ["window", "hop"])
+@pytest.mark.parametrize("value", [0.0, -1.0, float("nan"), float("inf"), float("-inf")])
+def test_audio_spec_rejects_nonpositive_or_nonfinite_geometry(field, value):
+    with pytest.raises(ValidationError) as exc:
+        build_audio(**{field: value})
+
+    assert exc.value.errors()[0]["loc"] == (field,)
 
 
 def test_window_count_counts_whole_windows_at_a_hop():

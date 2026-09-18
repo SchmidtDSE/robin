@@ -36,16 +36,16 @@ Resampling = Annotated[RunnerResampled | BackendResampled, Field(discriminator="
 
 class WindowGeometry(BaseModel, frozen=True):
     """What decides how many windows a duration yields, and where each one starts."""
-    window: float
-    hop: float
+    window: float = Field(gt=0, allow_inf_nan=False)
+    hop: float = Field(gt=0, allow_inf_nan=False)
     pad: PadPolicy
 
 
 class AudioSpec(BaseModel, frozen=True):
     """Everything that changes what a window IS."""
     sample_rate: int
-    window: float
-    hop: float
+    window: float = Field(gt=0, allow_inf_nan=False)
+    hop: float = Field(gt=0, allow_inf_nan=False)
     downmix: Literal["mean", "first"]
     resampler: Resampling
     pad: PadPolicy
