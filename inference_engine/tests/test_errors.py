@@ -14,6 +14,7 @@ FAMILIES = (
     (errors.VALIDATE_REQUEST, errors.VALIDATE_REQUEST_FAILURES),
     (errors.INFER, errors.INFER_FAILURES),
     (errors.READ_INPUT_ARTIFACT, errors.READ_INPUT_ARTIFACT_FAILURES),
+    (errors.WRITE_ARTIFACT, errors.WRITE_ARTIFACT_FAILURES),
 )
 
 
@@ -25,9 +26,10 @@ def test_every_declared_constant_is_a_stage_or_one_of_its_codes():
     }
 
     assert len(set(errors.ACCEPT_WINDOW_FAILURES)) == 13
-    assert len(set(errors.VALIDATE_REQUEST_FAILURES)) == 11
+    assert len(set(errors.VALIDATE_REQUEST_FAILURES)) == 13
     assert len(set(errors.INFER_FAILURES)) == 1
     assert len(set(errors.READ_INPUT_ARTIFACT_FAILURES)) == 6
+    assert len(set(errors.WRITE_ARTIFACT_FAILURES)) == 1
     assert declared == {stage for stage, _ in FAMILIES} | {
         code for _, codes in FAMILIES for code in codes
     }

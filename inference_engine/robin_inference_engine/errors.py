@@ -51,6 +51,8 @@ SCORE_FLOOR_DISAGREES = "score_floor_disagrees"
 MIN_SCORE_OUT_OF_DOMAIN = "min_score_out_of_domain"
 EMBEDDING_EMISSION_DISAGREES = "embedding_emission_disagrees"
 EMBEDDING_DIM_DISAGREES = "embedding_dim_disagrees"
+EMBEDDING_DTYPE_DISAGREES = "embedding_dtype_disagrees"
+EMBEDDING_SOURCE_DTYPE_INVALID = "embedding_source_dtype_invalid"
 REGISTRY_REQUIRED = "registry_required"
 REGISTRY_FINGERPRINT_MISMATCH = "registry_fingerprint_mismatch"
 HEAD_CLASS_NOT_IN_REGISTRY = "head_class_not_in_registry"
@@ -64,6 +66,8 @@ VALIDATE_REQUEST_FAILURES = (
     MIN_SCORE_OUT_OF_DOMAIN,
     EMBEDDING_EMISSION_DISAGREES,
     EMBEDDING_DIM_DISAGREES,
+    EMBEDDING_DTYPE_DISAGREES,
+    EMBEDDING_SOURCE_DTYPE_INVALID,
     REGISTRY_REQUIRED,
     REGISTRY_FINGERPRINT_MISMATCH,
     HEAD_CLASS_NOT_IN_REGISTRY,
@@ -103,6 +107,17 @@ READ_INPUT_ARTIFACT_FAILURES = (
     ARTIFACT_MALFORMED,
     ARTIFACT_UNREADABLE,
 )
+
+
+# ---------------------------------------------------------------------------
+# write_artifact: what the engine refuses to put in a file.
+# ---------------------------------------------------------------------------
+
+WRITE_ARTIFACT = "write_artifact"
+
+EMBEDDING_VALUE_OUT_OF_STORAGE_DTYPE_RANGE = "embedding_value_out_of_storage_dtype_range"
+
+WRITE_ARTIFACT_FAILURES = (EMBEDDING_VALUE_OUT_OF_STORAGE_DTYPE_RANGE,)
 
 
 # ---------------------------------------------------------------------------

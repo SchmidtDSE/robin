@@ -27,6 +27,7 @@ def build_capabilities(**overrides) -> ModelCapabilities:
         "emits_embeddings": True,
         "score_domain": "probability",
         "embedding_dim": 4,
+        "embedding_dtype": "float32",
     }
     return ModelCapabilities(**(fields | overrides))
 
@@ -54,8 +55,8 @@ def build_window(**overrides) -> WindowOutput:
     return WindowOutput(**(fields | overrides))
 
 
-def build_embedding(*values: float) -> np.ndarray:
-    return np.array(values or (0.1, 0.2, 0.3, 0.4), dtype=np.float32)
+def build_embedding(*values: float, dtype=np.float32) -> np.ndarray:
+    return np.array(values or (0.1, 0.2, 0.3, 0.4), dtype=dtype)
 
 
 def test_accept_returns_the_window_it_was_given():
@@ -344,7 +345,6 @@ def test_accept_refuses_an_embedding_that_was_not_requested(expect_embeddings, e
     ("embedding", "fragment"),
     [
         (np.zeros((2, 2), dtype=np.float32), "1-D"),
-        (np.zeros(4), "float64"),
         (np.zeros(8, dtype=np.float32)[::2], "C-contiguous"),
         (np.zeros(3, dtype=np.float32), "4 values wide"),
     ],
@@ -357,6 +357,68 @@ def test_accept_refuses_a_malformed_embedding(embedding, fragment):
 
     assert exc.value.code == errors.MALFORMED_EMBEDDING
     assert fragment in exc.value.detail
+
+
+@pytest.mark.parametrize(
+    ("declared", "arriving"),
+    [("float32", np.float16), ("float32", np.float64), ("float16", np.float32)],
+)
+def test_accept_refuses_an_embedding_that_is_not_the_declared_dtype(declared, arriving):
+    boundary = build_boundary(
+        expect_embeddings=True,
+        capabilities=build_capabilities(embedding_dtype=declared),
+    )
+
+    with pytest.raises(errors.EngineError) as exc:
+        boundary.accept(build_window(embedding=build_embedding(dtype=arriving)))
+
+    assert exc.value.code == errors.MALFORMED_EMBEDDING
+    assert declared in exc.value.detail
+    assert np.dtype(arriving).name in exc.value.detail
+
+
+@pytest.mark.parametrize("declared", ["float16", "float32"])
+def test_accept_takes_an_embedding_at_the_dtype_the_instance_declared(declared):
+    boundary = build_boundary(
+        expect_embeddings=True,
+        capabilities=build_capabilities(embedding_dtype=declared),
+    )
+
+    accepted = boundary.accept(
+        build_window(embedding=build_embedding(dtype=np.dtype(declared)))
+    )
+
+    assert accepted.embedding.dtype == np.dtype(declared)
+
+
+def test_accept_refuses_an_embedding_that_is_not_in_this_machines_byte_order():
+    # The comparison is between dtypes, not between their names: a big-endian array
+    # reports the name "float32", is 1-D, C-contiguous, finite and the right width,
+    # and narrows through astype without complaint, so nothing downstream catches it.
+    # Comparing names here would let it reach storage as raw bytes in the wrong order.
+    boundary = build_boundary(expect_embeddings=True)
+    swapped = np.arange(4, dtype=">f4")
+    assert swapped.dtype.name == "float32"
+
+    with pytest.raises(errors.EngineError) as exc:
+        boundary.accept(build_window(embedding=swapped))
+
+    assert exc.value.code == errors.MALFORMED_EMBEDDING
+
+
+@pytest.mark.parametrize("declared", [None, "float64"])
+def test_an_instance_emitting_embeddings_without_a_usable_dtype_is_a_defect(declared):
+    # Every such instance is refused before inference, so one reaching the boundary is
+    # the engine contradicting itself rather than an adapter sending something invalid.
+    boundary = build_boundary(
+        expect_embeddings=True,
+        capabilities=build_capabilities(embedding_dtype=declared),
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        boundary.accept(build_window(embedding=build_embedding()))
+
+    assert "embedding_dtype" in str(exc.value)
 
 
 @pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf])

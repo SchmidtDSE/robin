@@ -19,6 +19,14 @@ DURATION_TOLERANCE_S = 0.1
 
 PROBABILITY_RANGE = (0.0, 1.0)
 
+# Resolved through a mapping rather than np.dtype(declared): np.dtype(None) is float64,
+# so an instance that declared nothing would otherwise be compared against a dtype
+# nobody chose.
+EMBEDDING_DTYPES: dict[str, np.dtype] = {
+    "float16": np.dtype(np.float16),
+    "float32": np.dtype(np.float32),
+}
+
 
 @dataclass(frozen=True, slots=True)
 class AcceptedWindow:
@@ -298,11 +306,15 @@ class AcceptanceBoundary:
                 window,
                 f"embedding must be 1-D, got shape {embedding.shape}",
             )
-        if embedding.dtype != np.float32:
+        declared = self._declared_embedding_dtype()
+        # Compared as dtypes, not as dtype names: a non-native byte order reports the
+        # same name, passes every other check here and narrows through astype, so a
+        # name comparison would let it reach storage as bytes in the wrong order.
+        if embedding.dtype != declared:
             raise self._refuse(
                 errors.MALFORMED_EMBEDDING,
                 window,
-                f"embedding must be float32, got {embedding.dtype}",
+                f"embedding must be {declared}, got {embedding.dtype}",
             )
         if not embedding.flags["C_CONTIGUOUS"]:
             raise self._refuse(
@@ -315,6 +327,18 @@ class AcceptanceBoundary:
                 f"embedding must be {self._capabilities.embedding_dim} values wide, "
                 f"got {embedding.size}",
             )
+
+    def _declared_embedding_dtype(self) -> np.dtype:
+        # Every instance that emits embeddings without one of these is refused before
+        # inference, so one reaching here is an engine defect, not an untrusted input.
+        declared = self._capabilities.embedding_dtype
+        if declared not in EMBEDDING_DTYPES:
+            raise RuntimeError(
+                f"an instance emitting embeddings declares embedding_dtype "
+                f"{declared!r}; this engine accepts "
+                f"{', '.join(EMBEDDING_DTYPES)}"
+            )
+        return EMBEDDING_DTYPES[declared]
 
     def _refuse(self, code: str, window: WindowOutput, detail: str) -> errors.EngineError:
         return errors.EngineError(

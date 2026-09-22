@@ -7,6 +7,7 @@ both sides of the disagreement.
 """
 
 from collections.abc import Iterator
+from typing import get_args
 
 from robin_contracts.cards import HeadCard, ModelCard
 from robin_contracts.output_contracts import (
@@ -14,11 +15,14 @@ from robin_contracts.output_contracts import (
     EmbeddingsRequest,
     ScoresRequest,
 )
-from robin_contracts.protocols import ModelCapabilities
+from robin_contracts.protocols import EmbeddingDtype, ModelCapabilities
 from robin_contracts.registry import TaxonRegistry
+from robin_contracts.specs import Recipe
 from robin_contracts.work import InferenceWork
 from robin_inference_engine import errors
 from robin_inference_engine.accept_window import PROBABILITY_RANGE
+
+EMBEDDING_DTYPES: tuple[str, ...] = get_args(EmbeddingDtype)
 
 
 def refuse_request(
@@ -39,6 +43,7 @@ def refuse_instance(
     *,
     capabilities: ModelCapabilities,
     card: ModelCard | HeadCard,
+    recipe: Recipe,
 ) -> None:
     """What only a configured instance can answer, once the factory has returned it."""
     scores = _scores(work)
@@ -50,7 +55,9 @@ def refuse_instance(
     _refuse_a_floor_outside_the_score_domain(work, capabilities)
     _refuse_an_embedding_emission_its_card_forbids(capabilities, card)
     _refuse_an_embedding_width_its_card_contradicts(capabilities, card)
+    _refuse_an_embedding_precision_the_instance_will_not_emit(capabilities)
     _refuse_embeddings_the_instance_does_not_emit(work, capabilities)
+    _refuse_a_storage_width_the_recipe_does_not_declare(work, recipe)
 
 
 def _scores(work: InferenceWork) -> ScoresRequest | None:
@@ -253,6 +260,36 @@ def _refuse_an_embedding_width_its_card_contradicts(
         )
 
 
+def _refuse_an_embedding_precision_the_instance_will_not_emit(
+    capabilities: ModelCapabilities,
+) -> None:
+    # Checked whether or not this work asks for embeddings, for the same reason the
+    # width above it is: the artifact header records the declared precision, so an
+    # instance declaring none, or declaring one it will not emit, contradicts itself.
+    declared = capabilities.embedding_dtype
+    accepted = ", ".join(EMBEDDING_DTYPES)
+    if not capabilities.emits_embeddings:
+        if declared is not None:
+            raise _refused(
+                errors.EMBEDDING_SOURCE_DTYPE_INVALID,
+                f"this instance declares embedding_dtype {declared!r} while declaring "
+                f"emits_embeddings false",
+            )
+        return
+    if declared is None:
+        raise _refused(
+            errors.EMBEDDING_SOURCE_DTYPE_INVALID,
+            f"this instance declares emits_embeddings true but no embedding_dtype; "
+            f"it must declare one of {accepted}",
+        )
+    if declared not in EMBEDDING_DTYPES:
+        raise _refused(
+            errors.EMBEDDING_SOURCE_DTYPE_INVALID,
+            f"this instance declares embedding_dtype {declared!r}, which is not one "
+            f"of {accepted}",
+        )
+
+
 def _refuse_embeddings_the_instance_does_not_emit(
     work: InferenceWork, capabilities: ModelCapabilities
 ) -> None:
@@ -262,3 +299,18 @@ def _refuse_embeddings_the_instance_does_not_emit(
             "embeddings were requested but this instance declares "
             "emits_embeddings false",
         )
+
+
+def _refuse_a_storage_width_the_recipe_does_not_declare(
+    work: InferenceWork, recipe: Recipe
+) -> None:
+    # The recipe's dtype is inside the recipe fingerprint, so honoring the request
+    # instead would let two works sharing one fingerprint produce different bytes.
+    embeddings = _embeddings(work)
+    if embeddings is None or embeddings.storage_dtype == recipe.dtype:
+        return
+    raise _refused(
+        errors.EMBEDDING_DTYPE_DISAGREES,
+        f"embeddings were requested at storage_dtype {embeddings.storage_dtype!r}, "
+        f"but recipe {recipe.id} declares dtype {recipe.dtype!r}",
+    )

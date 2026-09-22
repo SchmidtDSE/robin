@@ -21,6 +21,11 @@ SCORE_DOMAIN_KEY = "robin.score_domain"
 SCORE_RETENTION_KEY = "robin.score_retention"
 SCORE_FLOOR_KEY = "robin.score_floor"
 SCORE_TOP_K_KEY = "robin.score_top_k"
+EMBEDDING_DIM_KEY = "robin.embedding_dim"
+EMBEDDING_SOURCE_DTYPE_KEY = "robin.embedding_source_dtype"
+EMBEDDING_STORAGE_DTYPE_KEY = "robin.embedding_storage_dtype"
+BACKBONE_REF_KEY = "robin.backbone_ref"
+BACKBONE_CARD_DIGEST_KEY = "robin.backbone_card_digest"
 
 # Every artifact carries these keys, whatever its contract.
 REQUIRED_KEYS: tuple[str, ...] = (
@@ -41,6 +46,14 @@ REGISTRY_KEYS: tuple[str, ...] = (REGISTRY_URI_KEY, REGISTRY_FINGERPRINT_KEY)
 
 SCORE_KEYS: tuple[str, ...] = (SCORE_DOMAIN_KEY, SCORE_RETENTION_KEY)
 
+EMBEDDING_KEYS: tuple[str, ...] = (
+    EMBEDDING_DIM_KEY,
+    EMBEDDING_SOURCE_DTYPE_KEY,
+    EMBEDDING_STORAGE_DTYPE_KEY,
+    BACKBONE_REF_KEY,
+    BACKBONE_CARD_DIGEST_KEY,
+)
+
 
 def required_metadata(
     *,
@@ -53,6 +66,7 @@ def required_metadata(
     recording_map_checksum: str,
 ) -> dict[bytes, bytes]:
     """The provenance keys every window artifact carries, as Arrow metadata."""
+    _require_a_whole_registry_binding(registry_uri, registry_fingerprint)
     values: dict[str, str] = {
         CONTRACT_KEY: contract_id,
         "robin.work_digest": work_digest(work),
@@ -70,6 +84,25 @@ def required_metadata(
     if registry_fingerprint is not None:
         values[REGISTRY_FINGERPRINT_KEY] = registry_fingerprint
     return _encode(values)
+
+
+def embedding_metadata(
+    work: InferenceWork, *, dim: int, source_dtype: str, storage_dtype: str
+) -> dict[bytes, bytes]:
+    """The keys that make an opaque run of floats readable."""
+    # Written even when they repeat the model keys: a head's model is not its backbone.
+    backbone = work.model.backbone
+    return _encode(
+        {
+            EMBEDDING_DIM_KEY: str(dim),
+            EMBEDDING_SOURCE_DTYPE_KEY: source_dtype,
+            EMBEDDING_STORAGE_DTYPE_KEY: storage_dtype,
+            BACKBONE_REF_KEY: work.model.ref.id if backbone is None else backbone.id,
+            BACKBONE_CARD_DIGEST_KEY: (
+                work.model.card_digest if backbone is None else backbone.digest
+            ),
+        }
+    )
 
 
 def score_metadata(request: ScoresRequest, *, score_domain: str) -> dict[bytes, bytes]:
@@ -116,6 +149,19 @@ def require_metadata_keys(
             f"{contract_id} requires metadata this artifact does not carry: "
             f"{', '.join(missing)}",
         )
+
+
+def _require_a_whole_registry_binding(
+    registry_uri: str | None, registry_fingerprint: str | None
+) -> None:
+    """Refuse a registry uri without its fingerprint, or a fingerprint without one."""
+    # Half a pair is the engine contradicting itself, not an absent binding.
+    if (registry_uri is None) == (registry_fingerprint is None):
+        return
+    raise RuntimeError(
+        f"{REGISTRY_URI_KEY} and {REGISTRY_FINGERPRINT_KEY} are written together or "
+        f"not at all, got {registry_uri!r} and {registry_fingerprint!r}"
+    )
 
 
 def _decode_text(raw: bytes, *, what: str) -> str:

@@ -18,9 +18,11 @@ from robin_contracts.work import (
 )
 from robin_inference_engine import errors
 from robin_inference_engine.artifacts.metadata import (
+    EMBEDDING_KEYS,
     REGISTRY_KEYS,
     REQUIRED_KEYS,
     decode_metadata,
+    embedding_metadata,
     require_metadata_keys,
     required_metadata,
     score_metadata,
@@ -268,3 +270,79 @@ def test_a_missing_key_check_names_every_absent_key():
     assert exc.value.stage == errors.READ_INPUT_ARTIFACT
     for key in absent:
         assert key in exc.value.detail
+
+
+def test_embedding_metadata_carries_every_key_a_vector_cannot_imply():
+    decoded = decode_metadata(
+        embedding_metadata(
+            build_work(), dim=1280, source_dtype="float32", storage_dtype="float16"
+        )
+    )
+
+    assert set(decoded) == set(EMBEDDING_KEYS)
+    assert len(EMBEDDING_KEYS) == 5
+    assert decoded["robin.embedding_dim"] == "1280"
+    assert decoded["robin.embedding_storage_dtype"] == "float16"
+
+
+@pytest.mark.parametrize("source_dtype", ["float32", "float16"])
+@pytest.mark.parametrize("storage_dtype", ["float32", "float16"])
+def test_the_source_dtype_is_the_one_the_instance_declared(source_dtype, storage_dtype):
+    # A declaration rather than a reading: the header is stamped when the file is
+    # created, before any window has arrived to take a dtype from.
+    decoded = decode_metadata(
+        embedding_metadata(
+            build_work(), dim=8, source_dtype=source_dtype, storage_dtype=storage_dtype
+        )
+    )
+
+    assert decoded["robin.embedding_source_dtype"] == source_dtype
+    assert decoded["robin.embedding_storage_dtype"] == storage_dtype
+
+
+@pytest.mark.parametrize(
+    ("registry_uri", "registry_fingerprint"),
+    [("s3://b/registry.csv", None), (None, REGISTRY_FINGERPRINT)],
+)
+def test_half_a_registry_binding_is_refused(registry_uri, registry_fingerprint):
+    # A uri without a fingerprint names a file nothing pins, and the reverse pins a
+    # file nothing names. Neither is an artifact that bound no registry.
+    with pytest.raises(RuntimeError) as exc:
+        build_metadata(
+            registry_uri=registry_uri, registry_fingerprint=registry_fingerprint
+        )
+
+    assert "robin.registry_uri" in str(exc.value)
+    assert "robin.registry_fingerprint" in str(exc.value)
+
+
+def test_a_backbones_own_run_names_itself_as_the_backbone():
+    decoded = decode_metadata(
+        embedding_metadata(build_work(), dim=8, source_dtype="float32", storage_dtype="float32")
+    )
+    shared = decode_metadata(build_metadata())
+
+    assert decoded["robin.backbone_ref"] == shared["robin.model_ref"]
+    assert decoded["robin.backbone_card_digest"] == shared["robin.model_card_digest"]
+
+
+def test_a_head_names_the_backbone_its_selection_declares():
+    backbone = ModelRef(name="perch", version="8", digest="sha256:v1:" + "d" * 64)
+    work = build_work(
+        model=ModelSelection(
+            ref=MODEL_REF,
+            card_digest=RECORD_DIGEST,
+            files=(
+                FileDigest(role="weights", uri="s3://b/h.keras", digest=FILE_DIGEST, size_bytes=8),
+            ),
+            backbone=backbone,
+        )
+    )
+
+    decoded = decode_metadata(
+        embedding_metadata(work, dim=8, source_dtype="float32", storage_dtype="float32")
+    )
+
+    assert decoded["robin.backbone_ref"] == "perch/8"
+    assert decoded["robin.backbone_card_digest"] == backbone.digest
+    assert decoded["robin.backbone_ref"] != decode_metadata(build_metadata())["robin.model_ref"]
