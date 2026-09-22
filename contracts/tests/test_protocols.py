@@ -4,6 +4,7 @@ from pathlib import Path
 
 from robin_contracts.cards import ModelCard
 from robin_contracts.protocols import (
+    EmbeddingDtype,
     Model,
     ModelCapabilities,
     ModelContext,
@@ -84,3 +85,11 @@ def test_model_context_logs_nowhere_by_default():
 
 def test_score_retention_declares_exactly_three_modes():
     assert typing.get_args(ScoreRetention) == ("full", "thresholded", "top_k")
+
+
+def test_embedding_dtype_declares_exactly_the_two_widths():
+    assert typing.get_args(EmbeddingDtype) == ("float16", "float32")
+
+
+def test_capabilities_declare_no_embedding_dtype_unless_an_adapter_sets_one():
+    assert CAPABILITIES.embedding_dtype is None

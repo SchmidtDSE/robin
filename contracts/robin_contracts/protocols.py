@@ -17,6 +17,8 @@ Log = Callable[[str], None]
 
 ScoreRetention = Literal["full", "thresholded", "top_k"]
 
+EmbeddingDtype = Literal["float16", "float32"]
+
 
 def noop(text: str) -> None:
     """Discard a log line. The default an adapter gets when the caller wants silence."""
@@ -33,6 +35,7 @@ class ModelCapabilities:
     supported_retention: frozenset[ScoreRetention] = frozenset()
     native_score_floor: float | None = None
     embedding_dim: int | None = None
+    embedding_dtype: EmbeddingDtype | None = None
     vocabulary: tuple[str, ...] | None = None
 
 
