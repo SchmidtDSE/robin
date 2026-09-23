@@ -63,7 +63,6 @@ def build_work(indices=(0,), outputs=None) -> InferenceWork:
         ),
         model=ModelSelection(
             ref=MODEL_REF,
-            card_digest=RECORD_DIGEST,
             files=(
                 FileDigest(
                     role="weights", uri="s3://b/owl.tflite", digest=FILE_DIGEST, size_bytes=8

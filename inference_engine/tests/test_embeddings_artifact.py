@@ -77,7 +77,6 @@ def build_work(**overrides) -> InferenceWork:
         ),
         "model": ModelSelection(
             ref=MODEL_REF,
-            card_digest=RECORD_DIGEST,
             files=(
                 FileDigest(
                     role="weights", uri="s3://b/perch.tf", digest=FILE_DIGEST, size_bytes=8
@@ -567,7 +566,6 @@ def test_a_backbone_run_names_itself_and_a_head_names_its_backbone(tmp_path):
     head = build_work(
         model=ModelSelection(
             ref=MODEL_REF,
-            card_digest=RECORD_DIGEST,
             files=(
                 FileDigest(
                     role="weights", uri="s3://b/head.keras", digest=FILE_DIGEST, size_bytes=8

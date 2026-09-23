@@ -82,7 +82,6 @@ class ModelSelection(BaseModel, frozen=True, extra="forbid"):
     """The exact model this work runs: its card, its files, and its label binding."""
 
     ref: ModelRef
-    card_digest: CanonicalDigest
     files: tuple[FileDigest, ...]
     registry_fingerprint: BytesDigest | None = None
     backbone: ModelRef | None = None  # set iff this is a head

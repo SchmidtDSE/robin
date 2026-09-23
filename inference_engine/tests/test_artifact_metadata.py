@@ -64,7 +64,6 @@ def build_work(**overrides) -> InferenceWork:
         ),
         "model": ModelSelection(
             ref=MODEL_REF,
-            card_digest=RECORD_DIGEST,
             files=(
                 FileDigest(
                     role="weights", uri="s3://b/owl.h5", digest=FILE_DIGEST, size_bytes=8
@@ -145,7 +144,6 @@ def test_model_file_digests_carry_role_digest_and_size_and_no_uri():
     work = build_work(
         model=ModelSelection(
             ref=MODEL_REF,
-            card_digest=RECORD_DIGEST,
             files=(
                 FileDigest(
                     role="weights", uri="s3://b/owl.h5", digest=FILE_DIGEST, size_bytes=8
@@ -331,7 +329,6 @@ def test_a_head_names_the_backbone_its_selection_declares():
     work = build_work(
         model=ModelSelection(
             ref=MODEL_REF,
-            card_digest=RECORD_DIGEST,
             files=(
                 FileDigest(role="weights", uri="s3://b/h.keras", digest=FILE_DIGEST, size_bytes=8),
             ),
@@ -346,3 +343,25 @@ def test_a_head_names_the_backbone_its_selection_declares():
     assert decoded["robin.backbone_ref"] == "perch/8"
     assert decoded["robin.backbone_card_digest"] == backbone.digest
     assert decoded["robin.backbone_ref"] != decode_metadata(build_metadata())["robin.model_ref"]
+
+
+def test_the_card_digest_keys_come_from_the_selections_ref():
+    ref = ModelRef(name="owl", version="1", digest="sha256:v1:" + "e" * 64)
+    work = build_work(
+        model=ModelSelection(
+            ref=ref,
+            files=(
+                FileDigest(role="weights", uri="s3://b/owl.h5", digest=FILE_DIGEST, size_bytes=8),
+            ),
+            registry_fingerprint=REGISTRY_FINGERPRINT,
+        )
+    )
+    assert ref.digest != RECORD_DIGEST
+
+    shared = decode_metadata(build_metadata(work=work))
+    embedding = decode_metadata(
+        embedding_metadata(work, dim=8, source_dtype="float32", storage_dtype="float32")
+    )
+
+    assert shared["robin.model_card_digest"] == ref.digest
+    assert embedding["robin.backbone_card_digest"] == ref.digest

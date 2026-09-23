@@ -22,8 +22,8 @@ class TaxonRegistry:
     bytes they were read from.
 
     Lookup tables are built once at construction. The label check runs per accepted
-    score for a model that declares no vocabulary, where rebuilding them would be
-    quadratic in a registry of several thousand entries.
+    score, where rebuilding them would be quadratic in a registry of several thousand
+    entries.
     """
 
     fingerprint: str

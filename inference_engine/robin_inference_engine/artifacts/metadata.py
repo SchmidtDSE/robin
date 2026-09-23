@@ -74,7 +74,7 @@ def required_metadata(
         "robin.recipe_fingerprint": recipe.id,
         "robin.recipe": canonical_json_bytes(recipe).decode("utf-8"),
         "robin.model_ref": work.model.ref.id,
-        "robin.model_card_digest": work.model.card_digest,
+        "robin.model_card_digest": work.model.ref.digest,
         "robin.model_file_digests": _model_file_digests(work),
         "robin.recording_map_uri": recording_map_uri,
         "robin.recording_map_checksum": recording_map_checksum,
@@ -99,7 +99,7 @@ def embedding_metadata(
             EMBEDDING_STORAGE_DTYPE_KEY: storage_dtype,
             BACKBONE_REF_KEY: work.model.ref.id if backbone is None else backbone.id,
             BACKBONE_CARD_DIGEST_KEY: (
-                work.model.card_digest if backbone is None else backbone.digest
+                work.model.ref.digest if backbone is None else backbone.digest
             ),
         }
     )

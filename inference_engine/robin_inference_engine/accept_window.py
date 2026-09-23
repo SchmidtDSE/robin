@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from robin_contracts.output_contracts import ScoresRequest
 from robin_contracts.protocols import ModelCapabilities
 from robin_contracts.records import ClassScore, WindowOutput
 from robin_contracts.registry import TaxonRegistry
@@ -53,10 +54,10 @@ class AcceptanceBoundary:
         capabilities: ModelCapabilities,
         durations: Mapping[int, float | None],
         registry: TaxonRegistry | None = None,
-        require_full_scores: bool = False,
+        scores: ScoresRequest | None = None,
         expect_embeddings: bool = False,
     ) -> None:
-        if require_full_scores and registry is None:
+        if scores is not None and scores.retention == "full" and registry is None:
             raise RuntimeError(
                 "full score retention has no registry to compare a window against; "
                 "such a request is refused before the engine runs"
@@ -65,7 +66,7 @@ class AcceptanceBoundary:
         self._capabilities = capabilities
         self._durations = durations
         self._registry = registry
-        self._require_full_scores = require_full_scores
+        self._scores = scores
         self._expect_embeddings = expect_embeddings
         self._open_recording: int | None = None
         self._processed: set[int] = set()
@@ -91,7 +92,10 @@ class AcceptanceBoundary:
         self._check_order(window)
         self._check_geometry(window)
         self._check_within_recording(window)
-        self._check_scores(window)
+        # A model is never told whether scores are wanted, so producing unrequested
+        # ones is not a defect: they are dropped before any score check applies.
+        scores = window.scores if self._scores is not None else ()
+        self._check_scores(window, scores)
         self._check_embedding(window)
 
         # Only now, so a refused window leaves nothing for the next one to be
@@ -101,7 +105,7 @@ class AcceptanceBoundary:
             recording_index=window.recording_index,
             start=window.start,
             end=window.end,
-            scores=window.scores,
+            scores=scores,
             embedding=None if window.embedding is None else window.embedding.copy(),
         )
 
@@ -206,9 +210,9 @@ class AcceptanceBoundary:
                 f"{duration} s",
             )
 
-    def _check_scores(self, window: WindowOutput) -> None:
+    def _check_scores(self, window: WindowOutput, scores: tuple[ClassScore, ...]) -> None:
         seen: set[str] = set()
-        for score in window.scores:
+        for score in scores:
             self._check_score_value(window, score)
             self._check_label(window, score)
             if score.label in seen:
@@ -218,7 +222,10 @@ class AcceptanceBoundary:
                     f"label {score.label!r} appears more than once in this window",
                 )
             seen.add(score.label)
-        self._check_every_label_is_present(window, len(window.scores))
+            # After the domain check, so a NaN never reaches a comparison that is false.
+            self._check_score_floor(window, score)
+        self._check_every_label_is_present(window, len(scores))
+        self._check_top_k(window, len(scores))
 
     def _check_score_value(self, window: WindowOutput, score: ClassScore) -> None:
         if self._capabilities.score_domain != "probability":
@@ -257,8 +264,32 @@ class AcceptanceBoundary:
                 f"{self._registry.fingerprint}",
             )
 
+    def _check_score_floor(self, window: WindowOutput, score: ClassScore) -> None:
+        # Exact: the floor is a declared constant the adapter applied, so a tolerance
+        # would only let a genuinely lower score through.
+        if self._scores.retention == "full" or score.score >= self._scores.min_score:
+            return
+        raise self._refuse(
+            errors.SCORE_BELOW_FLOOR,
+            window,
+            f"score {score.score} for {score.label!r} is below the requested "
+            f"{self._scores.retention} floor {self._scores.min_score}",
+        )
+
+    def _check_top_k(self, window: WindowOutput, count: int) -> None:
+        # Fewer than k is valid, because the floor can cut.
+        if self._scores is None or self._scores.retention != "top_k":
+            return
+        if count > self._scores.top_k:
+            raise self._refuse(
+                errors.SCORES_EXCEED_TOP_K,
+                window,
+                f"window carries {count} scores under a requested top_k of "
+                f"{self._scores.top_k}",
+            )
+
     def _check_every_label_is_present(self, window: WindowOutput, count: int) -> None:
-        if not self._require_full_scores:
+        if self._scores is None or self._scores.retention != "full":
             return
         # Membership and uniqueness are settled above, so an equal count is an equal
         # set and a several-thousand-label registry needs no second set per window.

@@ -25,14 +25,27 @@ def test_every_declared_constant_is_a_stage_or_one_of_its_codes():
         if name.isupper() and isinstance(value, str)
     }
 
-    assert len(set(errors.ACCEPT_WINDOW_FAILURES)) == 13
-    assert len(set(errors.VALIDATE_REQUEST_FAILURES)) == 13
+    assert len(set(errors.ACCEPT_WINDOW_FAILURES)) == 15
+    assert len(set(errors.VALIDATE_REQUEST_FAILURES)) == 15
     assert len(set(errors.INFER_FAILURES)) == 1
     assert len(set(errors.READ_INPUT_ARTIFACT_FAILURES)) == 6
     assert len(set(errors.WRITE_ARTIFACT_FAILURES)) == 1
     assert declared == {stage for stage, _ in FAMILIES} | {
         code for _, codes in FAMILIES for code in codes
     }
+
+
+def test_retention_and_backbone_codes_belong_to_their_stages():
+    assert errors.SCORE_BELOW_FLOOR == "score_below_floor"
+    assert errors.SCORES_EXCEED_TOP_K == "scores_exceed_top_k"
+    assert errors.BACKBONE_DISAGREES == "backbone_disagrees"
+    assert errors.TOP_K_DISAGREES == "top_k_disagrees"
+    assert {errors.SCORE_BELOW_FLOOR, errors.SCORES_EXCEED_TOP_K} <= set(
+        errors.ACCEPT_WINDOW_FAILURES
+    )
+    assert {errors.BACKBONE_DISAGREES, errors.TOP_K_DISAGREES} <= set(
+        errors.VALIDATE_REQUEST_FAILURES
+    )
 
 
 def test_no_code_belongs_to_two_stages():

@@ -58,7 +58,6 @@ def build_recipe() -> Recipe:
 def build_selection() -> ModelSelection:
     return ModelSelection(
         ref=MODEL_REF,
-        card_digest=RECORD_DIGEST,
         files=(
             FileDigest(role="weights", uri="s3://b/owl.tflite", digest=FILE_DIGEST, size_bytes=8),
         ),
@@ -458,3 +457,37 @@ def test_the_work_digest_field_refuses_the_file_digest_family():
 
     with pytest.raises(ValidationError):
         build_failure(work_digest=FILE_DIGEST)
+
+
+# --- The registry binding ----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "binding",
+    [
+        pytest.param({"registry_uri": "file:///registry.csv"}, id="uri_without_fingerprint"),
+        pytest.param({"registry_fingerprint": FILE_DIGEST}, id="fingerprint_without_uri"),
+    ],
+)
+def test_a_success_refuses_half_a_registry_binding(binding):
+    with pytest.raises(ValidationError) as exc:
+        build_success(**binding)
+
+    assert "registry_uri" in str(exc.value)
+    assert "registry_fingerprint" in str(exc.value)
+
+
+def test_a_success_accepts_a_whole_registry_binding():
+    success = build_success(
+        registry_uri="file:///registry.csv", registry_fingerprint=FILE_DIGEST
+    )
+
+    assert success.registry_uri == "file:///registry.csv"
+    assert success.registry_fingerprint == FILE_DIGEST
+
+
+def test_a_success_accepts_no_registry_binding():
+    success = build_success()
+
+    assert success.registry_uri is None
+    assert success.registry_fingerprint is None

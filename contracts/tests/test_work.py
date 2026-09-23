@@ -46,7 +46,6 @@ def build_file(**overrides) -> FileDigest:
 def build_selection(**overrides) -> ModelSelection:
     fields = {
         "ref": MODEL_REF,
-        "card_digest": RECORD_DIGEST,
         "files": (build_file(),),
     }
     return ModelSelection(**(fields | overrides))
@@ -189,10 +188,12 @@ def test_work_digest_ignores_settings_key_order():
     assert work_digest(one) == work_digest(other)
 
 
-def test_digest_fields_reject_the_wrong_family():
-    with pytest.raises(ValidationError):
-        build_selection(card_digest=FILE_DIGEST)
+def test_a_selection_carries_no_card_digest_beside_its_ref():
+    with pytest.raises(ValidationError, match="card_digest"):
+        build_selection(card_digest=RECORD_DIGEST)
 
+
+def test_digest_fields_reject_the_wrong_family():
     with pytest.raises(ValidationError):
         build_selection(registry_fingerprint=RECORD_DIGEST)
 
@@ -206,8 +207,6 @@ def test_digest_fields_reject_the_wrong_family():
     short = "0" * 40
     with pytest.raises(ValidationError):
         build_file(digest=f"sha256:{short}")
-    with pytest.raises(ValidationError):
-        build_selection(card_digest=f"sha256:v1:{short}")
     with pytest.raises(ValidationError):
         build_selection(registry_fingerprint=f"sha256:{short}")
     with pytest.raises(ValidationError):

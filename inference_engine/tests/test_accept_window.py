@@ -3,6 +3,7 @@ import math
 import numpy as np
 import pytest
 
+from robin_contracts.output_contracts import ScoresRequest
 from robin_contracts.protocols import ModelCapabilities
 from robin_contracts.records import ClassScore, WindowOutput
 from robin_contracts.registry import RegistryEntry, TaxonRegistry
@@ -11,6 +12,14 @@ from robin_inference_engine import errors
 from robin_inference_engine.accept_window import AcceptanceBoundary
 
 FINGERPRINT = "sha256:" + "0" * 64
+
+
+def build_scores_request(**overrides) -> ScoresRequest:
+    fields = {"contract_id": "robin.scores.arrow/1", "retention": "thresholded", "min_score": 0.0}
+    return ScoresRequest(**(fields | overrides))
+
+
+FULL = build_scores_request(retention="full", min_score=None)
 
 
 def build_registry(*labels: str) -> TaxonRegistry:
@@ -38,6 +47,7 @@ def build_boundary(*, opened: int | None = 0, **overrides) -> AcceptanceBoundary
         "capabilities": build_capabilities(),
         "durations": {0: 30.0, 1: 30.0},
         "registry": build_registry("rain", "wind"),
+        "scores": build_scores_request(),
     }
     boundary = AcceptanceBoundary(**(fields | overrides))
     if opened is not None:
@@ -303,7 +313,7 @@ def test_accept_refuses_a_label_repeated_within_one_window():
 
 @pytest.mark.parametrize("scores", [(ClassScore(label="rain", score=0.5),), ()])
 def test_accept_refuses_a_window_missing_a_label_under_full_retention(scores):
-    boundary = build_boundary(require_full_scores=True)
+    boundary = build_boundary(scores=FULL)
 
     with pytest.raises(errors.EngineError) as exc:
         boundary.accept(build_window(scores=scores))
@@ -312,7 +322,7 @@ def test_accept_refuses_a_window_missing_a_label_under_full_retention(scores):
 
 
 def test_accept_allows_empty_scores_under_reduced_retention():
-    accepted = build_boundary(require_full_scores=False).accept(build_window(scores=()))
+    accepted = build_boundary().accept(build_window(scores=()))
 
     assert accepted.scores == ()
 
@@ -469,4 +479,91 @@ def test_accept_refuses_a_start_off_the_grid_on_the_negative_side():
 
 def test_full_scores_without_a_registry_is_an_engine_defect():
     with pytest.raises(RuntimeError):
-        build_boundary(opened=None, registry=None, require_full_scores=True)
+        build_boundary(opened=None, registry=None, scores=FULL)
+
+
+# --- Scores against the request -------------------------------------------------
+
+UNREQUESTED_SCORES = {
+    "out_of_domain": (ClassScore(label="rain", score=math.nan),),
+    "unknown_label": (ClassScore(label="sleet", score=0.5),),
+    "duplicate_label": (ClassScore(label="rain", score=0.5), ClassScore(label="rain", score=0.4)),
+}
+
+
+@pytest.mark.parametrize("scores", UNREQUESTED_SCORES.values(), ids=UNREQUESTED_SCORES.keys())
+def test_scores_a_work_did_not_request_are_dropped_unchecked(scores):
+    accepted = build_boundary(scores=None).accept(build_window(scores=scores))
+
+    assert accepted.scores == ()
+
+
+def test_scores_a_work_did_not_request_need_no_registry():
+    accepted = build_boundary(scores=None, registry=None).accept(build_window())
+
+    assert accepted.scores == ()
+
+
+@pytest.mark.parametrize("retention", ["thresholded", "top_k"])
+def test_accept_refuses_a_score_below_the_requested_floor(retention):
+    request = build_scores_request(
+        retention=retention, min_score=0.3, top_k=2 if retention == "top_k" else None
+    )
+    below = (ClassScore(label="rain", score=0.29),)
+
+    with pytest.raises(errors.EngineError) as exc:
+        build_boundary(scores=request).accept(build_window(start=3.0, end=6.0, scores=below))
+
+    assert exc.value.code == errors.SCORE_BELOW_FLOOR
+    assert exc.value.recording_index == 0
+    assert exc.value.window_start_s == 3.0
+    assert "0.29" in exc.value.detail and "0.3" in exc.value.detail
+
+
+@pytest.mark.parametrize("retention", ["thresholded", "top_k"])
+def test_accept_takes_a_score_exactly_at_the_requested_floor(retention):
+    request = build_scores_request(
+        retention=retention, min_score=0.3, top_k=2 if retention == "top_k" else None
+    )
+    at_floor = (ClassScore(label="rain", score=0.3),)
+
+    assert build_boundary(scores=request).accept(build_window(scores=at_floor)).scores == at_floor
+
+
+def test_a_non_finite_score_is_out_of_domain_before_it_meets_the_floor():
+    request = build_scores_request(min_score=0.3)
+
+    with pytest.raises(errors.EngineError) as exc:
+        build_boundary(scores=request).accept(
+            build_window(scores=(ClassScore(label="rain", score=math.nan),))
+        )
+
+    assert exc.value.code == errors.SCORE_OUT_OF_DOMAIN
+
+
+TOP_TWO = build_scores_request(retention="top_k", min_score=0.0, top_k=2)
+THREE_SCORES = (
+    ClassScore(label="rain", score=0.5),
+    ClassScore(label="wind", score=0.4),
+    ClassScore(label="hail", score=0.3),
+)
+
+
+def test_accept_refuses_more_scores_than_the_requested_top_k():
+    boundary = build_boundary(scores=TOP_TWO, registry=build_registry("rain", "wind", "hail"))
+
+    with pytest.raises(errors.EngineError) as exc:
+        boundary.accept(build_window(start=3.0, end=6.0, scores=THREE_SCORES))
+
+    assert exc.value.code == errors.SCORES_EXCEED_TOP_K
+    assert exc.value.recording_index == 0
+    assert exc.value.window_start_s == 3.0
+    assert "3" in exc.value.detail and "2" in exc.value.detail
+
+
+@pytest.mark.parametrize("count", [2, 1])
+def test_accept_takes_up_to_the_requested_top_k(count):
+    boundary = build_boundary(scores=TOP_TWO, registry=build_registry("rain", "wind", "hail"))
+    scores = THREE_SCORES[:count]
+
+    assert boundary.accept(build_window(scores=scores)).scores == scores

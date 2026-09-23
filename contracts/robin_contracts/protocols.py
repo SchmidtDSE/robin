@@ -34,9 +34,25 @@ class ModelCapabilities:
     score_domain: Literal["probability"] | None = None
     supported_retention: frozenset[ScoreRetention] = frozenset()
     native_score_floor: float | None = None
+    native_top_k: int | None = None
     embedding_dim: int | None = None
     embedding_dtype: EmbeddingDtype | None = None
-    vocabulary: tuple[str, ...] | None = None
+
+    def __post_init__(self) -> None:
+        cap = self.native_top_k
+        # bool is an int subclass, and a cap of True is a type error, not a k of one.
+        if cap is not None and (type(cap) is not int or cap < 1):
+            raise ValueError(f"native_top_k must be a positive int or None, got {cap!r}")
+        if (cap is not None) != ("top_k" in self.supported_retention):
+            raise ValueError(
+                f"native_top_k={cap!r} must be set exactly when supported_retention "
+                f"includes 'top_k', got {sorted(self.supported_retention)}"
+            )
+        if cap is not None and self.supported_retention != frozenset({"top_k"}):
+            raise ValueError(
+                f"native_top_k={cap!r} requires supported_retention to be only "
+                f"'top_k', got {sorted(self.supported_retention)}"
+            )
 
 
 @runtime_checkable

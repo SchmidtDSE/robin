@@ -77,7 +77,7 @@ class EmbeddingsRequest(BaseModel, frozen=True, extra="forbid"):
 
     kind: Literal["embeddings"] = "embeddings"
     contract_id: EmbeddingsContractId
-    storage_dtype: Literal["float32", "float16"] = "float32"
+    storage_dtype: Literal["float32", "float16"] | None = None  # None: the recipe's width
 
 
 class DetectionsRequest(BaseModel, frozen=True, extra="forbid"):

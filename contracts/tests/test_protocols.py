@@ -1,6 +1,9 @@
+import dataclasses
 import typing
 from collections.abc import Iterator
 from pathlib import Path
+
+import pytest
 
 from robin_contracts.cards import ModelCard
 from robin_contracts.protocols import (
@@ -93,3 +96,72 @@ def test_embedding_dtype_declares_exactly_the_two_widths():
 
 def test_capabilities_declare_no_embedding_dtype_unless_an_adapter_sets_one():
     assert CAPABILITIES.embedding_dtype is None
+
+
+def test_capabilities_declare_no_top_k_cap_by_default():
+    assert CAPABILITIES.native_top_k is None
+
+
+def test_capabilities_have_no_vocabulary_field():
+    with pytest.raises(TypeError):
+        ModelCapabilities(emits_scores=True, emits_embeddings=False, vocabulary=("a",))
+
+
+def test_a_capped_instance_supports_only_top_k_retention():
+    capped = ModelCapabilities(
+        emits_scores=True,
+        emits_embeddings=False,
+        supported_retention=frozenset({"top_k"}),
+        native_top_k=5,
+    )
+
+    assert capped.native_top_k == 5
+
+
+def test_an_uncapped_instance_supports_any_retention_but_top_k():
+    uncapped = ModelCapabilities(
+        emits_scores=True,
+        emits_embeddings=False,
+        supported_retention=frozenset({"full", "thresholded"}),
+    )
+
+    assert uncapped.native_top_k is None
+
+
+@pytest.mark.parametrize(
+    ("retention", "native_top_k"),
+    [
+        pytest.param(frozenset({"top_k"}), None, id="top_k_without_a_cap"),
+        pytest.param(frozenset({"full", "top_k"}), None, id="top_k_among_others_without_a_cap"),
+        pytest.param(frozenset({"full"}), 5, id="a_cap_without_top_k"),
+        pytest.param(frozenset(), 5, id="a_cap_with_no_retention"),
+        pytest.param(frozenset({"thresholded", "top_k"}), 5, id="a_cap_beside_other_retention"),
+        pytest.param(frozenset({"top_k"}), 0, id="a_zero_cap"),
+        pytest.param(frozenset({"top_k"}), -1, id="a_negative_cap"),
+        pytest.param(frozenset({"top_k"}), True, id="a_boolean_cap"),
+        pytest.param(frozenset({"top_k"}), 5.0, id="a_float_cap"),
+    ],
+)
+def test_capabilities_refuse_a_cap_that_disagrees_with_retention(retention, native_top_k):
+    with pytest.raises(ValueError, match="native_top_k"):
+        ModelCapabilities(
+            emits_scores=True,
+            emits_embeddings=False,
+            supported_retention=retention,
+            native_top_k=native_top_k,
+        )
+
+
+def test_a_valid_instance_derives_a_configured_copy_with_replace():
+    uncapped = ModelCapabilities(
+        emits_scores=True,
+        emits_embeddings=False,
+        supported_retention=frozenset({"full"}),
+    )
+
+    capped = dataclasses.replace(
+        uncapped, supported_retention=frozenset({"top_k"}), native_top_k=5
+    )
+
+    assert capped.native_top_k == 5
+    assert uncapped.native_top_k is None

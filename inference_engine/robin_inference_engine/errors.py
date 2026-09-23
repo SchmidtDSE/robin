@@ -14,7 +14,9 @@ WINDOW_OUTSIDE_RECORDING = "window_outside_recording"
 SCORE_OUT_OF_DOMAIN = "score_out_of_domain"
 UNKNOWN_LABEL = "unknown_label"
 DUPLICATE_LABEL = "duplicate_label"
+SCORE_BELOW_FLOOR = "score_below_floor"
 INCOMPLETE_FULL_SCORES = "incomplete_full_scores"
+SCORES_EXCEED_TOP_K = "scores_exceed_top_k"
 UNEXPECTED_EMBEDDING = "unexpected_embedding"
 MALFORMED_EMBEDDING = "malformed_embedding"
 EMBEDDING_NOT_FINITE = "embedding_not_finite"
@@ -29,7 +31,9 @@ ACCEPT_WINDOW_FAILURES = (
     SCORE_OUT_OF_DOMAIN,
     UNKNOWN_LABEL,
     DUPLICATE_LABEL,
+    SCORE_BELOW_FLOOR,
     INCOMPLETE_FULL_SCORES,
+    SCORES_EXCEED_TOP_K,
     UNEXPECTED_EMBEDDING,
     MALFORMED_EMBEDDING,
     EMBEDDING_NOT_FINITE,
@@ -48,11 +52,13 @@ EMBEDDINGS_NOT_EMITTED = "embeddings_not_emitted"
 RETENTION_UNSUPPORTED = "retention_unsupported"
 FULL_RETENTION_REDUCED = "full_retention_reduced"
 SCORE_FLOOR_DISAGREES = "score_floor_disagrees"
+TOP_K_DISAGREES = "top_k_disagrees"
 MIN_SCORE_OUT_OF_DOMAIN = "min_score_out_of_domain"
 EMBEDDING_EMISSION_DISAGREES = "embedding_emission_disagrees"
 EMBEDDING_DIM_DISAGREES = "embedding_dim_disagrees"
 EMBEDDING_DTYPE_DISAGREES = "embedding_dtype_disagrees"
 EMBEDDING_SOURCE_DTYPE_INVALID = "embedding_source_dtype_invalid"
+BACKBONE_DISAGREES = "backbone_disagrees"
 REGISTRY_REQUIRED = "registry_required"
 REGISTRY_FINGERPRINT_MISMATCH = "registry_fingerprint_mismatch"
 HEAD_CLASS_NOT_IN_REGISTRY = "head_class_not_in_registry"
@@ -63,11 +69,13 @@ VALIDATE_REQUEST_FAILURES = (
     RETENTION_UNSUPPORTED,
     FULL_RETENTION_REDUCED,
     SCORE_FLOOR_DISAGREES,
+    TOP_K_DISAGREES,
     MIN_SCORE_OUT_OF_DOMAIN,
     EMBEDDING_EMISSION_DISAGREES,
     EMBEDDING_DIM_DISAGREES,
     EMBEDDING_DTYPE_DISAGREES,
     EMBEDDING_SOURCE_DTYPE_INVALID,
+    BACKBONE_DISAGREES,
     REGISTRY_REQUIRED,
     REGISTRY_FINGERPRINT_MISMATCH,
     HEAD_CLASS_NOT_IN_REGISTRY,

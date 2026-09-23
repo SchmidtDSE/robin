@@ -31,12 +31,12 @@ REGISTRY_FINGERPRINT = "sha256:" + "a" * 64
 OTHER_FINGERPRINT = "sha256:" + "b" * 64
 
 MODEL_REF = ModelRef(name="owl", version="1", digest=RECORD_DIGEST)
+OTHER_BACKBONE = ModelRef(name="perch", version="8", digest=f"sha256:v1:{'c' * 64}")
 
 
 def build_selection(**overrides) -> ModelSelection:
     fields = {
         "ref": MODEL_REF,
-        "card_digest": RECORD_DIGEST,
         "files": (
             FileDigest(role="weights", uri="s3://b/owl.tflite", digest=FILE_DIGEST, size_bytes=8),
         ),
@@ -121,6 +121,11 @@ def build_head(**overrides) -> HeadCard:
     return HeadCard(**(fields | overrides))
 
 
+def build_head_work(**overrides) -> InferenceWork:
+    """A work selecting the head build_head returns, naming that head's backbone."""
+    return build_work(model=build_selection(backbone=build_head().backbone), **overrides)
+
+
 def build_registry(*, fingerprint: str = REGISTRY_FINGERPRINT, labels=("owl",)):
     return TaxonRegistry(
         fingerprint=fingerprint,
@@ -136,7 +141,7 @@ def build_capabilities(**overrides) -> ModelCapabilities:
         "emits_scores": True,
         "emits_embeddings": False,
         "score_domain": "probability",
-        "supported_retention": frozenset({"full", "thresholded", "top_k"}),
+        "supported_retention": frozenset({"full", "thresholded"}),
         "native_score_floor": None,
         "embedding_dim": None,
         "embedding_dtype": None,
@@ -200,7 +205,9 @@ def test_full_retention_is_refused_when_the_instance_declares_only_top_k():
     with pytest.raises(errors.EngineError) as exc:
         refuse_instance(
             build_work(),
-            capabilities=build_capabilities(supported_retention=frozenset({"top_k"})),
+            capabilities=build_capabilities(
+                supported_retention=frozenset({"top_k"}), native_top_k=5
+            ),
             card=build_card(),
             recipe=RECIPE,
         )
@@ -267,6 +274,15 @@ def test_a_reduced_request_against_an_instance_with_no_floor_is_refused():
     assert exc.value.code == errors.SCORE_FLOOR_DISAGREES
 
 
+def build_capped(*, k: int, floor: float = 0.005) -> ModelCapabilities:
+    return build_capabilities(
+        supported_retention=frozenset({"top_k"}), native_top_k=k, native_score_floor=floor
+    )
+
+
+CAPPED_AT_FIVE = build_capped(k=5)
+
+
 def test_a_top_k_request_checks_its_floor_too():
     work = build_work(
         outputs=(build_scores(retention="top_k", min_score=0.5, top_k=5),)
@@ -275,7 +291,7 @@ def test_a_top_k_request_checks_its_floor_too():
     with pytest.raises(errors.EngineError) as exc:
         refuse_instance(
             work,
-            capabilities=build_capabilities(native_score_floor=0.005),
+            capabilities=CAPPED_AT_FIVE,
             card=build_card(),
             recipe=RECIPE,
         )
@@ -288,7 +304,7 @@ def test_a_top_k_request_checks_its_floor_too():
     assert (
         refuse_instance(
             at_the_floor,
-            capabilities=build_capabilities(native_score_floor=0.005),
+            capabilities=CAPPED_AT_FIVE,
             card=build_card(),
             recipe=RECIPE,
         )
@@ -580,7 +596,7 @@ def test_a_registry_fingerprint_differing_from_the_pinned_one_is_refused():
 def test_a_head_class_outside_the_registry_is_refused():
     with pytest.raises(errors.EngineError) as exc:
         refuse_request(
-            build_work(),
+            build_head_work(),
             card=build_head(classes=("owl", "barred-owl")),
             registry=build_registry(labels=("owl",)),
         )
@@ -673,6 +689,104 @@ def test_a_work_requesting_no_embeddings_is_unaffected_by_the_width_check():
     )
 
 
+def test_a_model_card_selection_naming_a_backbone_is_refused():
+    with pytest.raises(errors.EngineError) as exc:
+        refuse_request(
+            build_work(model=build_selection(backbone=MODEL_REF)),
+            card=build_card(),
+            registry=build_registry(),
+        )
+
+    assert exc.value.code == errors.BACKBONE_DISAGREES
+    assert "owl/1" in exc.value.detail and "None" in exc.value.detail
+
+
+@pytest.mark.parametrize(
+    "backbone",
+    [pytest.param(None, id="none"), pytest.param(OTHER_BACKBONE, id="another")],
+)
+def test_a_head_selection_naming_a_backbone_other_than_its_cards_is_refused(backbone):
+    with pytest.raises(errors.EngineError) as exc:
+        refuse_request(
+            build_work(model=build_selection(backbone=backbone)),
+            card=build_head(),
+            registry=build_registry(),
+        )
+
+    assert exc.value.code == errors.BACKBONE_DISAGREES
+    assert str(backbone) in exc.value.detail
+    assert str(build_head().backbone) in exc.value.detail
+
+
+def test_a_head_selection_naming_its_cards_backbone_is_accepted():
+    assert refuse_request(build_head_work(), card=build_head(), registry=build_registry()) is None
+
+
+def test_the_backbone_is_checked_before_anything_else():
+    # The head's classes are also missing from the registry; the backbone refuses first.
+    with pytest.raises(errors.EngineError) as exc:
+        refuse_request(
+            build_work(),
+            card=build_head(classes=("owl", "barred-owl")),
+            registry=build_registry(labels=("owl",)),
+        )
+
+    assert exc.value.code == errors.BACKBONE_DISAGREES
+
+
+def test_a_top_k_request_whose_k_differs_from_the_instances_cap_is_refused():
+    work = build_work(outputs=(build_scores(retention="top_k", min_score=0.005, top_k=3),))
+
+    with pytest.raises(errors.EngineError) as exc:
+        refuse_instance(work, capabilities=CAPPED_AT_FIVE, card=build_card(), recipe=RECIPE)
+
+    assert exc.value.code == errors.TOP_K_DISAGREES
+    assert "3" in exc.value.detail and "5" in exc.value.detail
+
+
+def test_a_top_k_request_matching_the_instances_cap_is_accepted():
+    work = build_work(outputs=(build_scores(retention="top_k", min_score=0.005, top_k=5),))
+
+    assert (
+        refuse_instance(work, capabilities=CAPPED_AT_FIVE, card=build_card(), recipe=RECIPE)
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "request_",
+    [
+        pytest.param(build_scores(), id="full"),
+        pytest.param(build_scores(retention="thresholded", min_score=0.005), id="thresholded"),
+    ],
+)
+def test_an_unreduced_request_against_a_capped_instance_is_refused_by_retention(request_):
+    with pytest.raises(errors.EngineError) as exc:
+        refuse_instance(
+            build_work(outputs=(request_,)),
+            capabilities=CAPPED_AT_FIVE,
+            card=build_card(),
+            recipe=RECIPE,
+        )
+
+    assert exc.value.code == errors.RETENTION_UNSUPPORTED
+
+
+@pytest.mark.parametrize("dtype", ["float16", "float32"])
+def test_an_embeddings_request_naming_no_width_takes_the_recipes(dtype):
+    assert (
+        refuse_instance(
+            build_work(outputs=(build_embeddings(),)),
+            capabilities=build_capabilities(
+                emits_embeddings=True, embedding_dtype="float32", embedding_dim=1024
+            ),
+            card=build_card(can_emit_embeddings=True, embedding_dim=1024),
+            recipe=build_recipe(dtype=dtype),
+        )
+        is None
+    )
+
+
 REFUSING_CALLS = {
     "scores_not_emitted": lambda: refuse_instance(
         build_work(),
@@ -684,7 +798,9 @@ REFUSING_CALLS = {
     ),
     "retention_unsupported": lambda: refuse_instance(
         build_work(),
-        capabilities=build_capabilities(supported_retention=frozenset({"top_k"})),
+        capabilities=build_capabilities(
+            supported_retention=frozenset({"top_k"}), native_top_k=5
+        ),
         card=build_card(),
         recipe=RECIPE,
     ),
@@ -755,8 +871,19 @@ REFUSING_CALLS = {
     "registry_fingerprint_mismatch": lambda: refuse_request(
         build_work(), card=build_card(), registry=build_registry(fingerprint=OTHER_FINGERPRINT)
     ),
+    "backbone_disagrees": lambda: refuse_request(
+        build_work(model=build_selection(backbone=MODEL_REF)),
+        card=build_card(),
+        registry=build_registry(),
+    ),
+    "top_k_disagrees": lambda: refuse_instance(
+        build_work(outputs=(build_scores(retention="top_k", min_score=0.005, top_k=3),)),
+        capabilities=CAPPED_AT_FIVE,
+        card=build_card(),
+        recipe=RECIPE,
+    ),
     "head_class_not_in_registry": lambda: refuse_request(
-        build_work(),
+        build_head_work(),
         card=build_head(classes=("owl", "barred-owl")),
         registry=build_registry(labels=("owl",)),
     ),

@@ -32,6 +32,7 @@ def refuse_request(
     registry: TaxonRegistry | None,
 ) -> None:
     """Everything knowable before the model instance exists."""
+    _refuse_a_backbone_the_card_does_not_name(work, card)
     _refuse_embeddings_the_card_forbids(work, card)
     _refuse_unlabelled_scores(work, card)
     _refuse_a_substituted_registry(work, registry)
@@ -52,6 +53,7 @@ def refuse_instance(
         _refuse_an_unsupported_retention(scores, capabilities)
         _refuse_a_reduced_full_stream(scores, capabilities)
         _refuse_a_floor_the_instance_does_not_impose(scores, capabilities)
+        _refuse_a_k_the_instance_does_not_apply(scores, capabilities)
     _refuse_a_floor_outside_the_score_domain(work, capabilities)
     _refuse_an_embedding_emission_its_card_forbids(capabilities, card)
     _refuse_an_embedding_width_its_card_contradicts(capabilities, card)
@@ -78,6 +80,20 @@ def _refused(code: str, detail: str) -> errors.EngineError:
 
 def _card_id(card: ModelCard | HeadCard) -> str:
     return f"{card.model_name}/{card.model_version}"
+
+
+def _refuse_a_backbone_the_card_does_not_name(
+    work: InferenceWork, card: ModelCard | HeadCard
+) -> None:
+    # The embeddings header names the backbone from the selection, so a wrong one
+    # would be published as the provenance of every vector.
+    expected = card.backbone if isinstance(card, HeadCard) else None
+    if work.model.backbone != expected:
+        raise _refused(
+            errors.BACKBONE_DISAGREES,
+            f"the work selects backbone {work.model.backbone} but card "
+            f"{_card_id(card)} names {expected}",
+        )
 
 
 def _refuse_embeddings_the_card_forbids(
@@ -166,8 +182,9 @@ def _refuse_a_reduced_full_stream(
     scores: ScoresRequest, capabilities: ModelCapabilities
 ) -> None:
     # A floor at or below the domain minimum excludes nothing, so it does not by
-    # itself disqualify full. A configured top-k is expressed by "full" being absent
-    # from supported_retention, which the retention check already catches.
+    # itself disqualify full. A configured top-k is declared by native_top_k, which
+    # ModelCapabilities only allows when supported_retention is exactly top_k, so the
+    # retention check has already refused full against it.
     minimum = PROBABILITY_RANGE[0]
     floor = capabilities.native_score_floor
     if scores.retention == "full" and floor is not None and floor > minimum:
@@ -192,6 +209,21 @@ def _refuse_a_floor_the_instance_does_not_impose(
             f"{scores.retention} retention would be published under the requested "
             f"floor {scores.min_score}, but this instance declares native_score_floor "
             f"{capabilities.native_score_floor}",
+        )
+
+
+def _refuse_a_k_the_instance_does_not_apply(
+    scores: ScoresRequest, capabilities: ModelCapabilities
+) -> None:
+    """A top-k stream is published under the request's k, so they must be one k."""
+    if scores.retention != "top_k":
+        return
+    if scores.top_k != capabilities.native_top_k:
+        raise _refused(
+            errors.TOP_K_DISAGREES,
+            f"top_k retention would be published under the requested top_k "
+            f"{scores.top_k}, but this instance declares native_top_k "
+            f"{capabilities.native_top_k}",
         )
 
 
@@ -307,7 +339,7 @@ def _refuse_a_storage_width_the_recipe_does_not_declare(
     # The recipe's dtype is inside the recipe fingerprint, so honoring the request
     # instead would let two works sharing one fingerprint produce different bytes.
     embeddings = _embeddings(work)
-    if embeddings is None or embeddings.storage_dtype == recipe.dtype:
+    if embeddings is None or embeddings.storage_dtype in (None, recipe.dtype):
         return
     raise _refused(
         errors.EMBEDDING_DTYPE_DISAGREES,

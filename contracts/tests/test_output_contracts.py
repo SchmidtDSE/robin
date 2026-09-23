@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from robin_contracts.output_contracts import (
     DetectionsContractId,
     EmbeddingsContractId,
+    EmbeddingsRequest,
     RecordingMapContractId,
     ResultContractId,
     ScoresContractId,
@@ -116,6 +117,15 @@ def test_full_retention_refuses_a_floor_or_a_top_k():
 
     with pytest.raises(ValidationError):
         build_scores(retention="full", min_score=None, top_k=5)
+
+
+def test_an_embeddings_request_may_leave_its_storage_width_unnamed():
+    assert EmbeddingsRequest(contract_id=EMBEDDINGS).storage_dtype is None
+
+
+@pytest.mark.parametrize("width", ["float32", "float16"])
+def test_an_embeddings_request_may_name_either_storage_width(width):
+    assert EmbeddingsRequest(contract_id=EMBEDDINGS, storage_dtype=width).storage_dtype == width
 
 
 def test_no_retired_identifier_appears_in_the_source_tree():

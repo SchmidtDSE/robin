@@ -80,7 +80,6 @@ def build_work() -> InferenceWork:
         ),
         model=ModelSelection(
             ref=MODEL_REF,
-            card_digest=RECORD_DIGEST,
             files=(
                 FileDigest(
                     role="weights", uri="s3://b/owl.h5", digest=FILE_DIGEST, size_bytes=8

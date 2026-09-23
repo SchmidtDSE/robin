@@ -148,6 +148,15 @@ class InferenceSuccess(BaseModel, frozen=True, extra="forbid"):
         return self
 
     @model_validator(mode="after")
+    def _validate_registry_binding(self) -> "InferenceSuccess":
+        if (self.registry_uri is None) != (self.registry_fingerprint is None):
+            raise ValueError(
+                f"registry_uri {self.registry_uri!r} and registry_fingerprint "
+                f"{self.registry_fingerprint!r} are both set or both absent"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_artifact_kinds(self) -> "InferenceSuccess":
         if self.recording_map.kind != "recording_map":
             raise ValueError(
