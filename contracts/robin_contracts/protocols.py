@@ -73,7 +73,7 @@ class ModelContext:
 
     card: ModelCard | HeadCard
     registry: TaxonRegistry | None
-    weights: Mapping[str, Path]
+    files: Mapping[str, Path]  # role -> verified local file, the registry's included
     settings: Mapping[str, JsonScalar]
     scratch_dir: Path
     emit_embeddings: bool

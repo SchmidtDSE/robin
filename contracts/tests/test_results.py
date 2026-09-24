@@ -1,10 +1,12 @@
 """What the engine hands back: its artifacts, its completion evidence, its failure."""
 
+import re
+
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from robin_contracts.canonical import canonical_json_bytes, sha256_v1
-from robin_contracts.cards import ModelRef
+from robin_contracts.cards import ModelCard, model_ref
 from robin_contracts.output_contracts import ScoresRequest, ThresholdPolicy
 from robin_contracts.results import (
     ArtifactRecord,
@@ -15,13 +17,21 @@ from robin_contracts.results import (
     RecordingCoverage,
 )
 from robin_contracts.specs import AudioSpec, Recipe, RunnerResampled, WindowGeometry
-from robin_contracts.work import FileDigest, ModelSelection
+from robin_contracts.work import PinnedFile, PinnedModel, RecordingId
 
 HEX = "0" * 64
 FILE_DIGEST = f"sha256:{HEX}"
 RECORD_DIGEST = f"sha256:v1:{HEX}"
 
-MODEL_REF = ModelRef(name="owl", version="1", digest=RECORD_DIGEST)
+CARD = ModelCard(
+    model_name="owl",
+    model_version="1",
+    runtime="tensorflow",
+    segment_duration=3.0,
+    sample_rate=48000,
+    min_detection_threshold=0.0,
+)
+MODEL_REF = model_ref(CARD)
 GEOMETRY = WindowGeometry(window=3.0, hop=3.0, pad="drop")
 
 DECLARED_STAGES = (
@@ -55,13 +65,15 @@ def build_recipe() -> Recipe:
     )
 
 
-def build_selection() -> ModelSelection:
-    return ModelSelection(
-        ref=MODEL_REF,
-        files=(
-            FileDigest(role="weights", uri="s3://b/owl.tflite", digest=FILE_DIGEST, size_bytes=8),
-        ),
+def build_pinned_model() -> PinnedModel:
+    return PinnedModel(
+        card=CARD,
+        files={"weights": PinnedFile(uri="s3://b/owl.tflite", digest=FILE_DIGEST, size_bytes=8)},
     )
+
+
+def recording(value: str = "42", namespace: str = "soundhub") -> RecordingId:
+    return RecordingId(namespace=namespace, value=value)
 
 
 def build_artifact(**overrides) -> ArtifactRecord:
@@ -76,18 +88,10 @@ def build_artifact(**overrides) -> ArtifactRecord:
     return ArtifactRecord(**(fields | overrides))
 
 
-def build_map() -> ArtifactRecord:
-    return build_artifact(
-        kind="recording_map",
-        contract_id="robin.recording-map.json/1",
-        uri="s3://bucket/map.json",
-        rows=1,
-    )
-
-
 def build_coverage(**overrides) -> RecordingCoverage:
     fields = {
-        "recording_index": 0,
+        "recording": recording(),
+        "audio_digest": None,
         "windows_completed": 2,
         "score_rows": 0,
         "embedding_rows": 0,
@@ -107,10 +111,9 @@ def build_success(**overrides) -> InferenceSuccess:
         "schema_version": "robin.inference-result/1",
         "work_digest": RECORD_DIGEST,
         "recipe": build_recipe(),
-        "model": build_selection(),
+        "model": build_pinned_model(),
         "window_geometry": GEOMETRY,
         "artifacts": (),
-        "recording_map": build_map(),
         "coverage": (build_coverage(),),
     }
     return InferenceSuccess(**(fields | overrides))
@@ -251,7 +254,6 @@ def test_window_bounds_must_be_finite_and_ordered(first, last):
 @pytest.mark.parametrize(
     "overrides",
     [
-        {"recording_index": -1},
         {"windows_completed": -1},
         {"score_rows": -1},
         {"embedding_rows": -1},
@@ -278,21 +280,66 @@ def test_a_minimal_success_round_trips():
 @pytest.mark.parametrize(
     "coverage",
     [
-        (),
-        (build_coverage(recording_index=0), build_coverage(recording_index=0)),
-        (build_coverage(recording_index=1), build_coverage(recording_index=0)),
+        pytest.param((), id="empty"),
+        pytest.param(
+            (build_coverage(recording=recording("42")), build_coverage(recording=recording("42"))),
+            id="repeated",
+        ),
     ],
 )
-def test_coverage_rows_are_ascending_distinct_and_present(coverage):
+def test_coverage_rows_are_present_and_name_each_recording_once(coverage):
     with pytest.raises(ValidationError):
         build_success(coverage=coverage)
+
+
+def test_coverage_order_is_left_to_the_work():
+    # The result does not hold the work, so it cannot know the work's order.
+    coverage = (build_coverage(recording=recording("43")), build_coverage(recording=recording("42")))
+
+    assert [row.recording.value for row in build_success(coverage=coverage).coverage] == [
+        "43",
+        "42",
+    ]
+
+
+def test_the_same_value_in_two_namespaces_is_two_coverage_rows():
+    coverage = (
+        build_coverage(recording=recording("42", "soundhub")),
+        build_coverage(recording=recording("42", "arbimon")),
+    )
+
+    assert len(build_success(coverage=coverage).coverage) == 2
+
+
+@pytest.mark.parametrize("digest", [None, FILE_DIGEST])
+def test_coverage_keeps_the_audio_digest_exactly_null_included(digest):
+    row = build_coverage(audio_digest=digest)
+
+    assert RecordingCoverage.model_validate(row.model_dump(mode="json")).audio_digest == digest
+    assert row.model_dump(mode="json")["audio_digest"] == digest
+
+
+def test_coverage_audio_digest_refuses_the_canonical_family():
+    with pytest.raises(ValidationError):
+        build_coverage(audio_digest=RECORD_DIGEST)
+
+
+def test_a_coverage_refusal_names_the_recording():
+    with pytest.raises(ValidationError, match=re.escape("('soundhub', '42')")):
+        build_coverage(
+            windows_completed=0,
+            first_window_start_s=None,
+            last_window_end_s=None,
+            zero_window_reason="shorter_than_window",
+            score_rows=1,
+        )
 
 
 def test_score_rows_sum_to_the_scores_artifact_rows():
     scores = build_artifact(rows=5)
     coverage = (
-        build_coverage(recording_index=0, score_rows=2),
-        build_coverage(recording_index=1, score_rows=3),
+        build_coverage(recording=recording("42"), score_rows=2),
+        build_coverage(recording=recording("43"), score_rows=3),
     )
 
     success = build_success(
@@ -316,8 +363,8 @@ def test_embedding_rows_sum_to_the_embeddings_artifact_rows():
         kind="embeddings", contract_id="robin.embeddings.arrow/1", rows=3
     )
     coverage = (
-        build_coverage(recording_index=0, embedding_rows=2),
-        build_coverage(recording_index=1, embedding_rows=1),
+        build_coverage(recording=recording("42"), embedding_rows=2),
+        build_coverage(recording=recording("43"), embedding_rows=1),
     )
 
     assert build_success(artifacts=(embeddings,), coverage=coverage).artifacts[0].rows == 3
@@ -346,14 +393,6 @@ def test_a_requested_kind_with_zero_rows_still_gets_an_artifact():
     )
 
     assert success.artifacts[0].rows == 0
-
-
-def test_the_recording_map_is_not_one_of_the_artifacts():
-    with pytest.raises(ValidationError):
-        build_success(artifacts=(build_map(),))
-
-    with pytest.raises(ValidationError):
-        build_success(recording_map=build_artifact())
 
 
 def test_an_artifact_kind_appears_at_most_once():
@@ -417,11 +456,9 @@ def test_a_failure_report_refuses_an_empty_code():
 def test_a_failure_report_locates_itself_only_when_it_can():
     report = build_report()
 
-    assert report.recording_index is None
+    assert report.recording is None
     assert report.window_start_s is None
-
-    with pytest.raises(ValidationError):
-        build_report(recording_index=-1)
+    assert build_report(recording=recording()).recording == recording()
 
     with pytest.raises(ValidationError):
         build_report(window_start_s=float("nan"))

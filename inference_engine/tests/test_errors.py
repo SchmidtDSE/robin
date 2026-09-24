@@ -3,6 +3,7 @@ from typing import get_args
 import pytest
 
 from robin_contracts.results import FailureReport
+from robin_contracts.work import RecordingId
 from robin_inference_engine import errors
 
 # The stages a failure may name, read from the contract a FailureReport validates
@@ -25,7 +26,7 @@ def test_every_declared_constant_is_a_stage_or_one_of_its_codes():
         if name.isupper() and isinstance(value, str)
     }
 
-    assert len(set(errors.ACCEPT_WINDOW_FAILURES)) == 15
+    assert len(set(errors.ACCEPT_WINDOW_FAILURES)) == 14
     assert len(set(errors.VALIDATE_REQUEST_FAILURES)) == 15
     assert len(set(errors.INFER_FAILURES)) == 1
     assert len(set(errors.READ_INPUT_ARTIFACT_FAILURES)) == 6
@@ -35,15 +36,15 @@ def test_every_declared_constant_is_a_stage_or_one_of_its_codes():
     }
 
 
-def test_retention_and_backbone_codes_belong_to_their_stages():
+def test_retention_and_recipe_codes_belong_to_their_stages():
     assert errors.SCORE_BELOW_FLOOR == "score_below_floor"
     assert errors.SCORES_EXCEED_TOP_K == "scores_exceed_top_k"
-    assert errors.BACKBONE_DISAGREES == "backbone_disagrees"
+    assert errors.RECIPE_MODEL_DISAGREES == "recipe_model_disagrees"
     assert errors.TOP_K_DISAGREES == "top_k_disagrees"
     assert {errors.SCORE_BELOW_FLOOR, errors.SCORES_EXCEED_TOP_K} <= set(
         errors.ACCEPT_WINDOW_FAILURES
     )
-    assert {errors.BACKBONE_DISAGREES, errors.TOP_K_DISAGREES} <= set(
+    assert {errors.RECIPE_MODEL_DISAGREES, errors.TOP_K_DISAGREES} <= set(
         errors.VALIDATE_REQUEST_FAILURES
     )
 
@@ -71,14 +72,14 @@ def test_engine_error_carries_its_code_and_location():
     error = errors.EngineError(
         errors.DUPLICATE_WINDOW,
         errors.ACCEPT_WINDOW,
-        "recording 2 already produced a window at 6.0",
-        recording_index=2,
+        "recording ('soundhub', '42') already produced a window at 6.0",
+        recording=RecordingId(namespace="soundhub", value="42"),
         window_start_s=6.0,
     )
 
     assert error.code == errors.DUPLICATE_WINDOW
     assert error.stage == "accept_window"
-    assert error.detail == "recording 2 already produced a window at 6.0"
-    assert error.recording_index == 2
+    assert error.detail == "recording ('soundhub', '42') already produced a window at 6.0"
+    assert error.recording == RecordingId(namespace="soundhub", value="42")
     assert error.window_start_s == 6.0
     assert str(error) == error.detail

@@ -9,7 +9,7 @@ both sides of the disagreement.
 from collections.abc import Iterator
 from typing import get_args
 
-from robin_contracts.cards import HeadCard, ModelCard
+from robin_contracts.cards import HeadCard, ModelCard, model_ref
 from robin_contracts.output_contracts import (
     DetectionsRequest,
     EmbeddingsRequest,
@@ -18,23 +18,18 @@ from robin_contracts.output_contracts import (
 from robin_contracts.protocols import EmbeddingDtype, ModelCapabilities
 from robin_contracts.registry import TaxonRegistry
 from robin_contracts.specs import Recipe
-from robin_contracts.work import InferenceWork
+from robin_contracts.work import REGISTRY_ROLE, InferenceWork
 from robin_inference_engine import errors
 from robin_inference_engine.accept_window import PROBABILITY_RANGE
 
 EMBEDDING_DTYPES: tuple[str, ...] = get_args(EmbeddingDtype)
 
 
-def refuse_request(
-    work: InferenceWork,
-    *,
-    card: ModelCard | HeadCard,
-    registry: TaxonRegistry | None,
-) -> None:
+def refuse_request(work: InferenceWork, *, registry: TaxonRegistry | None) -> None:
     """Everything knowable before the model instance exists."""
-    _refuse_a_backbone_the_card_does_not_name(work, card)
+    card = work.model.card
     _refuse_embeddings_the_card_forbids(work, card)
-    _refuse_unlabelled_scores(work, card)
+    _refuse_unlabelled_scores(work)
     _refuse_a_substituted_registry(work, registry)
     _refuse_head_classes_the_registry_does_not_declare(card, registry)
 
@@ -43,10 +38,11 @@ def refuse_instance(
     work: InferenceWork,
     *,
     capabilities: ModelCapabilities,
-    card: ModelCard | HeadCard,
     recipe: Recipe,
 ) -> None:
     """What only a configured instance can answer, once the factory has returned it."""
+    card = work.model.card
+    _refuse_a_recipe_for_another_model(card, recipe)
     scores = _scores(work)
     if scores is not None:
         _refuse_scores_the_instance_does_not_emit(capabilities)
@@ -82,17 +78,16 @@ def _card_id(card: ModelCard | HeadCard) -> str:
     return f"{card.model_name}/{card.model_version}"
 
 
-def _refuse_a_backbone_the_card_does_not_name(
-    work: InferenceWork, card: ModelCard | HeadCard
-) -> None:
-    # The embeddings header names the backbone from the selection, so a wrong one
-    # would be published as the provenance of every vector.
-    expected = card.backbone if isinstance(card, HeadCard) else None
-    if work.model.backbone != expected:
+def _refuse_a_recipe_for_another_model(card: ModelCard | HeadCard, recipe: Recipe) -> None:
+    # Every artifact header records both the recipe and the work's model, so a recipe
+    # naming another model would publish a header that contradicts itself. The digest
+    # is compared too: an adapter built from a stale copy of the card has the right name.
+    expected = model_ref(card)
+    if recipe.model != expected:
         raise _refused(
-            errors.BACKBONE_DISAGREES,
-            f"the work selects backbone {work.model.backbone} but card "
-            f"{_card_id(card)} names {expected}",
+            errors.RECIPE_MODEL_DISAGREES,
+            f"the instance's recipe names model {recipe.model.id} ({recipe.model.digest}) "
+            f"but the work runs {expected.id} ({expected.digest})",
         )
 
 
@@ -109,15 +104,14 @@ def _refuse_embeddings_the_card_forbids(
         )
 
 
-def _refuse_unlabelled_scores(work: InferenceWork, card: ModelCard | HeadCard) -> None:
-    if _scores(work) is None or not isinstance(card, ModelCard):
+def _refuse_unlabelled_scores(work: InferenceWork) -> None:
+    if _scores(work) is None or REGISTRY_ROLE in work.model.files:
         return
-    if card.taxa_registry_uri is None:
-        raise _refused(
-            errors.REGISTRY_REQUIRED,
-            f"scores were requested but card {_card_id(card)} names no "
-            f"taxa_registry_uri, so nothing gives its output positions a meaning",
-        )
+    raise _refused(
+        errors.REGISTRY_REQUIRED,
+        f"scores were requested but the work pins no {REGISTRY_ROLE!r} file, so "
+        f"nothing gives the model's output positions a meaning",
+    )
 
 
 def _refuse_a_substituted_registry(

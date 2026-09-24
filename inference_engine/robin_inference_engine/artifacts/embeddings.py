@@ -62,10 +62,11 @@ _EMBEDDING_FIELD = "embedding"
 
 
 def embeddings_schema(dim: int, storage_dtype: str) -> pa.Schema:
-    """The four declared fields, with the width and value type in the list type."""
+    """The five declared fields, with the width and value type in the list type."""
     return pa.schema(
         [
-            pa.field("recording_index", pa.int64(), nullable=False),
+            pa.field("recording_namespace", pa.string(), nullable=False),
+            pa.field("recording_value", pa.string(), nullable=False),
             pa.field("window_start_s", pa.float64(), nullable=False),
             pa.field("window_end_s", pa.float64(), nullable=False),
             pa.field(
@@ -116,7 +117,8 @@ class EmbeddingsWriter:
             return
         self._require_declared_width(window)
         stored = self._narrowed(window)
-        self._pending["recording_index"].append(window.recording_index)
+        self._pending["recording_namespace"].append(window.recording.namespace)
+        self._pending["recording_value"].append(window.recording.value)
         self._pending["window_start_s"].append(window.start)
         self._pending["window_end_s"].append(window.end)
         self._pending[_EMBEDDING_FIELD].append(stored)
@@ -182,7 +184,7 @@ class EmbeddingsWriter:
             errors.EMBEDDING_VALUE_OUT_OF_STORAGE_DTYPE_RANGE,
             errors.WRITE_ARTIFACT,
             f"{value} is outside the range {self._storage_dtype} can store",
-            recording_index=window.recording_index,
+            recording=window.recording,
             window_start_s=window.start,
         )
 

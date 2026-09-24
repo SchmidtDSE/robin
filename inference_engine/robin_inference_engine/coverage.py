@@ -8,7 +8,7 @@ from robin_contracts.results import (
     RecordingCoverage,
     ZeroWindowReason,
 )
-from robin_contracts.work import InferenceWork, work_digest
+from robin_contracts.work import InferenceWork, RecordingId, RecordingRef, work_digest
 from robin_inference_engine import errors
 from robin_inference_engine.accept_window import AcceptedWindow
 
@@ -21,8 +21,8 @@ class CoverageBuilder:
     ends and is immutable from then on.
     """
 
-    def __init__(self, recording_indices: Sequence[int]) -> None:
-        self._expected = set(recording_indices)
+    def __init__(self, recordings: Sequence[RecordingRef]) -> None:
+        self._recordings = tuple(recordings)
         self._begun: set[int] = set()
         self._rows: dict[int, RecordingCoverage] = {}
         self._open_recording: int | None = None
@@ -32,19 +32,20 @@ class CoverageBuilder:
         self._first_start: float | None = None
         self._greatest_end: float | None = None
 
-    def begin_recording(self, recording_index: int) -> None:
-        """Open the recording whose accepted windows arrive next."""
-        if recording_index not in self._expected:
-            raise RuntimeError(f"recording {recording_index} is not one of this work's")
-        if recording_index in self._begun:
-            raise RuntimeError(f"recording {recording_index} has already been counted")
+    def begin_recording(self, position: int) -> None:
+        """Open the recording at this position in the work, whose windows arrive next."""
+        if not 0 <= position < len(self._recordings):
+            raise RuntimeError(f"position {position} is not one of this work's recordings")
+        recording = self._recordings[position].id
+        if position in self._begun:
+            raise RuntimeError(f"recording {recording} has already been counted")
         if self._open_recording is not None:
             raise RuntimeError(
-                f"cannot begin recording {recording_index} while recording "
-                f"{self._open_recording} is still open"
+                f"cannot begin recording {recording} while recording "
+                f"{self._open_id()} is still open"
             )
-        self._begun.add(recording_index)
-        self._open_recording = recording_index
+        self._begun.add(position)
+        self._open_recording = position
         self._windows_completed = 0
         self._score_rows = 0
         self._embedding_rows = 0
@@ -52,14 +53,9 @@ class CoverageBuilder:
         self._greatest_end = None
 
     def record(self, window: AcceptedWindow) -> None:
-        """Count one accepted window, whether or not it carried anything."""
+        """Count one accepted window of the open recording, whether or not it carried anything."""
         if self._open_recording is None:
             raise RuntimeError("no recording is open, so no window can be counted")
-        if window.recording_index != self._open_recording:
-            raise RuntimeError(
-                f"window names recording {window.recording_index} while recording "
-                f"{self._open_recording} is open"
-            )
         self._windows_completed += 1
         self._score_rows += len(window.scores)
         if window.embedding is not None:
@@ -77,18 +73,20 @@ class CoverageBuilder:
             raise RuntimeError("no recording is open to end")
         if self._windows_completed and zero_window_reason is not None:
             raise RuntimeError(
-                f"recording {self._open_recording} completed {self._windows_completed} windows "
+                f"recording {self._open_id()} completed {self._windows_completed} windows "
                 f"but supplied zero-window reason {zero_window_reason!r}"
             )
         if not self._windows_completed and zero_window_reason is None:
             raise errors.EngineError(
                 errors.UNEXPLAINED_ZERO_WINDOWS,
                 errors.INFER,
-                f"recording {self._open_recording} completed no window and nothing declares why",
-                recording_index=self._open_recording,
+                f"recording {self._open_id()} completed no window and nothing declares why",
+                recording=self._open_id(),
             )
+        recording = self._recordings[self._open_recording]
         self._rows[self._open_recording] = RecordingCoverage(
-            recording_index=self._open_recording,
+            recording=recording.id,
+            audio_digest=recording.audio_digest,
             windows_completed=self._windows_completed,
             score_rows=self._score_rows,
             embedding_rows=self._embedding_rows,
@@ -99,13 +97,20 @@ class CoverageBuilder:
         self._open_recording = None
 
     def build(self) -> tuple[RecordingCoverage, ...]:
-        """Every recording's row, in ascending index order whatever order they ran in."""
+        """Every recording's row, in the work's order whatever order they ran in."""
         if self._open_recording is not None:
-            raise RuntimeError(f"recording {self._open_recording} was begun and never ended")
-        missing = self._expected - set(self._rows)
+            raise RuntimeError(f"recording {self._open_id()} was begun and never ended")
+        missing = [
+            str(recording.id)
+            for position, recording in enumerate(self._recordings)
+            if position not in self._rows
+        ]
         if missing:
-            raise RuntimeError(f"recordings {sorted(missing)} were never counted")
-        return tuple(self._rows[index] for index in sorted(self._rows))
+            raise RuntimeError(f"recordings {missing} were never counted")
+        return tuple(self._rows[position] for position in range(len(self._recordings)))
+
+    def _open_id(self) -> RecordingId:
+        return self._recordings[self._open_recording].id
 
 
 def check_completion_evidence(work: InferenceWork, success: InferenceSuccess) -> None:
@@ -130,20 +135,26 @@ def _check_work_digest(work: InferenceWork, success: InferenceSuccess) -> None:
 def _check_recording_coverage(
     work: InferenceWork, success: InferenceSuccess
 ) -> None:
-    expected = sorted(recording.index for recording in work.recordings)
-    covered = sorted(row.recording_index for row in success.coverage)
+    expected = [recording.id for recording in work.recordings]
+    covered = [row.recording for row in success.coverage]
     if covered != expected:
-        raise RuntimeError(f"coverage names recordings {covered}, this work's are {expected}")
+        raise RuntimeError(
+            f"coverage names recordings {[str(one) for one in covered]}, in that order; "
+            f"it must name this work's {[str(one) for one in expected]}, in the work's order"
+        )
+    for recording, row in zip(work.recordings, success.coverage):
+        if row.audio_digest != recording.audio_digest:
+            raise RuntimeError(
+                f"coverage gives recording {recording.id} audio_digest {row.audio_digest}, "
+                f"the work gives {recording.audio_digest}"
+            )
 
 
 def _check_requested_artifacts(
     work: InferenceWork, success: InferenceSuccess
 ) -> None:
     requested: set[ArtifactKind] = {output.kind for output in work.outputs}
-    # The map resolves every recording_index, so a work requires it rather than asks.
-    requested.add("recording_map")
     written = {artifact.kind for artifact in success.artifacts}
-    written.add(success.recording_map.kind)
     if written != requested:
         raise RuntimeError(
             f"result names {sorted(written)}, this work requires {sorted(requested)}"

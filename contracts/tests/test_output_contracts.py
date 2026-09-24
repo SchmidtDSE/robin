@@ -10,7 +10,6 @@ from robin_contracts.output_contracts import (
     DetectionsContractId,
     EmbeddingsContractId,
     EmbeddingsRequest,
-    RecordingMapContractId,
     ResultContractId,
     ScoresContractId,
     ScoresRequest,
@@ -39,7 +38,6 @@ def test_each_alias_spells_its_specified_identifier():
     # Transcribed, not derived from the aliases under test, so a changed alias fails.
     assert get_args(ScoresContractId)[0] == "robin.scores.arrow/1"
     assert get_args(EmbeddingsContractId)[0] == "robin.embeddings.arrow/1"
-    assert get_args(RecordingMapContractId)[0] == "robin.recording-map.json/1"
     assert get_args(DetectionsContractId)[0] == "robin.detections.parquet/1"
     assert get_args(WorkContractId)[0] == "robin.inference-work/1"
     assert get_args(ResultContractId)[0] == "robin.inference-result/1"

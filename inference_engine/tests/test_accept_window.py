@@ -8,6 +8,7 @@ from robin_contracts.protocols import ModelCapabilities
 from robin_contracts.records import ClassScore, WindowOutput
 from robin_contracts.registry import RegistryEntry, TaxonRegistry
 from robin_contracts.specs import WindowGeometry
+from robin_contracts.work import RecordingId, RecordingRef
 from robin_inference_engine import errors
 from robin_inference_engine.accept_window import AcceptanceBoundary
 
@@ -41,11 +42,26 @@ def build_capabilities(**overrides) -> ModelCapabilities:
     return ModelCapabilities(**(fields | overrides))
 
 
+def build_recordings(*durations: float | None) -> tuple[RecordingRef, ...]:
+    return tuple(
+        RecordingRef(
+            namespace="soundhub",
+            value=f"rec-{position}",
+            audio_uri=f"s3://b/{position}.wav",
+            duration_seconds=duration,
+        )
+        for position, duration in enumerate(durations)
+    )
+
+
+RECORDINGS = build_recordings(30.0, 30.0)
+
+
 def build_boundary(*, opened: int | None = 0, **overrides) -> AcceptanceBoundary:
     fields = {
         "geometry": WindowGeometry(window=3.0, hop=3.0, pad="time_scaled"),
         "capabilities": build_capabilities(),
-        "durations": {0: 30.0, 1: 30.0},
+        "recordings": RECORDINGS,
         "registry": build_registry("rain", "wind"),
         "scores": build_scores_request(),
     }
@@ -57,7 +73,6 @@ def build_boundary(*, opened: int | None = 0, **overrides) -> AcceptanceBoundary
 
 def build_window(**overrides) -> WindowOutput:
     fields = {
-        "recording_index": 0,
         "start": 0.0,
         "end": 3.0,
         "scores": (ClassScore(label="rain", score=0.5),),
@@ -72,38 +87,48 @@ def build_embedding(*values: float, dtype=np.float32) -> np.ndarray:
 def test_accept_returns_the_window_it_was_given():
     accepted = build_boundary().accept(build_window(start=3.0, end=6.0))
 
-    assert accepted.recording_index == 0
+    assert accepted.recording == RECORDINGS[0].id
     assert accepted.start == 3.0
     assert accepted.end == 6.0
     assert accepted.scores == (ClassScore(label="rain", score=0.5),)
     assert accepted.embedding is None
 
 
-def test_accept_refuses_a_recording_index_not_in_the_work():
-    with pytest.raises(errors.EngineError) as exc:
-        build_boundary().accept(build_window(recording_index=7))
+def test_a_window_belongs_to_the_recording_that_is_open():
+    boundary = build_boundary(opened=0)
+    first = boundary.accept(build_window(start=3.0, end=6.0))
+    boundary.begin_recording(1)
+    # The second recording starts its own ordering, so an earlier start is accepted.
+    second = boundary.accept(build_window(start=0.0, end=3.0))
 
-    assert exc.value.code == errors.UNKNOWN_RECORDING_INDEX
+    assert first.recording == RecordingId(namespace="soundhub", value="rec-0")
+    assert second.recording == RecordingId(namespace="soundhub", value="rec-1")
+
+
+def test_a_refusal_names_the_open_recording():
+    boundary = build_boundary(opened=1)
+
+    with pytest.raises(errors.EngineError) as exc:
+        boundary.accept(build_window(start=1.0, end=4.0))
+
     assert exc.value.stage == "accept_window"
+    assert exc.value.recording == RECORDINGS[1].id
 
 
-def test_accept_refuses_a_window_for_a_recording_that_is_not_open():
-    with pytest.raises(errors.EngineError) as exc:
-        build_boundary(opened=0).accept(build_window(recording_index=1))
-
-    assert exc.value.code == errors.WINDOW_OUT_OF_ORDER
-
-
-def test_begin_recording_refuses_an_unknown_or_closed_recording():
+@pytest.mark.parametrize("position", [2, 7, -1])
+def test_begin_recording_refuses_a_position_outside_the_work(position):
     boundary = build_boundary(opened=None)
 
-    with pytest.raises(RuntimeError):
-        boundary.begin_recording(7)
+    with pytest.raises(RuntimeError, match="not one of this work's"):
+        boundary.begin_recording(position)
 
+
+def test_begin_recording_refuses_a_recording_already_processed():
+    boundary = build_boundary(opened=None)
     boundary.begin_recording(0)
     boundary.begin_recording(1)
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="already processed"):
         boundary.begin_recording(0)
 
 
@@ -186,7 +211,7 @@ def test_accept_refuses_a_window_of_the_wrong_duration():
 
 @pytest.mark.parametrize("start", [9.0, 12.0])
 def test_accept_refuses_a_start_at_or_past_the_recording_duration(start):
-    boundary = build_boundary(durations={0: 9.0})
+    boundary = build_boundary(recordings=build_recordings(9.0))
 
     with pytest.raises(errors.EngineError) as exc:
         boundary.accept(build_window(start=start, end=start + 3.0))
@@ -197,7 +222,7 @@ def test_accept_refuses_a_start_at_or_past_the_recording_duration(start):
 @pytest.mark.parametrize("duration", [10.0, None])
 @pytest.mark.parametrize("start", [-6.0, -3.0, -0.01])
 def test_accept_refuses_a_negative_start_even_on_the_hop_grid(start, duration):
-    boundary = build_boundary(durations={0: duration})
+    boundary = build_boundary(recordings=build_recordings(duration))
 
     with pytest.raises(errors.EngineError) as exc:
         boundary.accept(build_window(start=start, end=start + 3.0))
@@ -209,7 +234,7 @@ def test_accept_refuses_a_negative_start_even_on_the_hop_grid(start, duration):
 def test_accept_refuses_a_partial_window_under_drop_policy(duration, start):
     boundary = build_boundary(
         geometry=WindowGeometry(window=3.0, hop=3.0, pad="drop"),
-        durations={0: duration},
+        recordings=build_recordings(duration),
     )
 
     with pytest.raises(errors.EngineError) as exc:
@@ -221,7 +246,7 @@ def test_accept_refuses_a_partial_window_under_drop_policy(duration, start):
 def test_accept_allows_a_complete_window_under_drop_policy():
     boundary = build_boundary(
         geometry=WindowGeometry(window=3.0, hop=3.0, pad="drop"),
-        durations={0: 3.0},
+        recordings=build_recordings(3.0),
     )
 
     accepted = boundary.accept(build_window(start=0.0, end=3.0))
@@ -236,14 +261,14 @@ def test_accept_allows_a_trailing_pad_window_past_the_audio(pad):
     # above a hop multiple is the only shape that reaches it.
     geometry = WindowGeometry(window=3.0, hop=1.0, pad=pad)
 
-    accepted = build_boundary(geometry=geometry, durations={0: 9.05}).accept(
+    accepted = build_boundary(geometry=geometry, recordings=build_recordings(9.05)).accept(
         build_window(start=9.0, end=12.0)
     )
 
     assert accepted.end == 12.0
 
     with pytest.raises(errors.EngineError) as exc:
-        build_boundary(geometry=geometry, durations={0: 9.05}).accept(
+        build_boundary(geometry=geometry, recordings=build_recordings(9.05)).accept(
             build_window(start=9.0, end=12.08)
         )
 
@@ -254,7 +279,7 @@ def test_accept_allows_a_trailing_pad_window_past_the_audio(pad):
 def test_accept_checks_no_duration_when_the_recording_declares_none(pad):
     accepted = build_boundary(
         geometry=WindowGeometry(window=3.0, hop=3.0, pad=pad),
-        durations={0: None},
+        recordings=build_recordings(None),
     ).accept(build_window(start=90.0, end=93.0))
 
     assert accepted.start == 90.0
@@ -515,7 +540,7 @@ def test_accept_refuses_a_score_below_the_requested_floor(retention):
         build_boundary(scores=request).accept(build_window(start=3.0, end=6.0, scores=below))
 
     assert exc.value.code == errors.SCORE_BELOW_FLOOR
-    assert exc.value.recording_index == 0
+    assert exc.value.recording == RECORDINGS[0].id
     assert exc.value.window_start_s == 3.0
     assert "0.29" in exc.value.detail and "0.3" in exc.value.detail
 
@@ -556,7 +581,7 @@ def test_accept_refuses_more_scores_than_the_requested_top_k():
         boundary.accept(build_window(start=3.0, end=6.0, scores=THREE_SCORES))
 
     assert exc.value.code == errors.SCORES_EXCEED_TOP_K
-    assert exc.value.recording_index == 0
+    assert exc.value.recording == RECORDINGS[0].id
     assert exc.value.window_start_s == 3.0
     assert "3" in exc.value.detail and "2" in exc.value.detail
 

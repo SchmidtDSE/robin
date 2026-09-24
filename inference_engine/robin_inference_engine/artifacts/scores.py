@@ -50,7 +50,8 @@ SCORE_BATCH_ROWS = 8192
 
 SCORES_SCHEMA = pa.schema(
     [
-        pa.field("recording_index", pa.int64(), nullable=False),
+        pa.field("recording_namespace", pa.string(), nullable=False),
+        pa.field("recording_value", pa.string(), nullable=False),
         pa.field("window_start_s", pa.float64(), nullable=False),
         pa.field("window_end_s", pa.float64(), nullable=False),
         pa.field("label", pa.string(), nullable=False),
@@ -83,7 +84,8 @@ class ScoresWriter:
         if self._closed or self._stream is None:
             raise RuntimeError(f"{self._path.name} is closed; no window can be added")
         for score in window.scores:
-            self._pending["recording_index"].append(window.recording_index)
+            self._pending["recording_namespace"].append(window.recording.namespace)
+            self._pending["recording_value"].append(window.recording.value)
             self._pending["window_start_s"].append(window.start)
             self._pending["window_end_s"].append(window.end)
             self._pending["label"].append(score.label)

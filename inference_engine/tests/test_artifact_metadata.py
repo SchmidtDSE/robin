@@ -5,15 +5,16 @@ import json
 
 import pytest
 
-from robin_contracts.cards import ModelRef
+from robin_contracts.cards import HeadCard, ModelCard, ModelRef, card_digest, model_ref
 from robin_contracts.embedding_transforms import L2Norm
 from robin_contracts.output_contracts import ScoresRequest
 from robin_contracts.specs import AudioSpec, Recipe, RunnerResampled
 from robin_contracts.work import (
+    REGISTRY_ROLE,
     AudioInput,
-    FileDigest,
     InferenceWork,
-    ModelSelection,
+    PinnedFile,
+    PinnedModel,
     RecordingRef,
 )
 from robin_inference_engine import errors
@@ -29,18 +30,34 @@ from robin_inference_engine.artifacts.metadata import (
 )
 
 HEX = "0" * 64
-RECORD_DIGEST = f"sha256:v1:{HEX}"
 FILE_DIGEST = f"sha256:{HEX}"
 OTHER_FILE_DIGEST = "sha256:" + "b" * 64
 REGISTRY_FINGERPRINT = "sha256:" + "a" * 64
-MAP_CHECKSUM = "sha256:" + "c" * 64
 
-MODEL_REF = ModelRef(name="owl", version="1", digest=RECORD_DIGEST)
+CARD = ModelCard(
+    model_name="owl",
+    model_version="1",
+    runtime="tensorflow",
+    segment_duration=12.0,
+    sample_rate=32000,
+    min_detection_threshold=0.0,
+)
+WEIGHTS = PinnedFile(uri="s3://b/owl.h5", digest=FILE_DIGEST, size_bytes=8)
+REGISTRY_FILE = PinnedFile(uri="s3://b/registry.csv", digest=REGISTRY_FINGERPRINT, size_bytes=16)
+
+
+def build_model(card: ModelCard | HeadCard = CARD, **overrides) -> PinnedModel:
+    fields = {
+        "card": card,
+        "files": {"weights": WEIGHTS, REGISTRY_ROLE: REGISTRY_FILE},
+        "registry_fingerprint": REGISTRY_FINGERPRINT,
+    }
+    return PinnedModel(**(fields | overrides))
 
 
 def build_recipe(**overrides) -> Recipe:
     fields = {
-        "model": MODEL_REF,
+        "model": model_ref(CARD),
         "backend": "tensorflow",
         "audio": AudioSpec(
             sample_rate=32000,
@@ -60,17 +77,9 @@ def build_work(**overrides) -> InferenceWork:
     fields = {
         "schema_version": "robin.inference-work/1",
         "recordings": (
-            RecordingRef(index=0, namespace="soundhub", value="42", audio_uri="s3://b/42.wav"),
+            RecordingRef(namespace="soundhub", value="42", audio_uri="s3://b/42.wav"),
         ),
-        "model": ModelSelection(
-            ref=MODEL_REF,
-            files=(
-                FileDigest(
-                    role="weights", uri="s3://b/owl.h5", digest=FILE_DIGEST, size_bytes=8
-                ),
-            ),
-            registry_fingerprint=REGISTRY_FINGERPRINT,
-        ),
+        "model": build_model(),
         "input": AudioInput(),
         "settings": {},
         "resources": {},
@@ -86,8 +95,6 @@ def build_metadata(**overrides) -> dict[bytes, bytes]:
         "recipe": build_recipe(),
         "registry_uri": "s3://b/registry.csv",
         "registry_fingerprint": REGISTRY_FINGERPRINT,
-        "recording_map_uri": "s3://b/recording-map.json",
-        "recording_map_checksum": MAP_CHECKSUM,
     }
     return required_metadata(**(fields | overrides))
 
@@ -101,7 +108,7 @@ def test_every_shared_key_is_present():
     decoded = decode_metadata(build_metadata())
 
     assert set(decoded) == set(REQUIRED_KEYS) | set(REGISTRY_KEYS)
-    assert len(REQUIRED_KEYS) == 9
+    assert len(REQUIRED_KEYS) == 7
     assert len(REGISTRY_KEYS) == 2
 
 
@@ -140,30 +147,23 @@ def test_the_shipped_recipe_carries_the_windowing_a_reader_needs():
     assert audio["pad"] == recipe.audio.pad
 
 
-def test_model_file_digests_carry_role_digest_and_size_and_no_uri():
-    work = build_work(
-        model=ModelSelection(
-            ref=MODEL_REF,
-            files=(
-                FileDigest(
-                    role="weights", uri="s3://b/owl.h5", digest=FILE_DIGEST, size_bytes=8
-                ),
-                FileDigest(
-                    role="labels", uri="s3://b/labels.csv", digest=OTHER_FILE_DIGEST,
-                    size_bytes=16,
-                ),
-            ),
-        )
-    )
+def test_model_file_digests_carry_each_roles_digest_and_size_and_no_uri():
+    digests = json.loads(decode_metadata(build_metadata())["robin.model_file_digests"])
 
-    digests = json.loads(
-        decode_metadata(build_metadata(work=work))["robin.model_file_digests"]
-    )
+    assert digests == {
+        "weights": {"digest": FILE_DIGEST, "size_bytes": 8},
+        REGISTRY_ROLE: {"digest": REGISTRY_FINGERPRINT, "size_bytes": 16},
+    }
 
-    assert digests == [
-        {"role": "weights", "digest": FILE_DIGEST, "size_bytes": 8},
-        {"role": "labels", "digest": OTHER_FILE_DIGEST, "size_bytes": 16},
-    ]
+
+def test_model_file_digests_do_not_depend_on_file_order():
+    forwards = build_work(model=build_model(files={"weights": WEIGHTS, REGISTRY_ROLE: REGISTRY_FILE}))
+    backwards = build_work(model=build_model(files={REGISTRY_ROLE: REGISTRY_FILE, "weights": WEIGHTS}))
+
+    assert (
+        decode_metadata(build_metadata(work=forwards))["robin.model_file_digests"]
+        == decode_metadata(build_metadata(work=backwards))["robin.model_file_digests"]
+    )
 
 
 def test_model_ref_is_name_slash_version():
@@ -324,44 +324,31 @@ def test_a_backbones_own_run_names_itself_as_the_backbone():
     assert decoded["robin.backbone_card_digest"] == shared["robin.model_card_digest"]
 
 
-def test_a_head_names_the_backbone_its_selection_declares():
-    backbone = ModelRef(name="perch", version="8", digest="sha256:v1:" + "d" * 64)
-    work = build_work(
-        model=ModelSelection(
-            ref=MODEL_REF,
-            files=(
-                FileDigest(role="weights", uri="s3://b/h.keras", digest=FILE_DIGEST, size_bytes=8),
-            ),
-            backbone=backbone,
-        )
-    )
+HEAD = HeadCard(
+    model_name="amy-head",
+    model_version="1",
+    backbone=ModelRef(name="perch", version="8", digest="sha256:v1:" + "d" * 64),
+    classes=("owl",),
+    required_embedding_transform=L2Norm(),
+)
+
+
+def test_a_head_names_the_backbone_its_card_declares():
+    work = build_work(model=build_model(HEAD))
 
     decoded = decode_metadata(
         embedding_metadata(work, dim=8, source_dtype="float32", storage_dtype="float32")
     )
 
     assert decoded["robin.backbone_ref"] == "perch/8"
-    assert decoded["robin.backbone_card_digest"] == backbone.digest
-    assert decoded["robin.backbone_ref"] != decode_metadata(build_metadata())["robin.model_ref"]
+    assert decoded["robin.backbone_card_digest"] == HEAD.backbone.digest
 
 
-def test_the_card_digest_keys_come_from_the_selections_ref():
-    ref = ModelRef(name="owl", version="1", digest="sha256:v1:" + "e" * 64)
-    work = build_work(
-        model=ModelSelection(
-            ref=ref,
-            files=(
-                FileDigest(role="weights", uri="s3://b/owl.h5", digest=FILE_DIGEST, size_bytes=8),
-            ),
-            registry_fingerprint=REGISTRY_FINGERPRINT,
-        )
-    )
-    assert ref.digest != RECORD_DIGEST
+@pytest.mark.parametrize("card", [CARD, HEAD], ids=["backbone", "head"])
+def test_the_model_keys_come_from_the_works_card(card):
+    work = build_work(model=build_model(card))
 
-    shared = decode_metadata(build_metadata(work=work))
-    embedding = decode_metadata(
-        embedding_metadata(work, dim=8, source_dtype="float32", storage_dtype="float32")
-    )
+    shared = decode_metadata(build_metadata(work=work, recipe=build_recipe(model=model_ref(card))))
 
-    assert shared["robin.model_card_digest"] == ref.digest
-    assert embedding["robin.backbone_card_digest"] == ref.digest
+    assert shared["robin.model_ref"] == f"{card.model_name}/{card.model_version}"
+    assert shared["robin.model_card_digest"] == card_digest(card)

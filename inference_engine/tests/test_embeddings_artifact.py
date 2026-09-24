@@ -7,15 +7,17 @@ import numpy as np
 import pyarrow as pa
 import pytest
 
-from robin_contracts.cards import ModelRef
-from robin_contracts.embedding_transforms import Identity
+from robin_contracts.cards import HeadCard, ModelCard, ModelRef, card_digest, model_ref
+from robin_contracts.embedding_transforms import Identity, L2Norm
 from robin_contracts.output_contracts import EmbeddingsRequest
 from robin_contracts.specs import AudioSpec, Recipe, RunnerResampled
 from robin_contracts.work import (
+    REGISTRY_ROLE,
     AudioInput,
-    FileDigest,
     InferenceWork,
-    ModelSelection,
+    PinnedFile,
+    PinnedModel,
+    RecordingId,
     RecordingRef,
 )
 from robin_inference_engine import errors
@@ -37,14 +39,36 @@ from robin_inference_engine.artifacts.metadata import (
 from robin_inference_engine.artifacts.staging import checksum_file
 
 HEX = "0" * 64
-RECORD_DIGEST = f"sha256:v1:{HEX}"
 FILE_DIGEST = f"sha256:{HEX}"
 BACKBONE_DIGEST = "sha256:v1:" + "d" * 64
 REGISTRY_FINGERPRINT = "sha256:" + "a" * 64
-MAP_CHECKSUM = "sha256:" + "c" * 64
 
-MODEL_REF = ModelRef(name="perch", version="8", digest=RECORD_DIGEST)
+CARD = ModelCard(
+    model_name="perch",
+    model_version="8",
+    runtime="tensorflow",
+    segment_duration=5.0,
+    sample_rate=32000,
+    min_detection_threshold=0.0,
+    can_emit_embeddings=True,
+    embedding_dim=4,
+)
 BACKBONE_REF = ModelRef(name="backbone", version="2", digest=BACKBONE_DIGEST)
+
+SOUNDHUB_42 = RecordingId(namespace="soundhub", value="42")
+
+
+def build_model(card: ModelCard | HeadCard = CARD) -> PinnedModel:
+    return PinnedModel(
+        card=card,
+        files={
+            "weights": PinnedFile(uri="s3://b/perch.tf", digest=FILE_DIGEST, size_bytes=8),
+            REGISTRY_ROLE: PinnedFile(
+                uri="s3://b/registry.csv", digest=REGISTRY_FINGERPRINT, size_bytes=8
+            ),
+        },
+        registry_fingerprint=REGISTRY_FINGERPRINT,
+    )
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 
@@ -53,7 +77,7 @@ DIM = 4
 
 def build_recipe(**overrides) -> Recipe:
     fields = {
-        "model": MODEL_REF,
+        "model": model_ref(CARD),
         "backend": "tensorflow",
         "audio": AudioSpec(
             sample_rate=32000,
@@ -73,17 +97,9 @@ def build_work(**overrides) -> InferenceWork:
     fields = {
         "schema_version": "robin.inference-work/1",
         "recordings": (
-            RecordingRef(index=0, namespace="soundhub", value="42", audio_uri="s3://b/42.wav"),
+            RecordingRef(namespace="soundhub", value="42", audio_uri="s3://b/42.wav"),
         ),
-        "model": ModelSelection(
-            ref=MODEL_REF,
-            files=(
-                FileDigest(
-                    role="weights", uri="s3://b/perch.tf", digest=FILE_DIGEST, size_bytes=8
-                ),
-            ),
-            registry_fingerprint=REGISTRY_FINGERPRINT,
-        ),
+        "model": build_model(),
         "input": AudioInput(),
         "settings": {},
         "resources": {},
@@ -105,8 +121,6 @@ def build_metadata(
         "recipe": build_recipe(dtype=storage_dtype),
         "registry_uri": "s3://b/registry.csv",
         "registry_fingerprint": REGISTRY_FINGERPRINT,
-        "recording_map_uri": "s3://b/recording-map.json",
-        "recording_map_checksum": MAP_CHECKSUM,
     }
     fields |= overrides
     return required_metadata(**fields) | embedding_metadata(
@@ -118,7 +132,12 @@ HEADER_KEYS = (*REQUIRED_KEYS, *REGISTRY_KEYS, *EMBEDDING_KEYS)
 
 
 def build_window(
-    start: float = 0.0, *, index: int = 0, values=None, dim: int = DIM, dtype="float32"
+    start: float = 0.0,
+    *,
+    recording: RecordingId = SOUNDHUB_42,
+    values=None,
+    dim: int = DIM,
+    dtype="float32",
 ):
     # The writer takes the array it is handed; the acceptance boundary is what refuses
     # a dtype the instance did not declare, so a float16 vector is legitimate here.
@@ -129,7 +148,7 @@ def build_window(
         else np.asarray(values, dtype=dtype)
     )
     return AcceptedWindow(
-        recording_index=index,
+        recording=recording,
         start=start,
         end=start + 5.0,
         scores=(),
@@ -167,13 +186,15 @@ def read_rows(path, checksum):
 # --- the schema ------------------------------------------------------------
 
 
-def test_the_schema_is_the_declared_four_fields_with_declared_types():
+def test_the_schema_is_the_declared_five_fields_with_declared_types():
     schema = embeddings_schema(DIM, "float32")
 
     assert schema.names == [
-        "recording_index", "window_start_s", "window_end_s", "embedding"
+        "recording_namespace", "recording_value", "window_start_s", "window_end_s", "embedding"
     ]
-    assert [field.type for field in schema][:3] == [pa.int64(), pa.float64(), pa.float64()]
+    assert [field.type for field in schema][:4] == [
+        pa.string(), pa.string(), pa.float64(), pa.float64()
+    ]
     assert schema.field("embedding").type == pa.list_(pa.float32(), DIM)
     assert all(not field.nullable for field in schema)
 
@@ -216,7 +237,8 @@ def test_a_window_with_no_embedding_writes_no_row(tmp_path):
     assert staged.rows == 1
     assert read_rows(staged.path, staged.checksum)[0] == [
         {
-            "recording_index": 0,
+            "recording_namespace": "soundhub",
+            "recording_value": "42",
             "window_start_s": 0.0,
             "window_end_s": 5.0,
             "embedding": [0.0, 1.0, 2.0, 3.0],
@@ -238,19 +260,25 @@ def test_vectors_survive_a_float32_round_trip_exactly(tmp_path):
 
 
 def test_row_order_follows_the_windows_it_was_given(tmp_path):
+    other = RecordingId(namespace="arbimon", value="rec:7")
     windows = [
-        build_window(0.0, index=0, values=[0, 0, 0, 0]),
-        build_window(5.0, index=0, values=[1, 1, 1, 1]),
-        build_window(0.0, index=1, values=[2, 2, 2, 2]),
+        build_window(0.0, values=[0, 0, 0, 0]),
+        build_window(5.0, values=[1, 1, 1, 1]),
+        build_window(0.0, recording=other, values=[2, 2, 2, 2]),
     ]
 
     staged = write_artifact(tmp_path / "embeddings.arrow", windows)
 
     rows = [row for batch in read_rows(staged.path, staged.checksum) for row in batch]
     assert [
-        (row["recording_index"], row["window_start_s"], row["embedding"][0])
+        (row["recording_namespace"], row["recording_value"], row["window_start_s"],
+         row["embedding"][0])
         for row in rows
-    ] == [(0, 0.0, 0.0), (0, 5.0, 1.0), (1, 0.0, 2.0)]
+    ] == [
+        ("soundhub", "42", 0.0, 0.0),
+        ("soundhub", "42", 5.0, 1.0),
+        ("arbimon", "rec:7", 0.0, 2.0),
+    ]
 
 
 def test_a_staged_artifact_reads_back_under_the_contract_it_was_staged_as(tmp_path):
@@ -411,7 +439,7 @@ def test_every_required_key_is_present_on_the_stream(tmp_path):
 
     with read_embeddings(staged.path, expected_checksum=staged.checksum) as stream:
         assert set(stream.metadata) == set(HEADER_KEYS)
-        assert len(HEADER_KEYS) == 16
+        assert len(HEADER_KEYS) == 14
 
 
 @pytest.mark.parametrize("absent", HEADER_KEYS)
@@ -564,26 +592,25 @@ def test_a_backbone_run_names_itself_and_a_head_names_its_backbone(tmp_path):
             == stream.metadata["robin.model_card_digest"]
         )
 
-    head = build_work(
-        model=ModelSelection(
-            ref=MODEL_REF,
-            files=(
-                FileDigest(
-                    role="weights", uri="s3://b/head.keras", digest=FILE_DIGEST, size_bytes=8
-                ),
-            ),
-            registry_fingerprint=REGISTRY_FINGERPRINT,
-            backbone=BACKBONE_REF,
-        )
+    head_card = HeadCard(
+        model_name="amy-head",
+        model_version="1",
+        backbone=BACKBONE_REF,
+        classes=("owl",),
+        required_embedding_transform=L2Norm(),
     )
+    head = build_work(model=build_model(head_card))
     staged = write_artifact(
-        tmp_path / "head.arrow", [build_window()], metadata=build_metadata(work=head)
+        tmp_path / "head.arrow",
+        [build_window()],
+        metadata=build_metadata(work=head, recipe=build_recipe(model=model_ref(head_card))),
     )
 
     with read_embeddings(staged.path, expected_checksum=staged.checksum) as stream:
         assert stream.metadata["robin.backbone_ref"] == "backbone/2"
         assert stream.metadata["robin.backbone_card_digest"] == BACKBONE_DIGEST
-        assert stream.metadata["robin.model_ref"] == "perch/8"
+        assert stream.metadata["robin.model_ref"] == "amy-head/1"
+        assert stream.metadata["robin.model_card_digest"] == card_digest(head_card)
 
 
 def test_the_shipped_recipe_hashes_to_the_fingerprint_beside_it(tmp_path):
@@ -695,11 +722,13 @@ def test_a_finite_value_that_does_not_survive_narrowing_is_refused(tmp_path):
     )
 
     with pytest.raises(errors.EngineError) as exc:
-        writer.write(build_window(5.0, index=3, values=source))
+        writer.write(
+            build_window(5.0, recording=RecordingId(namespace="arbimon", value="3"), values=source)
+        )
 
     assert exc.value.code == errors.EMBEDDING_VALUE_OUT_OF_STORAGE_DTYPE_RANGE
     assert exc.value.stage == errors.WRITE_ARTIFACT
-    assert exc.value.recording_index == 3
+    assert exc.value.recording == RecordingId(namespace="arbimon", value="3")
     assert exc.value.window_start_s == 5.0
     assert "float16" in exc.value.detail
 
@@ -724,7 +753,8 @@ def test_a_file_a_refusal_interrupted_still_closes_and_reads_back(tmp_path):
     assert staged.checksum == checksum_file(staged.path)
     assert read_rows(staged.path, staged.checksum)[0] == [
         {
-            "recording_index": 0,
+            "recording_namespace": "soundhub",
+            "recording_value": "42",
             "window_start_s": 0.0,
             "window_end_s": 5.0,
             "embedding": [0.0, 1.0, 2.0, 3.0],
@@ -894,7 +924,7 @@ def test_a_reader_refuses_another_contracts_artifact(tmp_path):
 
 
 def test_a_reader_refuses_a_stream_carrying_no_metadata_at_all(tmp_path):
-    # The right four columns and an empty header is what every tool but this writer
+    # The right five columns and an empty header is what every tool but this writer
     # produces, and Arrow reports that header as absent rather than as empty.
     path = tmp_path / "embeddings.arrow"
     checksum = write_raw_stream(path, embeddings_schema(DIM, "float32"))
@@ -950,6 +980,47 @@ def test_a_reader_refuses_a_missing_field(tmp_path):
 
     assert exc.value.code == errors.ARTIFACT_SCHEMA_INVALID
     assert "window_end_s" in exc.value.detail
+
+
+def test_a_reader_refuses_an_artifact_missing_the_recording_namespace(tmp_path):
+    narrowed = pa.schema(
+        [
+            field
+            for field in embeddings_schema(DIM, "float32")
+            if field.name != "recording_namespace"
+        ]
+    ).with_metadata(build_metadata())
+    path = tmp_path / "embeddings.arrow"
+    checksum = write_raw_stream(path, narrowed)
+
+    with pytest.raises(errors.EngineError) as exc:
+        with read_embeddings(path, expected_checksum=checksum):
+            pass
+
+    assert exc.value.code == errors.ARTIFACT_SCHEMA_INVALID
+    assert "recording_namespace" in exc.value.detail
+
+
+def test_a_reader_refuses_a_recording_value_stored_as_a_number(tmp_path):
+    numbered = pa.schema(
+        [
+            pa.field(
+                field.name,
+                pa.int64() if field.name == "recording_value" else field.type,
+                nullable=False,
+            )
+            for field in embeddings_schema(DIM, "float32")
+        ]
+    ).with_metadata(build_metadata())
+    path = tmp_path / "embeddings.arrow"
+    checksum = write_raw_stream(path, numbered)
+
+    with pytest.raises(errors.EngineError) as exc:
+        with read_embeddings(path, expected_checksum=checksum):
+            pass
+
+    assert exc.value.code == errors.ARTIFACT_SCHEMA_INVALID
+    assert "recording_value" in exc.value.detail
 
 
 def test_a_reader_refuses_a_narrowed_bound_type(tmp_path):
@@ -1026,7 +1097,8 @@ def test_a_reader_accepts_additional_columns(tmp_path):
     ).with_metadata(build_metadata())
     rows = [
         {
-            "recording_index": 0,
+            "recording_namespace": "soundhub",
+            "recording_value": "42",
             "window_start_s": 0.0,
             "window_end_s": 5.0,
             "embedding": [0.0, 1.0, 2.0, 3.0],

@@ -13,7 +13,7 @@ from typing import Annotated, Literal
 from pydantic import AfterValidator, BaseModel, Field, field_validator, model_validator
 
 from robin_contracts.canonical import is_sha256_v1, sha256_v1
-from robin_contracts.cards import ModelRef
+from robin_contracts.cards import HeadCard, ModelCard
 from robin_contracts.output_contracts import (
     EmbeddingsContractId,
     OutputRequest,
@@ -55,36 +55,53 @@ CanonicalDigest = Annotated[str, AfterValidator(_canonical_digest)]
 NonEmptyText = Annotated[str, AfterValidator(_non_empty)]
 
 
-class RecordingRef(BaseModel, frozen=True, extra="forbid"):
-    """One recording: its processing index, its identity, and where its audio is."""
+# The role of the pinned file that holds the label registry.
+REGISTRY_ROLE = "taxa_registry"
 
-    index: Annotated[int, Field(ge=0)]
+
+class RecordingId(BaseModel, frozen=True, extra="forbid"):
+    """A recording's identity: its archive, and its identifier within that archive."""
+
     namespace: NonEmptyText
     value: NonEmptyText
-    # A null revision means the audio version is genuinely unknown; an empty string
-    # would be an invented value wearing a different type.
-    source_revision: NonEmptyText | None = None
+
+    def __str__(self) -> str:
+        # Quoted as a pair: any separator could also appear inside a value.
+        return f"({self.namespace!r}, {self.value!r})"
+
+
+class RecordingRef(BaseModel, frozen=True, extra="forbid"):
+    """One recording: its identity, and where its audio is."""
+
+    namespace: NonEmptyText
+    value: NonEmptyText
     audio_uri: NonEmptyText
     audio_digest: BytesDigest | None = None
     duration_seconds: Annotated[float, AfterValidator(_positive_duration)] | None = None
 
+    @property
+    def id(self) -> RecordingId:
+        """This recording's identity, as results and the engine name it."""
+        return RecordingId(namespace=self.namespace, value=self.value)
 
-class FileDigest(BaseModel, frozen=True, extra="forbid"):
-    """One file this work pins by content: its role, where it is, what it hashes to."""
 
-    role: NonEmptyText
+class PinnedFile(BaseModel, frozen=True, extra="forbid"):
+    """One file this work pins by content: where it is, and what it hashes to."""
+
     uri: NonEmptyText
     digest: BytesDigest
     size_bytes: Annotated[int, Field(ge=0)]
 
 
-class ModelSelection(BaseModel, frozen=True, extra="forbid"):
-    """The exact model this work runs: its card, its files, and its label binding."""
+class PinnedModel(BaseModel, frozen=True, extra="forbid"):
+    """The exact model this work runs: its card, and its files keyed by role.
 
-    ref: ModelRef
-    files: tuple[FileDigest, ...]
+    `frozen=True` does not reach inside `files`, as it does not for a work's `settings`.
+    """
+
+    card: ModelCard | HeadCard
+    files: Mapping[NonEmptyText, PinnedFile]
     registry_fingerprint: BytesDigest | None = None
-    backbone: ModelRef | None = None  # set iff this is a head
 
 
 class AudioInput(BaseModel, frozen=True, extra="forbid"):
@@ -100,8 +117,6 @@ class EmbeddingArtifactInput(BaseModel, frozen=True, extra="forbid"):
     contract_id: EmbeddingsContractId
     uri: NonEmptyText
     checksum: BytesDigest
-    recording_map_uri: NonEmptyText
-    recording_map_checksum: BytesDigest
 
 
 class InferenceWork(BaseModel, frozen=True, extra="forbid"):
@@ -114,7 +129,7 @@ class InferenceWork(BaseModel, frozen=True, extra="forbid"):
 
     schema_version: WorkContractId
     recordings: tuple[RecordingRef, ...]
-    model: ModelSelection
+    model: PinnedModel
     input: Annotated[AudioInput | EmbeddingArtifactInput, Field(discriminator="kind")]
     settings: Mapping[str, JsonScalar]
     resources: Mapping[str, JsonScalar]
@@ -135,10 +150,7 @@ class InferenceWork(BaseModel, frozen=True, extra="forbid"):
     def _recordings_are_identified_once_each(self) -> "InferenceWork":
         if not self.recordings:
             raise ValueError("a work must name at least one recording")
-        indices = [recording.index for recording in self.recordings]
-        if len(set(indices)) != len(indices):
-            raise ValueError("every recording index in a work must be distinct")
-        identities = [(one.namespace, one.value) for one in self.recordings]
+        identities = [recording.id for recording in self.recordings]
         if len(set(identities)) != len(identities):
             raise ValueError("a repeated (namespace, value) is an error, never a merge")
         return self
@@ -161,7 +173,7 @@ def work_digest(work: InferenceWork) -> str:
 
 
 def partition(count: int, batch_size: int) -> tuple[tuple[int, ...], ...]:
-    """Dense, ordered batches of recording indices covering every index exactly once."""
+    """Dense, ordered batches of recording positions covering every position exactly once."""
     if batch_size <= 0:
         raise ValueError(f"batch_size must be positive, got {batch_size}")
     if count < 0:

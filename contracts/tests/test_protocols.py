@@ -35,7 +35,7 @@ class Adapter:
     capabilities = CAPABILITIES
 
     def run(self, input) -> Iterator[WindowOutput]:
-        yield WindowOutput(recording_index=0, start=0.0, end=3.0)
+        yield WindowOutput(start=0.0, end=3.0)
 
     def after_recording(self) -> None:
         return None
@@ -59,7 +59,7 @@ def build_context(**overrides) -> ModelContext:
     fields = {
         "card": CARD,
         "registry": None,
-        "weights": {},
+        "files": {},
         "settings": {},
         "scratch_dir": Path("/tmp"),
         "emit_embeddings": False,
@@ -86,6 +86,13 @@ def test_model_context_logs_nowhere_by_default():
     assert build_context().log is noop
 
 
+def test_model_context_holds_every_pinned_file_by_role():
+    registry = Path("/tmp/taxa.csv")
+    context = build_context(files={"weights": Path("/tmp/owl.h5"), "taxa_registry": registry})
+
+    assert context.files["taxa_registry"] == registry
+
+
 def test_score_retention_declares_exactly_three_modes():
     assert typing.get_args(ScoreRetention) == ("full", "thresholded", "top_k")
 
@@ -100,11 +107,6 @@ def test_capabilities_declare_no_embedding_dtype_unless_an_adapter_sets_one():
 
 def test_capabilities_declare_no_top_k_cap_by_default():
     assert CAPABILITIES.native_top_k is None
-
-
-def test_capabilities_have_no_vocabulary_field():
-    with pytest.raises(TypeError):
-        ModelCapabilities(emits_scores=True, emits_embeddings=False, vocabulary=("a",))
 
 
 def test_a_capped_instance_supports_only_top_k_retention():

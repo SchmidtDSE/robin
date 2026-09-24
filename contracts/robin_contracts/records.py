@@ -15,15 +15,15 @@ class ClassScore:
     score: float
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class WindowOutput:
-    """Scores, an embedding, or both, for one window of one recording.
+    """Scores, an embedding, or both, for one window of the recording being run.
 
+    The window does not name its recording: one run call handles one recording.
     Shallow-frozen: the dataclass does not freeze the embedding array. The engine
     copies the values as it accepts them and never holds the adapter's array.
     """
 
-    recording_index: int
     start: float
     end: float
     scores: tuple[ClassScore, ...] = ()

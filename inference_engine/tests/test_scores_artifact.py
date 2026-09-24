@@ -5,16 +5,18 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
-from robin_contracts.cards import ModelRef
+from robin_contracts.cards import ModelCard, model_ref
 from robin_contracts.embedding_transforms import L2Norm
 from robin_contracts.output_contracts import ScoresRequest
 from robin_contracts.records import ClassScore
 from robin_contracts.specs import AudioSpec, Recipe, RunnerResampled
 from robin_contracts.work import (
+    REGISTRY_ROLE,
     AudioInput,
-    FileDigest,
     InferenceWork,
-    ModelSelection,
+    PinnedFile,
+    PinnedModel,
+    RecordingId,
     RecordingRef,
 )
 from robin_inference_engine import errors
@@ -36,12 +38,19 @@ from robin_inference_engine.artifacts.scores import (
 from robin_inference_engine.artifacts.staging import checksum_file
 
 HEX = "0" * 64
-RECORD_DIGEST = f"sha256:v1:{HEX}"
 FILE_DIGEST = f"sha256:{HEX}"
 REGISTRY_FINGERPRINT = "sha256:" + "a" * 64
-MAP_CHECKSUM = "sha256:" + "c" * 64
 
-MODEL_REF = ModelRef(name="owl", version="1", digest=RECORD_DIGEST)
+CARD = ModelCard(
+    model_name="owl",
+    model_version="1",
+    runtime="tensorflow",
+    segment_duration=12.0,
+    sample_rate=32000,
+    min_detection_threshold=0.0,
+)
+
+SOUNDHUB_42 = RecordingId(namespace="soundhub", value="42")
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 
@@ -57,7 +66,7 @@ TOP_K_KEYS = (
 
 def build_recipe() -> Recipe:
     return Recipe(
-        model=MODEL_REF,
+        model=model_ref(CARD),
         backend="tensorflow",
         audio=AudioSpec(
             sample_rate=32000,
@@ -76,15 +85,16 @@ def build_work() -> InferenceWork:
     return InferenceWork(
         schema_version="robin.inference-work/1",
         recordings=(
-            RecordingRef(index=0, namespace="soundhub", value="42", audio_uri="s3://b/42.wav"),
+            RecordingRef(namespace="soundhub", value="42", audio_uri="s3://b/42.wav"),
         ),
-        model=ModelSelection(
-            ref=MODEL_REF,
-            files=(
-                FileDigest(
-                    role="weights", uri="s3://b/owl.h5", digest=FILE_DIGEST, size_bytes=8
+        model=PinnedModel(
+            card=CARD,
+            files={
+                "weights": PinnedFile(uri="s3://b/owl.h5", digest=FILE_DIGEST, size_bytes=8),
+                REGISTRY_ROLE: PinnedFile(
+                    uri="s3://b/registry.csv", digest=REGISTRY_FINGERPRINT, size_bytes=8
                 ),
-            ),
+            },
             registry_fingerprint=REGISTRY_FINGERPRINT,
         ),
         input=AudioInput(),
@@ -106,17 +116,17 @@ def build_metadata(request: ScoresRequest | None = None, **overrides) -> dict[by
         recipe=build_recipe(),
         registry_uri="s3://b/registry.csv",
         registry_fingerprint=REGISTRY_FINGERPRINT,
-        recording_map_uri="s3://b/recording-map.json",
-        recording_map_checksum=MAP_CHECKSUM,
     )
     scores = score_metadata(request or build_request(), score_domain="probability")
     return shared | scores
 
 
-def build_window(start: float = 0.0, *, index: int = 0, labels=("owl", "wren"), scores=None):
+def build_window(
+    start: float = 0.0, *, recording: RecordingId = SOUNDHUB_42, labels=("owl", "wren"), scores=None
+):
     values = scores if scores is not None else [0.5] * len(labels)
     return AcceptedWindow(
-        recording_index=index,
+        recording=recording,
         start=start,
         end=start + 12.0,
         scores=tuple(
@@ -173,43 +183,49 @@ def test_the_schema_is_the_declared_five_fields_with_declared_types(tmp_path):
         pass
 
     assert SCORES_SCHEMA.names == [
-        "recording_index", "window_start_s", "window_end_s", "label", "score"
+        "recording_namespace", "recording_value", "window_start_s", "window_end_s", "label",
+        "score",
     ]
     assert [field.type for field in SCORES_SCHEMA] == [
-        pa.int64(), pa.float64(), pa.float64(), pa.string(), pa.float64()
+        pa.string(), pa.string(), pa.float64(), pa.float64(), pa.string(), pa.float64()
     ]
     assert all(not field.nullable for field in SCORES_SCHEMA)
 
 
 def test_rows_survive_a_round_trip(tmp_path):
-    window = build_window(6.0, index=2, labels=("owl", "wren"), scores=[0.0, 1.0])
+    recording = RecordingId(namespace="arbimon", value="rec:7")
+    window = build_window(6.0, recording=recording, labels=("owl", "wren"), scores=[0.0, 1.0])
 
     staged = write_artifact(tmp_path / "scores.arrow", [window])
 
     assert read_rows(staged.path, staged.checksum) == [
         [
-            {"recording_index": 2, "window_start_s": 6.0, "window_end_s": 18.0,
-             "label": "owl", "score": 0.0},
-            {"recording_index": 2, "window_start_s": 6.0, "window_end_s": 18.0,
-             "label": "wren", "score": 1.0},
+            {"recording_namespace": "arbimon", "recording_value": "rec:7",
+             "window_start_s": 6.0, "window_end_s": 18.0, "label": "owl", "score": 0.0},
+            {"recording_namespace": "arbimon", "recording_value": "rec:7",
+             "window_start_s": 6.0, "window_end_s": 18.0, "label": "wren", "score": 1.0},
         ]
     ]
 
 
 def test_row_order_follows_the_windows_it_was_given(tmp_path):
+    other = RecordingId(namespace="arbimon", value="42")
     windows = [
-        build_window(0.0, index=0, labels=("b", "a")),
-        build_window(6.0, index=0, labels=("a", "b")),
-        build_window(0.0, index=1, labels=("a", "b")),
+        build_window(0.0, labels=("b", "a")),
+        build_window(6.0, labels=("a", "b")),
+        build_window(0.0, recording=other, labels=("a", "b")),
     ]
 
     staged = write_artifact(tmp_path / "scores.arrow", windows)
 
     rows = [row for batch in read_rows(staged.path, staged.checksum) for row in batch]
-    assert [(row["recording_index"], row["window_start_s"], row["label"]) for row in rows] == [
-        (0, 0.0, "b"), (0, 0.0, "a"),
-        (0, 6.0, "a"), (0, 6.0, "b"),
-        (1, 0.0, "a"), (1, 0.0, "b"),
+    assert [
+        (row["recording_namespace"], row["recording_value"], row["window_start_s"], row["label"])
+        for row in rows
+    ] == [
+        ("soundhub", "42", 0.0, "b"), ("soundhub", "42", 0.0, "a"),
+        ("soundhub", "42", 6.0, "a"), ("soundhub", "42", 6.0, "b"),
+        ("arbimon", "42", 0.0, "a"), ("arbimon", "42", 0.0, "b"),
     ]
 
 
@@ -232,7 +248,8 @@ def test_the_writer_places_each_value_under_its_own_column_name(tmp_path, monkey
     # error.
     swapped = pa.schema(
         [
-            SCORES_SCHEMA.field("recording_index"),
+            SCORES_SCHEMA.field("recording_namespace"),
+            SCORES_SCHEMA.field("recording_value"),
             SCORES_SCHEMA.field("window_end_s"),
             SCORES_SCHEMA.field("window_start_s"),
             SCORES_SCHEMA.field("label"),
@@ -402,7 +419,7 @@ def test_every_required_metadata_key_is_present_on_the_stream(tmp_path):
 
     with read_scores(staged.path, expected_checksum=staged.checksum) as stream:
         assert set(stream.metadata) == set(TOP_K_KEYS)
-        assert len(TOP_K_KEYS) == 15
+        assert len(TOP_K_KEYS) == 13
 
 
 @pytest.mark.parametrize("absent", TOP_K_KEYS)
@@ -432,8 +449,6 @@ def test_a_reader_refuses_a_scores_artifact_that_names_no_registry(tmp_path):
         recipe=build_recipe(),
         registry_uri=None,
         registry_fingerprint=None,
-        recording_map_uri="s3://b/recording-map.json",
-        recording_map_checksum=MAP_CHECKSUM,
     ) | score_metadata(build_request(), score_domain="probability")
     path = tmp_path / "scores.arrow"
     checksum = write_raw_stream(path, SCORES_SCHEMA.with_metadata(metadata))
@@ -510,6 +525,41 @@ def test_a_reader_refuses_a_missing_field(tmp_path):
 
     assert exc.value.code == errors.ARTIFACT_SCHEMA_INVALID
     assert "window_end_s" in exc.value.detail
+
+
+def test_a_reader_refuses_an_artifact_missing_the_recording_namespace(tmp_path):
+    narrowed = pa.schema(
+        [field for field in SCORES_SCHEMA if field.name != "recording_namespace"]
+    ).with_metadata(build_metadata())
+    path = tmp_path / "scores.arrow"
+    checksum = write_raw_stream(path, narrowed)
+
+    with pytest.raises(errors.EngineError) as exc:
+        with read_scores(path, expected_checksum=checksum):
+            pass
+
+    assert exc.value.code == errors.ARTIFACT_SCHEMA_INVALID
+    assert "recording_namespace" in exc.value.detail
+
+
+def test_a_reader_refuses_a_recording_value_stored_as_a_number(tmp_path):
+    # A value is text, so a number column is refused: "042" would lose its leading zero.
+    numbered = pa.schema(
+        [
+            pa.field(field.name, pa.int64() if field.name == "recording_value" else field.type,
+                     nullable=False)
+            for field in SCORES_SCHEMA
+        ]
+    ).with_metadata(build_metadata())
+    path = tmp_path / "scores.arrow"
+    checksum = write_raw_stream(path, numbered)
+
+    with pytest.raises(errors.EngineError) as exc:
+        with read_scores(path, expected_checksum=checksum):
+            pass
+
+    assert exc.value.code == errors.ARTIFACT_SCHEMA_INVALID
+    assert "recording_value" in exc.value.detail
 
 
 def test_a_reader_refuses_a_narrowed_score_type(tmp_path):
@@ -628,7 +678,8 @@ def test_a_reader_accepts_additional_columns(tmp_path):
         list(SCORES_SCHEMA) + [pa.field("provenance", pa.string(), nullable=False)]
     ).with_metadata(build_metadata())
     rows = [{
-        "recording_index": 0,
+        "recording_namespace": "soundhub",
+        "recording_value": "42",
         "window_start_s": 0.0,
         "window_end_s": 12.0,
         "label": "owl",

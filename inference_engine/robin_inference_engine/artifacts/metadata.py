@@ -7,6 +7,7 @@ only the file can tell what produced it.
 from collections.abc import Iterable, Mapping
 
 from robin_contracts.canonical import canonical_json_bytes
+from robin_contracts.cards import HeadCard, model_ref
 from robin_contracts.output_contracts import ScoresRequest
 from robin_contracts.results import ArtifactContractId
 from robin_contracts.specs import Recipe
@@ -36,8 +37,6 @@ REQUIRED_KEYS: tuple[str, ...] = (
     "robin.model_ref",
     "robin.model_card_digest",
     "robin.model_file_digests",
-    "robin.recording_map_uri",
-    "robin.recording_map_checksum",
 )
 
 # Written together, and only when a registry supplied the label vocabulary. An
@@ -62,22 +61,19 @@ def required_metadata(
     recipe: Recipe,
     registry_uri: str | None,
     registry_fingerprint: str | None,
-    recording_map_uri: str,
-    recording_map_checksum: str,
 ) -> dict[bytes, bytes]:
     """The provenance keys every window artifact carries, as Arrow metadata."""
     _require_a_whole_registry_binding(registry_uri, registry_fingerprint)
+    model = model_ref(work.model.card)
     values: dict[str, str] = {
         CONTRACT_KEY: contract_id,
         "robin.work_digest": work_digest(work),
         # Not a duplicate: one key holds the recipe, the other its digest.
         "robin.recipe_fingerprint": recipe.id,
         "robin.recipe": canonical_json_bytes(recipe).decode("utf-8"),
-        "robin.model_ref": work.model.ref.id,
-        "robin.model_card_digest": work.model.ref.digest,
+        "robin.model_ref": model.id,
+        "robin.model_card_digest": model.digest,
         "robin.model_file_digests": _model_file_digests(work),
-        "robin.recording_map_uri": recording_map_uri,
-        "robin.recording_map_checksum": recording_map_checksum,
     }
     if registry_uri is not None:
         values[REGISTRY_URI_KEY] = registry_uri
@@ -91,16 +87,15 @@ def embedding_metadata(
 ) -> dict[bytes, bytes]:
     """The keys that make an opaque run of floats readable."""
     # Written even when they repeat the model keys: a head's model is not its backbone.
-    backbone = work.model.backbone
+    card = work.model.card
+    backbone = card.backbone if isinstance(card, HeadCard) else model_ref(card)
     return _encode(
         {
             EMBEDDING_DIM_KEY: str(dim),
             EMBEDDING_SOURCE_DTYPE_KEY: source_dtype,
             EMBEDDING_STORAGE_DTYPE_KEY: storage_dtype,
-            BACKBONE_REF_KEY: work.model.ref.id if backbone is None else backbone.id,
-            BACKBONE_CARD_DIGEST_KEY: (
-                work.model.ref.digest if backbone is None else backbone.digest
-            ),
+            BACKBONE_REF_KEY: backbone.id,
+            BACKBONE_CARD_DIGEST_KEY: backbone.digest,
         }
     )
 
@@ -176,10 +171,12 @@ def _decode_text(raw: bytes, *, what: str) -> str:
 
 
 def _model_file_digests(work: InferenceWork) -> str:
-    # Every pinned file, without its uri: a uri is a location, not an identity. The
-    # work's file order survives, because canonical JSON sorts keys, never array items.
+    # Every pinned file by role, without its uri: a uri is a location, not an identity.
     return canonical_json_bytes(
-        [one.model_dump(mode="json", exclude={"uri"}) for one in work.model.files]
+        {
+            role: pinned.model_dump(mode="json", exclude={"uri"})
+            for role, pinned in work.model.files.items()
+        }
     ).decode("utf-8")
 
 

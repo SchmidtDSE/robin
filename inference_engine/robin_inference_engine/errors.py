@@ -1,12 +1,13 @@
 """Typed engine failures. A caller decides what to do from the code, not the message."""
 
+from robin_contracts.work import RecordingId
+
 # ---------------------------------------------------------------------------
 # accept_window: what the engine refuses from an adapter's output.
 # ---------------------------------------------------------------------------
 
 ACCEPT_WINDOW = "accept_window"
 
-UNKNOWN_RECORDING_INDEX = "unknown_recording_index"
 WINDOW_BOUNDS_INVALID = "window_bounds_invalid"
 DUPLICATE_WINDOW = "duplicate_window"
 WINDOW_OFF_GEOMETRY = "window_off_geometry"
@@ -23,7 +24,6 @@ EMBEDDING_NOT_FINITE = "embedding_not_finite"
 WINDOW_OUT_OF_ORDER = "window_out_of_order"
 
 ACCEPT_WINDOW_FAILURES = (
-    UNKNOWN_RECORDING_INDEX,
     WINDOW_BOUNDS_INVALID,
     DUPLICATE_WINDOW,
     WINDOW_OFF_GEOMETRY,
@@ -58,7 +58,7 @@ EMBEDDING_EMISSION_DISAGREES = "embedding_emission_disagrees"
 EMBEDDING_DIM_DISAGREES = "embedding_dim_disagrees"
 EMBEDDING_DTYPE_DISAGREES = "embedding_dtype_disagrees"
 EMBEDDING_SOURCE_DTYPE_INVALID = "embedding_source_dtype_invalid"
-BACKBONE_DISAGREES = "backbone_disagrees"
+RECIPE_MODEL_DISAGREES = "recipe_model_disagrees"
 REGISTRY_REQUIRED = "registry_required"
 REGISTRY_FINGERPRINT_MISMATCH = "registry_fingerprint_mismatch"
 HEAD_CLASS_NOT_IN_REGISTRY = "head_class_not_in_registry"
@@ -75,7 +75,7 @@ VALIDATE_REQUEST_FAILURES = (
     EMBEDDING_DIM_DISAGREES,
     EMBEDDING_DTYPE_DISAGREES,
     EMBEDDING_SOURCE_DTYPE_INVALID,
-    BACKBONE_DISAGREES,
+    RECIPE_MODEL_DISAGREES,
     REGISTRY_REQUIRED,
     REGISTRY_FINGERPRINT_MISMATCH,
     HEAD_CLASS_NOT_IN_REGISTRY,
@@ -142,12 +142,12 @@ class EngineError(Exception):
         stage: str,
         detail: str,
         *,
-        recording_index: int | None = None,
+        recording: RecordingId | None = None,
         window_start_s: float | None = None,
     ) -> None:
         super().__init__(detail)
         self.code = code
         self.stage = stage
         self.detail = detail
-        self.recording_index = recording_index
+        self.recording = recording
         self.window_start_s = window_start_s

@@ -1,7 +1,7 @@
 """The one gate every window an adapter yields passes through."""
 
 import math
-from collections.abc import Mapping
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -11,6 +11,7 @@ from robin_contracts.protocols import ModelCapabilities
 from robin_contracts.records import ClassScore, WindowOutput
 from robin_contracts.registry import TaxonRegistry
 from robin_contracts.specs import WindowGeometry
+from robin_contracts.work import RecordingId, RecordingRef
 from robin_inference_engine import errors
 
 # BirdNET's adapter rounds library-reported bounds to one decimal, so a bound carries
@@ -31,9 +32,12 @@ EMBEDDING_DTYPES: dict[str, np.dtype] = {
 
 @dataclass(frozen=True, slots=True)
 class AcceptedWindow:
-    """A validated window the engine owns outright, including its embedding array."""
+    """A validated window the engine owns outright, including its embedding array.
 
-    recording_index: int
+    `recording` is the recording that was open when the window arrived.
+    """
+
+    recording: RecordingId
     start: float
     end: float
     scores: tuple[ClassScore, ...]
@@ -52,7 +56,7 @@ class AcceptanceBoundary:
         *,
         geometry: WindowGeometry,
         capabilities: ModelCapabilities,
-        durations: Mapping[int, float | None],
+        recordings: Sequence[RecordingRef],
         registry: TaxonRegistry | None = None,
         scores: ScoresRequest | None = None,
         expect_embeddings: bool = False,
@@ -64,7 +68,7 @@ class AcceptanceBoundary:
             )
         self._geometry = geometry
         self._capabilities = capabilities
-        self._durations = durations
+        self._recordings = tuple(recordings)
         self._registry = registry
         self._scores = scores
         self._expect_embeddings = expect_embeddings
@@ -72,14 +76,17 @@ class AcceptanceBoundary:
         self._processed: set[int] = set()
         self._last_start: float | None = None
 
-    def begin_recording(self, recording_index: int) -> None:
-        """Open the recording whose windows arrive next, and close the one before it."""
-        if recording_index not in self._durations:
-            raise RuntimeError(f"recording {recording_index} is not one of this work's")
-        if recording_index in self._processed:
-            raise RuntimeError(f"recording {recording_index} has already been processed")
-        self._processed.add(recording_index)
-        self._open_recording = recording_index
+    def begin_recording(self, position: int) -> None:
+        """Open the recording at this position in the work, and close the one before it."""
+        if not 0 <= position < len(self._recordings):
+            raise RuntimeError(f"position {position} is not one of this work's recordings")
+        if position in self._processed:
+            raise RuntimeError(
+                f"recording {self._recordings[position].id} at position {position} "
+                "was already processed"
+            )
+        self._processed.add(position)
+        self._open_recording = position
         self._last_start = None
 
     def accept(self, window: WindowOutput) -> AcceptedWindow:
@@ -87,7 +94,6 @@ class AcceptanceBoundary:
         if self._open_recording is None:
             raise RuntimeError("no recording is open, so no window can be accepted")
 
-        self._check_recording(window)
         self._check_bounds(window)
         self._check_order(window)
         self._check_geometry(window)
@@ -102,28 +108,15 @@ class AcceptanceBoundary:
         # compared against and no array the adapter still owns.
         self._last_start = window.start
         return AcceptedWindow(
-            recording_index=window.recording_index,
+            recording=self._open_id(),
             start=window.start,
             end=window.end,
             scores=scores,
             embedding=None if window.embedding is None else window.embedding.copy(),
         )
 
-    def _check_recording(self, window: WindowOutput) -> None:
-        if window.recording_index == self._open_recording:
-            return
-        if window.recording_index in self._durations:
-            raise self._refuse(
-                errors.WINDOW_OUT_OF_ORDER,
-                window,
-                f"window names recording {window.recording_index} while recording "
-                f"{self._open_recording} is open",
-            )
-        raise self._refuse(
-            errors.UNKNOWN_RECORDING_INDEX,
-            window,
-            f"recording {window.recording_index} is not one of this work's",
-        )
+    def _open_id(self) -> RecordingId:
+        return self._recordings[self._open_recording].id
 
     def _check_bounds(self, window: WindowOutput) -> None:
         if not math.isfinite(window.start) or not math.isfinite(window.end):
@@ -146,8 +139,7 @@ class AcceptanceBoundary:
             raise self._refuse(
                 errors.DUPLICATE_WINDOW,
                 window,
-                f"recording {window.recording_index} already produced a window at "
-                f"{window.start}",
+                f"recording {self._open_id()} already produced a window at {window.start}",
             )
         raise self._refuse(
             errors.WINDOW_OUT_OF_ORDER,
@@ -186,7 +178,7 @@ class AcceptanceBoundary:
                 window,
                 f"start {window.start} is before the recording",
             )
-        duration = self._durations[self._open_recording]
+        duration = self._recordings[self._open_recording].duration_seconds
         if duration is None:
             return
         if window.start >= duration:
@@ -376,6 +368,6 @@ class AcceptanceBoundary:
             code,
             errors.ACCEPT_WINDOW,
             detail,
-            recording_index=window.recording_index,
+            recording=self._open_id(),
             window_start_s=window.start,
         )

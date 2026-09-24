@@ -3,14 +3,17 @@
 import pytest
 from pydantic import ValidationError
 
-from robin_contracts.cards import ModelRef
+from robin_contracts.cards import HeadCard, ModelCard, ModelRef
+from robin_contracts.embedding_transforms import L2Norm
 from robin_contracts.output_contracts import DetectionsRequest, ScoresRequest, ThresholdPolicy
 from robin_contracts.work import (
+    REGISTRY_ROLE,
     AudioInput,
     EmbeddingArtifactInput,
-    FileDigest,
     InferenceWork,
-    ModelSelection,
+    PinnedFile,
+    PinnedModel,
+    RecordingId,
     RecordingRef,
     partition,
     work_digest,
@@ -20,12 +23,26 @@ HEX = "0" * 64
 FILE_DIGEST = f"sha256:{HEX}"
 RECORD_DIGEST = f"sha256:v1:{HEX}"
 
-MODEL_REF = ModelRef(name="owl", version="1", digest=RECORD_DIGEST)
+CARD = ModelCard(
+    model_name="owl",
+    model_version="1",
+    runtime="tensorflow",
+    segment_duration=3.0,
+    sample_rate=32000,
+    min_detection_threshold=0.0,
+)
+
+HEAD = HeadCard(
+    model_name="nutria",
+    model_version="1",
+    backbone=ModelRef(name="perch", version="8", digest=RECORD_DIGEST),
+    classes=("nutria",),
+    required_embedding_transform=L2Norm(),
+)
 
 
 def build_recording(**overrides) -> RecordingRef:
     fields = {
-        "index": 0,
         "namespace": "soundhub",
         "value": "42",
         "audio_uri": "s3://bucket/42.wav",
@@ -33,22 +50,21 @@ def build_recording(**overrides) -> RecordingRef:
     return RecordingRef(**(fields | overrides))
 
 
-def build_file(**overrides) -> FileDigest:
+def build_file(**overrides) -> PinnedFile:
     fields = {
-        "role": "weights",
         "uri": "s3://bucket/owl.tflite",
         "digest": FILE_DIGEST,
         "size_bytes": 1024,
     }
-    return FileDigest(**(fields | overrides))
+    return PinnedFile(**(fields | overrides))
 
 
-def build_selection(**overrides) -> ModelSelection:
+def build_pinned_model(**overrides) -> PinnedModel:
     fields = {
-        "ref": MODEL_REF,
-        "files": (build_file(),),
+        "card": CARD,
+        "files": {"weights": build_file()},
     }
-    return ModelSelection(**(fields | overrides))
+    return PinnedModel(**(fields | overrides))
 
 
 def build_scores(**overrides) -> ScoresRequest:
@@ -60,7 +76,7 @@ def build_work(**overrides) -> InferenceWork:
     fields = {
         "schema_version": "robin.inference-work/1",
         "recordings": (build_recording(),),
-        "model": build_selection(),
+        "model": build_pinned_model(),
         "input": AudioInput(),
         "settings": {},
         "resources": {},
@@ -98,33 +114,26 @@ def test_recordings_must_be_non_empty():
         build_work(recordings=())
 
 
-def test_duplicate_recording_index_is_refused():
-    with pytest.raises(ValidationError):
-        build_work(
-            recordings=(
-                build_recording(index=0, value="42"),
-                build_recording(index=0, value="43"),
-            )
-        )
-
-
 def test_the_same_value_in_two_namespaces_is_two_recordings():
     work = build_work(
         recordings=(
-            build_recording(index=0, namespace="soundhub", value="42"),
-            build_recording(index=1, namespace="arbimon", value="42"),
+            build_recording(namespace="soundhub", value="42"),
+            build_recording(namespace="arbimon", value="42"),
         )
     )
 
-    assert len(work.recordings) == 2
+    assert [recording.id for recording in work.recordings] == [
+        RecordingId(namespace="soundhub", value="42"),
+        RecordingId(namespace="arbimon", value="42"),
+    ]
 
 
 def test_duplicate_namespace_and_value_is_refused():
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="repeated"):
         build_work(
             recordings=(
-                build_recording(index=0, namespace="soundhub", value="42"),
-                build_recording(index=1, namespace="soundhub", value="42"),
+                build_recording(namespace="soundhub", value="42"),
+                build_recording(namespace="soundhub", value="42", audio_uri="s3://b/other.wav"),
             )
         )
 
@@ -188,14 +197,73 @@ def test_work_digest_ignores_settings_key_order():
     assert work_digest(one) == work_digest(other)
 
 
-def test_a_selection_carries_no_card_digest_beside_its_ref():
-    with pytest.raises(ValidationError, match="card_digest"):
-        build_selection(card_digest=RECORD_DIGEST)
+def test_a_recording_id_is_derived_from_its_ref_and_not_stored():
+    recording = build_recording(namespace="soundhub", value="rec:42")
+
+    assert recording.id == RecordingId(namespace="soundhub", value="rec:42")
+    assert "id" not in recording.model_dump()
+
+
+def test_a_recording_id_prints_as_a_pair_that_no_two_identities_share():
+    # Messages name recordings by this text, so a separator inside a value must not
+    # make two recordings read alike.
+    first = RecordingId(namespace="a/b", value="c")
+    second = RecordingId(namespace="a", value="b/c")
+
+    assert str(first) == "('a/b', 'c')"
+    assert str(first) != str(second)
+
+
+@pytest.mark.parametrize("field", ["namespace", "value"])
+def test_a_recording_id_refuses_empty_text(field):
+    with pytest.raises(ValidationError):
+        RecordingId(**({"namespace": "soundhub", "value": "42"} | {field: ""}))
+
+
+@pytest.mark.parametrize("card", [CARD, HEAD], ids=["model", "head"])
+def test_a_pinned_model_round_trips_as_the_kind_of_card_it_holds(card):
+    pinned = build_pinned_model(card=card)
+
+    rebuilt = PinnedModel.model_validate(pinned.model_dump(mode="json"))
+
+    assert type(rebuilt.card) is type(card)
+    assert rebuilt == pinned
+
+
+def test_a_head_work_round_trips_as_a_head():
+    work = build_work(model=build_pinned_model(card=HEAD))
+
+    rebuilt = InferenceWork.model_validate(work.model_dump(mode="json"))
+
+    assert isinstance(rebuilt.model.card, HeadCard)
+    assert work_digest(rebuilt) == work_digest(work)
+
+
+def test_the_registry_role_is_named_once():
+    assert REGISTRY_ROLE == "taxa_registry"
+
+
+def test_file_order_does_not_change_the_work_digest():
+    weights = build_file()
+    registry = build_file(uri="s3://bucket/taxa.csv", digest=f"sha256:{'1' * 64}")
+    one = build_work(model=build_pinned_model(files={"weights": weights, REGISTRY_ROLE: registry}))
+    other = build_work(model=build_pinned_model(files={REGISTRY_ROLE: registry, "weights": weights}))
+
+    assert list(one.model.files) != list(other.model.files)
+    assert work_digest(one) == work_digest(other)
+
+
+def test_the_card_is_part_of_the_work_digest():
+    other_card = CARD.model_copy(update={"min_detection_threshold": 0.1})
+
+    assert work_digest(build_work()) != work_digest(
+        build_work(model=build_pinned_model(card=other_card))
+    )
 
 
 def test_digest_fields_reject_the_wrong_family():
     with pytest.raises(ValidationError):
-        build_selection(registry_fingerprint=RECORD_DIGEST)
+        build_pinned_model(registry_fingerprint=RECORD_DIGEST)
 
     with pytest.raises(ValidationError):
         build_file(digest=RECORD_DIGEST)
@@ -208,7 +276,7 @@ def test_digest_fields_reject_the_wrong_family():
     with pytest.raises(ValidationError):
         build_file(digest=f"sha256:{short}")
     with pytest.raises(ValidationError):
-        build_selection(registry_fingerprint=f"sha256:{short}")
+        build_pinned_model(registry_fingerprint=f"sha256:{short}")
     with pytest.raises(ValidationError):
         build_recording(audio_digest=f"sha256:{short}")
     with pytest.raises(ValidationError):
@@ -216,8 +284,6 @@ def test_digest_fields_reject_the_wrong_family():
             contract_id="robin.embeddings.arrow/1",
             uri="s3://bucket/embeddings.arrow",
             checksum=f"sha256:{short}",
-            recording_map_uri="s3://bucket/recording-map.json",
-            recording_map_checksum=FILE_DIGEST,
         )
 
 

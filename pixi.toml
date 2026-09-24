@@ -47,6 +47,7 @@ echo === build: robin_bioacoustics === &&
 python -m build --outdir .wheelcheck/dist robin &&
 echo === seed: transitive deps === &&
 python -m pip download --dest .wheelcheck/dist "pydantic>=2.12,<3" &&
+python -m pip download --dest .wheelcheck/dist "pyyaml>=6.0.2,<7" &&
 python -m pip download --dest .wheelcheck/dist "numpy>=2.1,<3" &&
 python -m pip download --dest .wheelcheck/dist "pyarrow>=23.0.1,<24" &&
 echo === install: robin-contracts === &&

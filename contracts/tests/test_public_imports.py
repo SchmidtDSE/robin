@@ -13,14 +13,6 @@ def test_top_level_reexports_have_expected_shape():
     assert sha256_v1({"a": 1}).startswith("sha256:v1:")
 
 
-def test_execution_spec_is_not_exported():
-    assert getattr(robin_contracts, "InferenceExecutionSpecV1", None) is None
-
-
-def test_manifest_is_not_exported():
-    assert getattr(robin_contracts, "InferenceManifestV1", None) is None
-
-
 def test_embedding_transform_reexports_are_importable():
     from robin_contracts import EmbeddingTransform, Identity, L2Norm
 
@@ -38,11 +30,13 @@ def test_input_reexports_are_importable():
 
 
 def test_card_reexports_are_importable():
-    from robin_contracts import HeadCard, ModelCard, ModelRef
+    from robin_contracts import HeadCard, ModelCard, ModelRef, read_card, write_card
 
     assert HeadCard is not None
     assert ModelCard is not None
     assert ModelRef is not None
+    assert callable(read_card)
+    assert callable(write_card)
 
 
 def test_registry_reexports_are_importable():
@@ -103,9 +97,10 @@ def test_work_reexports_are_importable():
     from robin_contracts import (
         AudioInput,
         EmbeddingArtifactInput,
-        FileDigest,
         InferenceWork,
-        ModelSelection,
+        PinnedFile,
+        PinnedModel,
+        RecordingId,
         RecordingRef,
         partition,
         work_digest,
@@ -113,9 +108,10 @@ def test_work_reexports_are_importable():
 
     assert AudioInput is not None
     assert EmbeddingArtifactInput is not None
-    assert FileDigest is not None
     assert InferenceWork is not None
-    assert ModelSelection is not None
+    assert PinnedFile is not None
+    assert PinnedModel is not None
+    assert RecordingId is not None
     assert RecordingRef is not None
     assert partition is not None
     assert work_digest is not None

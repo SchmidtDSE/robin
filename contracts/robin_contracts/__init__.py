@@ -5,7 +5,7 @@ from robin_contracts.canonical import (
     canonical_json_bytes,
     sha256_v1,
 )
-from robin_contracts.cards import HeadCard, ModelCard, ModelRef
+from robin_contracts.cards import HeadCard, ModelCard, ModelRef, read_card, write_card
 from robin_contracts.embedding_transforms import (
     EmbeddingTransform,
     Identity,
@@ -55,9 +55,10 @@ from robin_contracts.specs import (
 from robin_contracts.work import (
     AudioInput,
     EmbeddingArtifactInput,
-    FileDigest,
     InferenceWork,
-    ModelSelection,
+    PinnedFile,
+    PinnedModel,
+    RecordingId,
     RecordingRef,
     partition,
     work_digest,
@@ -78,7 +79,6 @@ __all__ = [
     "EmbeddingTransform",
     "EmbeddingsRequest",
     "FailureReport",
-    "FileDigest",
     "HeadCard",
     "Identity",
     "InferenceFailure",
@@ -94,12 +94,14 @@ __all__ = [
     "ModelCard",
     "ModelContext",
     "ModelRef",
-    "ModelSelection",
     "OutputRequest",
     "PadPolicy",
+    "PinnedFile",
+    "PinnedModel",
     "Recipe",
     "RecipeFingerprint",
     "RecordingCoverage",
+    "RecordingId",
     "RecordingRef",
     "RegistryEntry",
     "Resampling",
@@ -115,7 +117,9 @@ __all__ = [
     "canonical_json_bytes",
     "noop",
     "partition",
+    "read_card",
     "sha256_v1",
     "window_count",
     "work_digest",
+    "write_card",
 ]

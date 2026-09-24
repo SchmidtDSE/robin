@@ -1,10 +1,12 @@
 """What the engine finished, and whether it answers the work it claims to answer."""
 
+import re
+
 import numpy as np
 import pytest
 from pydantic import ValidationError
 
-from robin_contracts.cards import ModelRef
+from robin_contracts.cards import ModelCard, model_ref
 from robin_contracts.output_contracts import (
     DetectionsRequest,
     EmbeddingsRequest,
@@ -16,9 +18,10 @@ from robin_contracts.results import ArtifactRecord, InferenceSuccess
 from robin_contracts.specs import AudioSpec, Recipe, RunnerResampled, WindowGeometry
 from robin_contracts.work import (
     AudioInput,
-    FileDigest,
     InferenceWork,
-    ModelSelection,
+    PinnedFile,
+    PinnedModel,
+    RecordingId,
     RecordingRef,
     work_digest,
 )
@@ -30,7 +33,15 @@ HEX = "0" * 64
 FILE_DIGEST = f"sha256:{HEX}"
 RECORD_DIGEST = f"sha256:v1:{HEX}"
 
-MODEL_REF = ModelRef(name="owl", version="1", digest=RECORD_DIGEST)
+AUDIO_DIGEST = "sha256:" + "a" * 64
+CARD = ModelCard(
+    model_name="owl",
+    model_version="1",
+    runtime="tensorflow",
+    segment_duration=3.0,
+    sample_rate=48000,
+    min_detection_threshold=0.0,
+)
 GEOMETRY = WindowGeometry(window=3.0, hop=3.0, pad="drop")
 
 
@@ -38,7 +49,7 @@ def build_window(**overrides) -> AcceptedWindow:
     # A window carries a score by default so that only the case naming the empty
     # window depends on what an empty one is counted as.
     fields = {
-        "recording_index": 0,
+        "recording": RecordingId(namespace="soundhub", value="0"),
         "start": 0.0,
         "end": 3.0,
         "scores": (ClassScore("gull", 0.9),),
@@ -52,22 +63,23 @@ def build_scores_request(**overrides) -> ScoresRequest:
     return ScoresRequest(**(fields | overrides))
 
 
-def build_work(indices=(0,), outputs=None) -> InferenceWork:
+def build_recordings(values=("0",), digests=None) -> tuple[RecordingRef, ...]:
+    digests = digests if digests is not None else (None,) * len(values)
+    return tuple(
+        RecordingRef(
+            namespace="soundhub", value=value, audio_uri=f"s3://b/{value}.wav", audio_digest=digest
+        )
+        for value, digest in zip(values, digests, strict=True)
+    )
+
+
+def build_work(values=("0",), outputs=None, digests=None) -> InferenceWork:
     return InferenceWork(
         schema_version="robin.inference-work/1",
-        recordings=tuple(
-            RecordingRef(
-                index=index, namespace="soundhub", value=str(index), audio_uri=f"s3://b/{index}.wav"
-            )
-            for index in indices
-        ),
-        model=ModelSelection(
-            ref=MODEL_REF,
-            files=(
-                FileDigest(
-                    role="weights", uri="s3://b/owl.tflite", digest=FILE_DIGEST, size_bytes=8
-                ),
-            ),
+        recordings=build_recordings(values, digests),
+        model=PinnedModel(
+            card=CARD,
+            files={"weights": PinnedFile(uri="s3://b/owl.tflite", digest=FILE_DIGEST, size_bytes=8)},
         ),
         input=AudioInput(),
         settings={},
@@ -78,7 +90,7 @@ def build_work(indices=(0,), outputs=None) -> InferenceWork:
 
 def build_recipe() -> Recipe:
     return Recipe(
-        model=MODEL_REF,
+        model=model_ref(CARD),
         backend="tflite",
         audio=AudioSpec(
             sample_rate=48000,
@@ -105,36 +117,27 @@ def build_artifact(**overrides) -> ArtifactRecord:
     return ArtifactRecord(**(fields | overrides))
 
 
-def build_map() -> ArtifactRecord:
-    return build_artifact(
-        kind="recording_map",
-        contract_id="robin.recording-map.json/1",
-        uri="s3://bucket/map.json",
-        rows=1,
-    )
-
-
-def cover(work: InferenceWork, **per_recording):
+def cover(recordings, **per_recording):
     """One coverage row per recording, each with one completed window."""
-    builder = CoverageBuilder([recording.index for recording in work.recordings])
-    for recording in work.recordings:
-        builder.begin_recording(recording.index)
-        builder.record(build_window(recording_index=recording.index, **per_recording))
+    builder = CoverageBuilder(recordings)
+    for position, recording in enumerate(recordings):
+        builder.begin_recording(position)
+        builder.record(build_window(recording=recording.id, **per_recording))
         builder.end_recording()
     return builder.build()
 
 
-def cover_nothing(work: InferenceWork):
+def cover_nothing(recordings):
     """One coverage row per recording, each declaring that it completed no window."""
-    builder = CoverageBuilder([recording.index for recording in work.recordings])
-    for recording in work.recordings:
-        builder.begin_recording(recording.index)
+    builder = CoverageBuilder(recordings)
+    for position in range(len(recordings)):
+        builder.begin_recording(position)
         builder.end_recording(zero_window_reason="shorter_than_window")
     return builder.build()
 
 
 def build_success(work: InferenceWork, **overrides) -> InferenceSuccess:
-    coverage = overrides.pop("coverage") if "coverage" in overrides else cover(work)
+    coverage = overrides.pop("coverage") if "coverage" in overrides else cover(work.recordings)
     fields = {
         "schema_version": "robin.inference-result/1",
         "work_digest": work_digest(work),
@@ -142,7 +145,6 @@ def build_success(work: InferenceWork, **overrides) -> InferenceSuccess:
         "model": work.model,
         "window_geometry": GEOMETRY,
         "artifacts": (build_artifact(rows=sum(row.score_rows for row in coverage)),),
-        "recording_map": build_map(),
         "coverage": coverage,
         "resolved_scores_request": build_scores_request(),
     }
@@ -151,6 +153,9 @@ def build_success(work: InferenceWork, **overrides) -> InferenceSuccess:
 
 # --- CoverageBuilder --------------------------------------------------------
 
+ONE = build_recordings(("0",))
+TWO = build_recordings(("0", "1"))
+
 
 def test_success_factory_preserves_empty_coverage():
     with pytest.raises(ValidationError):
@@ -158,7 +163,7 @@ def test_success_factory_preserves_empty_coverage():
 
 
 def test_begin_recording_refuses_to_discard_unfinished_coverage():
-    builder = CoverageBuilder([0, 1])
+    builder = CoverageBuilder(TWO)
     builder.begin_recording(0)
     builder.record(build_window())
 
@@ -170,15 +175,15 @@ def test_begin_recording_refuses_to_discard_unfinished_coverage():
     builder.end_recording(zero_window_reason="shorter_than_window")
     first, second = builder.build()
 
-    assert first.recording_index == 0
+    assert first.recording == TWO[0].id
     assert first.windows_completed == 1
     assert first.score_rows == 1
-    assert second.recording_index == 1
+    assert second.recording == TWO[1].id
     assert second.windows_completed == 0
 
 
 def test_a_recording_with_no_windows_needs_a_reason():
-    builder = CoverageBuilder([0])
+    builder = CoverageBuilder(ONE)
     builder.begin_recording(0)
 
     with pytest.raises(errors.EngineError) as raised:
@@ -186,9 +191,9 @@ def test_a_recording_with_no_windows_needs_a_reason():
 
     assert raised.value.code == errors.UNEXPLAINED_ZERO_WINDOWS
     assert raised.value.stage == errors.INFER
-    assert raised.value.recording_index == 0
+    assert raised.value.recording == ONE[0].id
 
-    explained = CoverageBuilder([0])
+    explained = CoverageBuilder(ONE)
     explained.begin_recording(0)
     explained.end_recording(zero_window_reason="shorter_than_window")
     (row,) = explained.build()
@@ -200,7 +205,7 @@ def test_a_recording_with_no_windows_needs_a_reason():
 
 
 def test_a_completed_window_is_counted_even_with_no_scores():
-    builder = CoverageBuilder([0])
+    builder = CoverageBuilder(ONE)
     builder.begin_recording(0)
     builder.record(build_window(scores=()))
     builder.end_recording()
@@ -213,7 +218,7 @@ def test_a_completed_window_is_counted_even_with_no_scores():
 
 
 def test_score_rows_count_every_accepted_score():
-    builder = CoverageBuilder([0])
+    builder = CoverageBuilder(ONE)
     builder.begin_recording(0)
     builder.record(build_window(scores=(ClassScore("gull", 0.9), ClassScore("tern", 0.1))))
     builder.record(build_window(start=3.0, end=6.0, scores=(ClassScore("gull", 0.4),)))
@@ -225,7 +230,7 @@ def test_score_rows_count_every_accepted_score():
 
 
 def test_embedding_rows_count_only_the_windows_carrying_one():
-    builder = CoverageBuilder([0])
+    builder = CoverageBuilder(ONE)
     builder.begin_recording(0)
     builder.record(build_window(embedding=np.zeros(4, dtype=np.float32)))
     builder.record(build_window(start=3.0, end=6.0))
@@ -237,7 +242,7 @@ def test_embedding_rows_count_only_the_windows_carrying_one():
 
 
 def test_bounds_span_the_first_start_and_the_greatest_end():
-    builder = CoverageBuilder([0])
+    builder = CoverageBuilder(ONE)
     builder.begin_recording(0)
     builder.record(build_window(start=0.0, end=5.0))
     builder.record(build_window(start=3.0, end=8.0))
@@ -249,21 +254,34 @@ def test_bounds_span_the_first_start_and_the_greatest_end():
     assert row.last_window_end_s == 8.0
 
 
-def test_rows_are_built_in_index_order_whatever_the_processing_order():
-    builder = CoverageBuilder([0, 2, 5])
-    for index in (5, 0, 2):
-        builder.begin_recording(index)
-        builder.record(build_window(recording_index=index))
+def test_rows_are_built_in_work_order_whatever_the_processing_order():
+    recordings = build_recordings(("b", "a", "c"))
+    builder = CoverageBuilder(recordings)
+    for position in (2, 0, 1):
+        builder.begin_recording(position)
+        builder.record(build_window())
         builder.end_recording()
 
-    assert [row.recording_index for row in builder.build()] == [0, 2, 5]
+    assert [row.recording for row in builder.build()] == [one.id for one in recordings]
 
 
-def test_a_recording_is_begun_once_and_must_be_one_of_the_works():
-    builder = CoverageBuilder([0])
+def test_rows_carry_the_works_audio_digest_exactly():
+    recordings = build_recordings(("0", "1"), digests=(AUDIO_DIGEST, None))
 
-    with pytest.raises(RuntimeError):
-        builder.begin_recording(1)
+    first, second = cover(recordings)
+
+    assert first.audio_digest == AUDIO_DIGEST
+    assert second.audio_digest is None
+
+
+@pytest.mark.parametrize("position", [1, -1])
+def test_a_recording_must_be_one_of_the_works(position):
+    with pytest.raises(RuntimeError, match="not one of this work's"):
+        CoverageBuilder(ONE).begin_recording(position)
+
+
+def test_a_recording_is_begun_once():
+    builder = CoverageBuilder(ONE)
 
     builder.begin_recording(0)
     builder.record(build_window())
@@ -274,7 +292,7 @@ def test_a_recording_is_begun_once_and_must_be_one_of_the_works():
 
 
 def test_build_refuses_a_recording_that_was_never_finished():
-    never_begun = CoverageBuilder([0, 1])
+    never_begun = CoverageBuilder(TWO)
     never_begun.begin_recording(0)
     never_begun.record(build_window())
     never_begun.end_recording()
@@ -282,7 +300,7 @@ def test_build_refuses_a_recording_that_was_never_finished():
     with pytest.raises(RuntimeError):
         never_begun.build()
 
-    left_open = CoverageBuilder([0])
+    left_open = CoverageBuilder(ONE)
     left_open.begin_recording(0)
     left_open.record(build_window())
 
@@ -291,7 +309,7 @@ def test_build_refuses_a_recording_that_was_never_finished():
 
 
 def test_a_reason_on_a_completed_recording_is_a_defect():
-    builder = CoverageBuilder([0])
+    builder = CoverageBuilder(ONE)
     builder.begin_recording(0)
     builder.record(build_window())
 
@@ -300,7 +318,7 @@ def test_a_reason_on_a_completed_recording_is_a_defect():
 
 
 def test_a_window_with_no_recording_open_is_a_defect():
-    builder = CoverageBuilder([0])
+    builder = CoverageBuilder(ONE)
 
     with pytest.raises(RuntimeError):
         builder.record(build_window())
@@ -313,28 +331,43 @@ def test_a_window_with_no_recording_open_is_a_defect():
         builder.record(build_window(start=3.0, end=6.0))
 
 
-def test_a_window_naming_another_recording_is_a_defect():
-    builder = CoverageBuilder([0, 1])
-    builder.begin_recording(0)
-
-    with pytest.raises(RuntimeError):
-        builder.record(build_window(recording_index=1))
-
-
 # --- check_completion_evidence ----------------------------------------------
 
 
 def test_coverage_must_name_exactly_the_works_recordings():
-    work = build_work(indices=(0, 1))
-    two_recordings = build_work(indices=(0, 1, 2))
+    work = build_work(values=("0", "1"))
 
-    extra = build_success(work, coverage=cover(two_recordings))
-    with pytest.raises(RuntimeError):
+    extra = build_success(work, coverage=cover(build_recordings(("0", "1", "2"))))
+    with pytest.raises(RuntimeError, match=re.escape("('soundhub', '2')")):
         check_completion_evidence(work, extra)
 
-    missing = build_success(work, coverage=cover(build_work(indices=(0,))))
-    with pytest.raises(RuntimeError):
+    missing = build_success(work, coverage=cover(build_recordings(("0",))))
+    with pytest.raises(RuntimeError, match=re.escape("('soundhub', '1')")):
         check_completion_evidence(work, missing)
+
+
+def test_coverage_must_follow_the_works_order():
+    work = build_work(values=("0", "1"))
+    reordered = build_success(work, coverage=cover(tuple(reversed(work.recordings))))
+
+    with pytest.raises(RuntimeError, match="order"):
+        check_completion_evidence(work, reordered)
+
+
+@pytest.mark.parametrize(
+    ("given", "covered"),
+    [
+        pytest.param(AUDIO_DIGEST, None, id="digest_dropped"),
+        pytest.param(None, AUDIO_DIGEST, id="digest_invented"),
+        pytest.param(AUDIO_DIGEST, "sha256:" + "b" * 64, id="digest_changed"),
+    ],
+)
+def test_coverage_must_carry_each_recordings_audio_digest_as_the_work_gave_it(given, covered):
+    work = build_work(digests=(given,))
+    coverage = cover(build_recordings(digests=(covered,)))
+
+    with pytest.raises(RuntimeError, match="audio_digest"):
+        check_completion_evidence(work, build_success(work, coverage=coverage))
 
 
 def test_every_requested_kind_has_an_artifact_and_no_other_does():
@@ -345,7 +378,7 @@ def test_every_requested_kind_has_an_artifact_and_no_other_does():
             work,
             build_success(
                 work,
-                coverage=cover_nothing(work),
+                coverage=cover_nothing(work.recordings),
                 artifacts=(),
                 resolved_scores_request=None,
             ),
@@ -354,7 +387,7 @@ def test_every_requested_kind_has_an_artifact_and_no_other_does():
     detections = build_artifact(kind="detections", contract_id="robin.detections.parquet/1")
     unrequested = build_success(
         work,
-        coverage=cover_nothing(work),
+        coverage=cover_nothing(work.recordings),
         artifacts=(build_artifact(), detections),
         resolved_detection_policy=ThresholdPolicy(min_score=0.5),
     )
@@ -368,7 +401,7 @@ def test_every_requested_kind_has_an_artifact_and_no_other_does():
         embeddings_only,
         build_success(
             embeddings_only,
-            coverage=cover_nothing(embeddings_only),
+            coverage=cover_nothing(embeddings_only.recordings),
             artifacts=(
                 build_artifact(kind="embeddings", contract_id="robin.embeddings.arrow/1"),
             ),
@@ -379,7 +412,7 @@ def test_every_requested_kind_has_an_artifact_and_no_other_does():
 
 def test_the_result_must_carry_this_works_digest():
     work = build_work()
-    other = build_work(indices=(0, 1))
+    other = build_work(values=("0", "1"))
 
     success = build_success(work, work_digest=work_digest(other))
 
@@ -389,7 +422,8 @@ def test_the_result_must_carry_this_works_digest():
 
 def test_a_consistent_result_passes():
     work = build_work(
-        indices=(0, 1),
+        values=("0", "1"),
+        digests=(AUDIO_DIGEST, None),
         outputs=(
             build_scores_request(),
             DetectionsRequest(
@@ -398,7 +432,7 @@ def test_a_consistent_result_passes():
             ),
         ),
     )
-    coverage = cover(work)
+    coverage = cover(work.recordings)
     success = build_success(
         work,
         coverage=coverage,

@@ -8,7 +8,6 @@ from robin_contracts.output_contracts import (
     DetectionPolicy,
     DetectionsContractId,
     EmbeddingsContractId,
-    RecordingMapContractId,
     ResultContractId,
     ScoresContractId,
     ScoresRequest,
@@ -17,14 +16,13 @@ from robin_contracts.specs import Recipe, WindowGeometry
 from robin_contracts.work import (
     BytesDigest,
     CanonicalDigest,
-    ModelSelection,
     NonEmptyText,
+    PinnedModel,
+    RecordingId,
 )
 
-ArtifactContractId = (
-    ScoresContractId | EmbeddingsContractId | DetectionsContractId | RecordingMapContractId
-)
-ArtifactKind = Literal["scores", "embeddings", "detections", "recording_map"]
+ArtifactContractId = ScoresContractId | EmbeddingsContractId | DetectionsContractId
+ArtifactKind = Literal["scores", "embeddings", "detections"]
 ZeroWindowReason = Literal["shorter_than_window", "no_input_windows"]
 FailureStage = Literal[
     "validate_request",
@@ -52,14 +50,17 @@ class ArtifactRecord(BaseModel, frozen=True, extra="forbid"):
     uri: NonEmptyText
     checksum: BytesDigest
     size_bytes: _Count
-    # Zero is a real value. For the recording map this is the number of recordings.
-    rows: _Count
+    rows: _Count  # zero is a real value
 
 
 class RecordingCoverage(BaseModel, frozen=True, extra="forbid"):
-    """What one recording finished, counted in windows; rows only check them."""
+    """What one recording finished, counted in windows; rows only check them.
 
-    recording_index: _Count
+    `audio_digest` is the work's, copied exactly, `null` included.
+    """
+
+    recording: RecordingId
+    audio_digest: BytesDigest | None
     windows_completed: _Count
     score_rows: _Count
     embedding_rows: _Count
@@ -74,27 +75,33 @@ class RecordingCoverage(BaseModel, frozen=True, extra="forbid"):
             raise ValueError("a window range carries both of its bounds or neither")
         if (start is None) != (self.windows_completed == 0):
             raise ValueError(
-                f"{self.windows_completed} completed windows and a window range of "
+                f"recording {self.recording}: {self.windows_completed} completed windows "
+                f"and a window range of "
                 f"{start} to {end} disagree about whether anything ran"
             )
         if start is None:
             return self
         if start < 0:
-            raise ValueError(f"a window starts at or after zero, got {start}")
+            raise ValueError(
+                f"recording {self.recording}: a window starts at or after zero, got {start}"
+            )
         if end <= start:
-            raise ValueError(f"a window range must span time, got {start} to {end}")
+            raise ValueError(
+                f"recording {self.recording}: a window range must span time, "
+                f"got {start} to {end}"
+            )
         return self
 
     @model_validator(mode="after")
     def _validate_zero_window_coverage(self) -> "RecordingCoverage":
         if (self.windows_completed == 0) != (self.zero_window_reason is not None):
             raise ValueError(
-                "a recording that completed no window declares why, and one that "
-                "completed windows declares no reason"
+                f"recording {self.recording}: a recording that completed no window "
+                "declares why, and one that completed windows declares no reason"
             )
         if self.windows_completed == 0 and (self.score_rows or self.embedding_rows):
             raise ValueError(
-                f"recording {self.recording_index} completed no window yet carries "
+                f"recording {self.recording} completed no window yet carries "
                 f"{self.score_rows} score and {self.embedding_rows} embedding rows"
             )
         return self
@@ -103,7 +110,7 @@ class RecordingCoverage(BaseModel, frozen=True, extra="forbid"):
     def _validate_embedding_row_count(self) -> "RecordingCoverage":
         if self.embedding_rows > self.windows_completed:
             raise ValueError(
-                f"{self.embedding_rows} embedding rows from "
+                f"recording {self.recording}: {self.embedding_rows} embedding rows from "
                 f"{self.windows_completed} completed windows"
             )
         return self
@@ -114,7 +121,7 @@ class FailureReport(BaseModel, frozen=True, extra="forbid"):
 
     code: NonEmptyText
     stage: FailureStage
-    recording_index: _Count | None = None
+    recording: RecordingId | None = None
     window_start_s: _Seconds | None = None
     detail: str
 
@@ -126,25 +133,25 @@ class InferenceSuccess(BaseModel, frozen=True, extra="forbid"):
     outcome: Literal["success"] = "success"
     work_digest: CanonicalDigest
     recipe: Recipe
-    model: ModelSelection
+    model: PinnedModel
     registry_uri: NonEmptyText | None = None
     registry_fingerprint: BytesDigest | None = None
     window_geometry: WindowGeometry
     resolved_detection_policy: DetectionPolicy | None = None
     resolved_scores_request: ScoresRequest | None = None
     artifacts: tuple[ArtifactRecord, ...]
-    recording_map: ArtifactRecord
     coverage: tuple[RecordingCoverage, ...]
 
     @model_validator(mode="after")
-    def _validate_coverage_order(self) -> "InferenceSuccess":
+    def _validate_coverage_names_each_recording_once(self) -> "InferenceSuccess":
+        # The order is the work's, which this record does not hold; the engine checks it.
         if not self.coverage:
             raise ValueError("a success carries one coverage row per recording")
-        indices = [row.recording_index for row in self.coverage]
-        if any(later <= earlier for earlier, later in zip(indices, indices[1:])):
-            raise ValueError(
-                f"coverage ascends by recording_index without repeating, got {indices}"
-            )
+        seen: set[RecordingId] = set()
+        for row in self.coverage:
+            if row.recording in seen:
+                raise ValueError(f"recording {row.recording} appears twice in coverage")
+            seen.add(row.recording)
         return self
 
     @model_validator(mode="after")
@@ -158,13 +165,7 @@ class InferenceSuccess(BaseModel, frozen=True, extra="forbid"):
 
     @model_validator(mode="after")
     def _validate_artifact_kinds(self) -> "InferenceSuccess":
-        if self.recording_map.kind != "recording_map":
-            raise ValueError(
-                f"the recording map field holds a {self.recording_map.kind!r} artifact"
-            )
         kinds = [artifact.kind for artifact in self.artifacts]
-        if "recording_map" in kinds:
-            raise ValueError("the recording map has its own field and is not an artifact")
         if len(set(kinds)) != len(kinds):
             raise ValueError(f"a work writes one artifact per kind, got {kinds}")
         return self
