@@ -31,7 +31,8 @@ from robin_inference_engine.artifacts.staging import (
     StagedArtifact,
     checksum_file,
     invalid_schema,
-    malformed,
+    open_stream,
+    read_batches,
     require_checksum,
     require_contract,
     unreadable,
@@ -232,35 +233,11 @@ def read_embeddings(path: Path, *, expected_checksum: str) -> Iterator[Embedding
         raise unreadable(path.name, exc) from exc
     with handle:
         require_checksum(path.name, actual=actual, expected=expected_checksum)
-        with _open_stream(handle, path.name) as reader:
+        with open_stream(handle, path.name) as reader:
             yield EmbeddingsStream(
                 metadata=_verified_header(reader.schema),
-                batches=_read_batches(reader, path.name),
+                batches=read_batches(reader, path.name),
             )
-
-
-def _open_stream(handle: pa.OSFile, name: str) -> pa.RecordBatchStreamReader:
-    try:
-        return pa.ipc.open_stream(handle)
-    except pa.ArrowInvalid as exc:
-        raise errors.EngineError(
-            errors.ARTIFACT_MALFORMED,
-            errors.READ_INPUT_ARTIFACT,
-            f"{name} does not open as an Arrow stream: {exc}",
-        ) from exc
-
-
-def _read_batches(
-    reader: pa.RecordBatchStreamReader, name: str
-) -> Iterator[pa.RecordBatch]:
-    while True:
-        try:
-            batch = reader.read_next_batch()
-        except StopIteration:
-            return
-        except (pa.ArrowInvalid, OSError) as exc:
-            raise malformed(f"{name} has an unreadable Arrow batch: {exc}") from exc
-        yield batch
 
 
 def _verified_header(schema: pa.Schema) -> dict[str, str]:
@@ -327,6 +304,8 @@ def _embedding_detail(actual: pa.DataType, dim: int, storage_dtype: str) -> str:
 
 def _declared_dim(header: Mapping[str, str]) -> int:
     raw = header[EMBEDDING_DIM_KEY]
+    # Both checks are needed: isdigit() accepts digits int() cannot convert, such as
+    # "²", and int() refuses a digit string longer than its conversion limit.
     try:
         width = int(raw) if raw.isdigit() else 0
     except ValueError:

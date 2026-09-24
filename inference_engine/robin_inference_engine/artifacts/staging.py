@@ -1,8 +1,11 @@
 """A finished artifact file, and the checks every reader holds one to."""
 
 import hashlib
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+
+import pyarrow as pa
 
 from robin_contracts.results import ArtifactContractId, ArtifactKind
 from robin_inference_engine import errors
@@ -46,6 +49,28 @@ def unreadable(name: str, exc: OSError) -> errors.EngineError:
         errors.READ_INPUT_ARTIFACT,
         f"{name} could not be read: {exc}",
     )
+
+
+def open_stream(handle: pa.OSFile, name: str) -> pa.RecordBatchStreamReader:
+    """Open an Arrow stream, refusing bytes that are not one."""
+    try:
+        return pa.ipc.open_stream(handle)
+    except pa.ArrowInvalid as exc:
+        raise malformed(f"{name} does not open as an Arrow stream: {exc}") from exc
+
+
+def read_batches(
+    reader: pa.RecordBatchStreamReader, name: str
+) -> Iterator[pa.RecordBatch]:
+    """Yield each batch as it is decoded, refusing one that cannot be read."""
+    while True:
+        try:
+            batch = reader.read_next_batch()
+        except StopIteration:
+            return
+        except (pa.ArrowInvalid, OSError) as exc:
+            raise malformed(f"{name} has an unreadable Arrow batch: {exc}") from exc
+        yield batch
 
 
 def require_checksum(name: str, *, actual: str, expected: str) -> None:

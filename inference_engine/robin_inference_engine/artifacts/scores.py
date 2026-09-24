@@ -32,7 +32,8 @@ from robin_inference_engine.artifacts.staging import (
     StagedArtifact,
     checksum_file,
     invalid_schema,
-    malformed,
+    open_stream,
+    read_batches,
     require_checksum,
     require_contract,
     unreadable,
@@ -43,7 +44,8 @@ CONTRACT_ID: ScoresContractId = get_args(ScoresContractId)[0]
 RETENTIONS: tuple[str, ...] = get_args(ScoreRetention)
 
 # Rows, not windows: one window is 51 rows for one model and 6,522 for another, so a
-# window count bounds memory differently for every model it is used with.
+# window count bounds memory differently for every model it is used with. A window is
+# never split across batches, so a batch can pass this by up to one window's rows.
 SCORE_BATCH_ROWS = 8192
 
 SCORES_SCHEMA = pa.schema(
@@ -169,39 +171,15 @@ def read_scores(path: Path, *, expected_checksum: str) -> Iterator[ScoresStream]
         raise unreadable(path.name, exc) from exc
     with handle:
         require_checksum(path.name, actual=actual, expected=expected_checksum)
-        with _open_stream(handle, path.name) as reader:
+        with open_stream(handle, path.name) as reader:
             yield ScoresStream(
                 metadata=_verified_header(reader.schema),
-                batches=_read_batches(reader, path.name),
+                batches=read_batches(reader, path.name),
             )
 
 
 def _empty_columns() -> dict[str, list[object]]:
     return {name: [] for name in SCORES_SCHEMA.names}
-
-
-def _open_stream(handle: pa.OSFile, name: str) -> pa.RecordBatchStreamReader:
-    try:
-        return pa.ipc.open_stream(handle)
-    except pa.ArrowInvalid as exc:
-        raise errors.EngineError(
-            errors.ARTIFACT_MALFORMED,
-            errors.READ_INPUT_ARTIFACT,
-            f"{name} does not open as an Arrow stream: {exc}",
-        ) from exc
-
-
-def _read_batches(
-    reader: pa.RecordBatchStreamReader, name: str
-) -> Iterator[pa.RecordBatch]:
-    while True:
-        try:
-            batch = reader.read_next_batch()
-        except StopIteration:
-            return
-        except (pa.ArrowInvalid, OSError) as exc:
-            raise malformed(f"{name} has an unreadable Arrow batch: {exc}") from exc
-        yield batch
 
 
 def _verified_header(schema: pa.Schema) -> dict[str, str]:

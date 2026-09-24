@@ -431,12 +431,13 @@ def test_a_reader_refuses_an_artifact_missing_any_required_key(tmp_path, absent)
             pass
 
     assert exc.value.stage == errors.READ_INPUT_ARTIFACT
-    expected_code = (
-        errors.ARTIFACT_CONTRACT_UNEXPECTED
-        if absent == "robin.contract"
-        else errors.ARTIFACT_METADATA_INCOMPLETE
-    )
-    assert exc.value.code == expected_code
+    if absent == "robin.contract":
+        assert exc.value.code == errors.ARTIFACT_CONTRACT_UNEXPECTED
+    else:
+        # Naming the one key removed means each case fails on its own key, not on
+        # some other check that happens to share the code.
+        assert exc.value.code == errors.ARTIFACT_METADATA_INCOMPLETE
+        assert exc.value.detail.endswith(f": {absent}")
 
 
 def test_a_writer_refuses_a_header_declaring_another_contract(tmp_path):
