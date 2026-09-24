@@ -16,7 +16,6 @@ from robin_contracts.work import (
     InferenceWork,
     PinnedFile,
     PinnedModel,
-    RecordingId,
     RecordingRef,
 )
 from robin_inference_engine import errors
@@ -50,7 +49,11 @@ CARD = ModelCard(
     min_detection_threshold=0.0,
 )
 
-SOUNDHUB_42 = RecordingId(namespace="soundhub", value="42")
+def a_recording(namespace: str, value: str) -> RecordingRef:
+    return RecordingRef(namespace=namespace, value=value, audio_uri=f"s3://b/{value}.wav")
+
+
+SOUNDHUB_42 = a_recording("soundhub", "42")
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 
@@ -122,7 +125,11 @@ def build_metadata(request: ScoresRequest | None = None, **overrides) -> dict[by
 
 
 def build_window(
-    start: float = 0.0, *, recording: RecordingId = SOUNDHUB_42, labels=("owl", "wren"), scores=None
+    start: float = 0.0,
+    *,
+    recording: RecordingRef = SOUNDHUB_42,
+    labels=("owl", "wren"),
+    scores=None,
 ):
     values = scores if scores is not None else [0.5] * len(labels)
     return AcceptedWindow(
@@ -193,7 +200,7 @@ def test_the_schema_is_the_declared_five_fields_with_declared_types(tmp_path):
 
 
 def test_rows_survive_a_round_trip(tmp_path):
-    recording = RecordingId(namespace="arbimon", value="rec:7")
+    recording = a_recording("arbimon", "rec:7")
     window = build_window(6.0, recording=recording, labels=("owl", "wren"), scores=[0.0, 1.0])
 
     staged = write_artifact(tmp_path / "scores.arrow", [window])
@@ -209,7 +216,7 @@ def test_rows_survive_a_round_trip(tmp_path):
 
 
 def test_row_order_follows_the_windows_it_was_given(tmp_path):
-    other = RecordingId(namespace="arbimon", value="42")
+    other = a_recording("arbimon", "42")
     windows = [
         build_window(0.0, labels=("b", "a")),
         build_window(6.0, labels=("a", "b")),

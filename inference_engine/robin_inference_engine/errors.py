@@ -1,6 +1,6 @@
 """Typed engine failures. A caller decides what to do from the code, not the message."""
 
-from robin_contracts.work import RecordingId
+from robin_contracts.work import RecordingRef
 
 # ---------------------------------------------------------------------------
 # accept_window: what the engine refuses from an adapter's output.
@@ -142,7 +142,7 @@ class EngineError(Exception):
         stage: str,
         detail: str,
         *,
-        recording: RecordingId | None = None,
+        recording: RecordingRef | None = None,
         window_start_s: float | None = None,
     ) -> None:
         super().__init__(detail)
@@ -151,3 +151,9 @@ class EngineError(Exception):
         self.detail = detail
         self.recording = recording
         self.window_start_s = window_start_s
+
+
+def named(recording: RecordingRef) -> str:
+    """A recording's identity as messages spell it."""
+    # Quoted as a pair: any separator could also appear inside a value.
+    return f"({recording.namespace!r}, {recording.value!r})"

@@ -8,7 +8,7 @@ from robin_contracts.results import (
     RecordingCoverage,
     ZeroWindowReason,
 )
-from robin_contracts.work import InferenceWork, RecordingId, RecordingRef, work_digest
+from robin_contracts.work import InferenceWork, RecordingRef, work_digest
 from robin_inference_engine import errors
 from robin_inference_engine.accept_window import AcceptedWindow
 
@@ -36,13 +36,13 @@ class CoverageBuilder:
         """Open the recording at this position in the work, whose windows arrive next."""
         if not 0 <= position < len(self._recordings):
             raise RuntimeError(f"position {position} is not one of this work's recordings")
-        recording = self._recordings[position].id
+        recording = errors.named(self._recordings[position])
         if position in self._begun:
             raise RuntimeError(f"recording {recording} has already been counted")
         if self._open_recording is not None:
             raise RuntimeError(
                 f"cannot begin recording {recording} while recording "
-                f"{self._open_id()} is still open"
+                f"{errors.named(self._open())} is still open"
             )
         self._begun.add(position)
         self._open_recording = position
@@ -73,19 +73,22 @@ class CoverageBuilder:
             raise RuntimeError("no recording is open to end")
         if self._windows_completed and zero_window_reason is not None:
             raise RuntimeError(
-                f"recording {self._open_id()} completed {self._windows_completed} windows "
+                f"recording {errors.named(self._open())} completed "
+                f"{self._windows_completed} windows "
                 f"but supplied zero-window reason {zero_window_reason!r}"
             )
         if not self._windows_completed and zero_window_reason is None:
             raise errors.EngineError(
                 errors.UNEXPLAINED_ZERO_WINDOWS,
                 errors.INFER,
-                f"recording {self._open_id()} completed no window and nothing declares why",
-                recording=self._open_id(),
+                f"recording {errors.named(self._open())} completed no window and nothing "
+                "declares why",
+                recording=self._open(),
             )
         recording = self._recordings[self._open_recording]
         self._rows[self._open_recording] = RecordingCoverage(
-            recording=recording.id,
+            namespace=recording.namespace,
+            value=recording.value,
             audio_digest=recording.audio_digest,
             windows_completed=self._windows_completed,
             score_rows=self._score_rows,
@@ -99,9 +102,11 @@ class CoverageBuilder:
     def build(self) -> tuple[RecordingCoverage, ...]:
         """Every recording's row, in the work's order whatever order they ran in."""
         if self._open_recording is not None:
-            raise RuntimeError(f"recording {self._open_id()} was begun and never ended")
+            raise RuntimeError(
+                f"recording {errors.named(self._open())} was begun and never ended"
+            )
         missing = [
-            str(recording.id)
+            errors.named(recording)
             for position, recording in enumerate(self._recordings)
             if position not in self._rows
         ]
@@ -109,8 +114,8 @@ class CoverageBuilder:
             raise RuntimeError(f"recordings {missing} were never counted")
         return tuple(self._rows[position] for position in range(len(self._recordings)))
 
-    def _open_id(self) -> RecordingId:
-        return self._recordings[self._open_recording].id
+    def _open(self) -> RecordingRef:
+        return self._recordings[self._open_recording]
 
 
 def check_completion_evidence(work: InferenceWork, success: InferenceSuccess) -> None:
@@ -135,17 +140,18 @@ def _check_work_digest(work: InferenceWork, success: InferenceSuccess) -> None:
 def _check_recording_coverage(
     work: InferenceWork, success: InferenceSuccess
 ) -> None:
-    expected = [recording.id for recording in work.recordings]
-    covered = [row.recording for row in success.coverage]
+    expected = [(recording.namespace, recording.value) for recording in work.recordings]
+    covered = [(row.namespace, row.value) for row in success.coverage]
     if covered != expected:
         raise RuntimeError(
-            f"coverage names recordings {[str(one) for one in covered]}, in that order; "
-            f"it must name this work's {[str(one) for one in expected]}, in the work's order"
+            f"coverage names recordings {covered}, in that order; "
+            f"it must name this work's {expected}, in the work's order"
         )
     for recording, row in zip(work.recordings, success.coverage):
         if row.audio_digest != recording.audio_digest:
             raise RuntimeError(
-                f"coverage gives recording {recording.id} audio_digest {row.audio_digest}, "
+                f"coverage gives recording {errors.named(recording)} audio_digest "
+                f"{row.audio_digest}, "
                 f"the work gives {recording.audio_digest}"
             )
 

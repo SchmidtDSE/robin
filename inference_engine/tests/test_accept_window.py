@@ -8,7 +8,7 @@ from robin_contracts.protocols import ModelCapabilities
 from robin_contracts.records import ClassScore, WindowOutput
 from robin_contracts.registry import RegistryEntry, TaxonRegistry
 from robin_contracts.specs import WindowGeometry
-from robin_contracts.work import RecordingId, RecordingRef
+from robin_contracts.work import RecordingRef
 from robin_inference_engine import errors
 from robin_inference_engine.accept_window import AcceptanceBoundary
 
@@ -87,7 +87,7 @@ def build_embedding(*values: float, dtype=np.float32) -> np.ndarray:
 def test_accept_returns_the_window_it_was_given():
     accepted = build_boundary().accept(build_window(start=3.0, end=6.0))
 
-    assert accepted.recording == RECORDINGS[0].id
+    assert accepted.recording is RECORDINGS[0]
     assert accepted.start == 3.0
     assert accepted.end == 6.0
     assert accepted.scores == (ClassScore(label="rain", score=0.5),)
@@ -101,8 +101,8 @@ def test_a_window_belongs_to_the_recording_that_is_open():
     # The second recording starts its own ordering, so an earlier start is accepted.
     second = boundary.accept(build_window(start=0.0, end=3.0))
 
-    assert first.recording == RecordingId(namespace="soundhub", value="rec-0")
-    assert second.recording == RecordingId(namespace="soundhub", value="rec-1")
+    assert (first.recording.namespace, first.recording.value) == ("soundhub", "rec-0")
+    assert (second.recording.namespace, second.recording.value) == ("soundhub", "rec-1")
 
 
 def test_a_refusal_names_the_open_recording():
@@ -112,7 +112,7 @@ def test_a_refusal_names_the_open_recording():
         boundary.accept(build_window(start=1.0, end=4.0))
 
     assert exc.value.stage == "accept_window"
-    assert exc.value.recording == RECORDINGS[1].id
+    assert exc.value.recording is RECORDINGS[1]
 
 
 @pytest.mark.parametrize("position", [2, 7, -1])
@@ -540,7 +540,7 @@ def test_accept_refuses_a_score_below_the_requested_floor(retention):
         build_boundary(scores=request).accept(build_window(start=3.0, end=6.0, scores=below))
 
     assert exc.value.code == errors.SCORE_BELOW_FLOOR
-    assert exc.value.recording == RECORDINGS[0].id
+    assert exc.value.recording is RECORDINGS[0]
     assert exc.value.window_start_s == 3.0
     assert "0.29" in exc.value.detail and "0.3" in exc.value.detail
 
@@ -581,7 +581,7 @@ def test_accept_refuses_more_scores_than_the_requested_top_k():
         boundary.accept(build_window(start=3.0, end=6.0, scores=THREE_SCORES))
 
     assert exc.value.code == errors.SCORES_EXCEED_TOP_K
-    assert exc.value.recording == RECORDINGS[0].id
+    assert exc.value.recording is RECORDINGS[0]
     assert exc.value.window_start_s == 3.0
     assert "3" in exc.value.detail and "2" in exc.value.detail
 

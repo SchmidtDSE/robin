@@ -17,7 +17,7 @@ from robin_contracts.results import (
     RecordingCoverage,
 )
 from robin_contracts.specs import AudioSpec, Recipe, RunnerResampled, WindowGeometry
-from robin_contracts.work import PinnedFile, PinnedModel, RecordingId
+from robin_contracts.work import PinnedFile, PinnedModel
 
 HEX = "0" * 64
 FILE_DIGEST = f"sha256:{HEX}"
@@ -72,10 +72,6 @@ def build_pinned_model() -> PinnedModel:
     )
 
 
-def recording(value: str = "42", namespace: str = "soundhub") -> RecordingId:
-    return RecordingId(namespace=namespace, value=value)
-
-
 def build_artifact(**overrides) -> ArtifactRecord:
     fields = {
         "kind": "scores",
@@ -90,7 +86,8 @@ def build_artifact(**overrides) -> ArtifactRecord:
 
 def build_coverage(**overrides) -> RecordingCoverage:
     fields = {
-        "recording": recording(),
+        "namespace": "soundhub",
+        "value": "42",
         "audio_digest": None,
         "windows_completed": 2,
         "score_rows": 0,
@@ -282,7 +279,7 @@ def test_a_minimal_success_round_trips():
     [
         pytest.param((), id="empty"),
         pytest.param(
-            (build_coverage(recording=recording("42")), build_coverage(recording=recording("42"))),
+            (build_coverage(value="42"), build_coverage(value="42")),
             id="repeated",
         ),
     ],
@@ -294,9 +291,9 @@ def test_coverage_rows_are_present_and_name_each_recording_once(coverage):
 
 def test_coverage_order_is_left_to_the_work():
     # The result does not hold the work, so it cannot know the work's order.
-    coverage = (build_coverage(recording=recording("43")), build_coverage(recording=recording("42")))
+    coverage = (build_coverage(value="43"), build_coverage(value="42"))
 
-    assert [row.recording.value for row in build_success(coverage=coverage).coverage] == [
+    assert [row.value for row in build_success(coverage=coverage).coverage] == [
         "43",
         "42",
     ]
@@ -304,8 +301,8 @@ def test_coverage_order_is_left_to_the_work():
 
 def test_the_same_value_in_two_namespaces_is_two_coverage_rows():
     coverage = (
-        build_coverage(recording=recording("42", "soundhub")),
-        build_coverage(recording=recording("42", "arbimon")),
+        build_coverage(namespace="soundhub", value="42"),
+        build_coverage(namespace="arbimon", value="42"),
     )
 
     assert len(build_success(coverage=coverage).coverage) == 2
@@ -338,8 +335,8 @@ def test_a_coverage_refusal_names_the_recording():
 def test_score_rows_sum_to_the_scores_artifact_rows():
     scores = build_artifact(rows=5)
     coverage = (
-        build_coverage(recording=recording("42"), score_rows=2),
-        build_coverage(recording=recording("43"), score_rows=3),
+        build_coverage(value="42", score_rows=2),
+        build_coverage(value="43", score_rows=3),
     )
 
     success = build_success(
@@ -363,8 +360,8 @@ def test_embedding_rows_sum_to_the_embeddings_artifact_rows():
         kind="embeddings", contract_id="robin.embeddings.arrow/1", rows=3
     )
     coverage = (
-        build_coverage(recording=recording("42"), embedding_rows=2),
-        build_coverage(recording=recording("43"), embedding_rows=1),
+        build_coverage(value="42", embedding_rows=2),
+        build_coverage(value="43", embedding_rows=1),
     )
 
     assert build_success(artifacts=(embeddings,), coverage=coverage).artifacts[0].rows == 3
@@ -456,12 +453,21 @@ def test_a_failure_report_refuses_an_empty_code():
 def test_a_failure_report_locates_itself_only_when_it_can():
     report = build_report()
 
-    assert report.recording is None
+    assert (report.namespace, report.value) == (None, None)
     assert report.window_start_s is None
-    assert build_report(recording=recording()).recording == recording()
+    located = build_report(namespace="soundhub", value="42")
+    assert (located.namespace, located.value) == ("soundhub", "42")
 
     with pytest.raises(ValidationError):
         build_report(window_start_s=float("nan"))
+
+
+@pytest.mark.parametrize(
+    "half", [{"namespace": "soundhub"}, {"value": "42"}], ids=["namespace", "value"]
+)
+def test_a_failure_report_names_a_whole_recording_or_none(half):
+    with pytest.raises(ValidationError, match="together"):
+        build_report(**half)
 
 
 def test_the_result_union_discriminates_on_outcome():

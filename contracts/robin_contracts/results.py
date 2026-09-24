@@ -18,7 +18,6 @@ from robin_contracts.work import (
     CanonicalDigest,
     NonEmptyText,
     PinnedModel,
-    RecordingId,
 )
 
 ArtifactContractId = ScoresContractId | EmbeddingsContractId | DetectionsContractId
@@ -42,6 +41,11 @@ _Seconds = Annotated[float, Field(allow_inf_nan=False)]
 _Count = Annotated[int, Field(ge=0)]
 
 
+def _named(namespace: str, value: str) -> str:
+    # Quoted as a pair: any separator could also appear inside a value.
+    return f"({namespace!r}, {value!r})"
+
+
 class ArtifactRecord(BaseModel, frozen=True, extra="forbid"):
     """One artifact this work wrote: what it is, where it is, what it hashes to."""
 
@@ -56,10 +60,12 @@ class ArtifactRecord(BaseModel, frozen=True, extra="forbid"):
 class RecordingCoverage(BaseModel, frozen=True, extra="forbid"):
     """What one recording finished, counted in windows; rows only check them.
 
+    The recording is named by its `namespace` and `value`, as in every artifact row.
     `audio_digest` is the work's, copied exactly, `null` included.
     """
 
-    recording: RecordingId
+    namespace: NonEmptyText
+    value: NonEmptyText
     audio_digest: BytesDigest | None
     windows_completed: _Count
     score_rows: _Count
@@ -68,6 +74,9 @@ class RecordingCoverage(BaseModel, frozen=True, extra="forbid"):
     last_window_end_s: _Seconds | None = None
     zero_window_reason: ZeroWindowReason | None = None
 
+    def _name(self) -> str:
+        return _named(self.namespace, self.value)
+
     @model_validator(mode="after")
     def _validate_window_bounds(self) -> "RecordingCoverage":
         start, end = self.first_window_start_s, self.last_window_end_s
@@ -75,19 +84,18 @@ class RecordingCoverage(BaseModel, frozen=True, extra="forbid"):
             raise ValueError("a window range carries both of its bounds or neither")
         if (start is None) != (self.windows_completed == 0):
             raise ValueError(
-                f"recording {self.recording}: {self.windows_completed} completed windows "
-                f"and a window range of "
-                f"{start} to {end} disagree about whether anything ran"
+                f"recording {self._name()}: {self.windows_completed} completed windows and "
+                f"a window range of {start} to {end} disagree about whether anything ran"
             )
         if start is None:
             return self
         if start < 0:
             raise ValueError(
-                f"recording {self.recording}: a window starts at or after zero, got {start}"
+                f"recording {self._name()}: a window starts at or after zero, got {start}"
             )
         if end <= start:
             raise ValueError(
-                f"recording {self.recording}: a window range must span time, "
+                f"recording {self._name()}: a window range must span time, "
                 f"got {start} to {end}"
             )
         return self
@@ -96,12 +104,12 @@ class RecordingCoverage(BaseModel, frozen=True, extra="forbid"):
     def _validate_zero_window_coverage(self) -> "RecordingCoverage":
         if (self.windows_completed == 0) != (self.zero_window_reason is not None):
             raise ValueError(
-                f"recording {self.recording}: a recording that completed no window "
+                f"recording {self._name()}: a recording that completed no window "
                 "declares why, and one that completed windows declares no reason"
             )
         if self.windows_completed == 0 and (self.score_rows or self.embedding_rows):
             raise ValueError(
-                f"recording {self.recording} completed no window yet carries "
+                f"recording {self._name()} completed no window yet carries "
                 f"{self.score_rows} score and {self.embedding_rows} embedding rows"
             )
         return self
@@ -110,7 +118,7 @@ class RecordingCoverage(BaseModel, frozen=True, extra="forbid"):
     def _validate_embedding_row_count(self) -> "RecordingCoverage":
         if self.embedding_rows > self.windows_completed:
             raise ValueError(
-                f"recording {self.recording}: {self.embedding_rows} embedding rows from "
+                f"recording {self._name()}: {self.embedding_rows} embedding rows from "
                 f"{self.windows_completed} completed windows"
             )
         return self
@@ -121,9 +129,19 @@ class FailureReport(BaseModel, frozen=True, extra="forbid"):
 
     code: NonEmptyText
     stage: FailureStage
-    recording: RecordingId | None = None
+    namespace: NonEmptyText | None = None
+    value: NonEmptyText | None = None
     window_start_s: _Seconds | None = None
     detail: str
+
+    @model_validator(mode="after")
+    def _names_a_whole_recording_or_none(self) -> "FailureReport":
+        if (self.namespace is None) != (self.value is None):
+            raise ValueError(
+                f"a failure names its recording by namespace and value together, got "
+                f"{self.namespace!r} and {self.value!r}"
+            )
+        return self
 
 
 class InferenceSuccess(BaseModel, frozen=True, extra="forbid"):
@@ -147,11 +165,12 @@ class InferenceSuccess(BaseModel, frozen=True, extra="forbid"):
         # The order is the work's, which this record does not hold; the engine checks it.
         if not self.coverage:
             raise ValueError("a success carries one coverage row per recording")
-        seen: set[RecordingId] = set()
+        seen: set[tuple[str, str]] = set()
         for row in self.coverage:
-            if row.recording in seen:
-                raise ValueError(f"recording {row.recording} appears twice in coverage")
-            seen.add(row.recording)
+            identity = (row.namespace, row.value)
+            if identity in seen:
+                raise ValueError(f"recording {_named(*identity)} appears twice in coverage")
+            seen.add(identity)
         return self
 
     @model_validator(mode="after")

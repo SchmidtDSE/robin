@@ -3,7 +3,7 @@ from typing import get_args
 import pytest
 
 from robin_contracts.results import FailureReport
-from robin_contracts.work import RecordingId
+from robin_contracts.work import RecordingRef
 from robin_inference_engine import errors
 
 # The stages a failure may name, read from the contract a FailureReport validates
@@ -68,18 +68,21 @@ def test_every_declared_code_is_reportable_on_its_own_stage(stage, codes):
         assert report.stage == stage
 
 
+RECORDING = RecordingRef(namespace="soundhub", value="42", audio_uri="s3://b/42.wav")
+
+
 def test_engine_error_carries_its_code_and_location():
     error = errors.EngineError(
         errors.DUPLICATE_WINDOW,
         errors.ACCEPT_WINDOW,
         "recording ('soundhub', '42') already produced a window at 6.0",
-        recording=RecordingId(namespace="soundhub", value="42"),
+        recording=RECORDING,
         window_start_s=6.0,
     )
 
     assert error.code == errors.DUPLICATE_WINDOW
     assert error.stage == "accept_window"
     assert error.detail == "recording ('soundhub', '42') already produced a window at 6.0"
-    assert error.recording == RecordingId(namespace="soundhub", value="42")
+    assert error.recording is RECORDING
     assert error.window_start_s == 6.0
     assert str(error) == error.detail

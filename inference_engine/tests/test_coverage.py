@@ -21,7 +21,6 @@ from robin_contracts.work import (
     InferenceWork,
     PinnedFile,
     PinnedModel,
-    RecordingId,
     RecordingRef,
     work_digest,
 )
@@ -49,7 +48,7 @@ def build_window(**overrides) -> AcceptedWindow:
     # A window carries a score by default so that only the case naming the empty
     # window depends on what an empty one is counted as.
     fields = {
-        "recording": RecordingId(namespace="soundhub", value="0"),
+        "recording": RecordingRef(namespace="soundhub", value="0", audio_uri="s3://b/0.wav"),
         "start": 0.0,
         "end": 3.0,
         "scores": (ClassScore("gull", 0.9),),
@@ -122,7 +121,7 @@ def cover(recordings, **per_recording):
     builder = CoverageBuilder(recordings)
     for position, recording in enumerate(recordings):
         builder.begin_recording(position)
-        builder.record(build_window(recording=recording.id, **per_recording))
+        builder.record(build_window(recording=recording, **per_recording))
         builder.end_recording()
     return builder.build()
 
@@ -175,10 +174,10 @@ def test_begin_recording_refuses_to_discard_unfinished_coverage():
     builder.end_recording(zero_window_reason="shorter_than_window")
     first, second = builder.build()
 
-    assert first.recording == TWO[0].id
+    assert (first.namespace, first.value) == (TWO[0].namespace, TWO[0].value)
     assert first.windows_completed == 1
     assert first.score_rows == 1
-    assert second.recording == TWO[1].id
+    assert (second.namespace, second.value) == (TWO[1].namespace, TWO[1].value)
     assert second.windows_completed == 0
 
 
@@ -191,7 +190,7 @@ def test_a_recording_with_no_windows_needs_a_reason():
 
     assert raised.value.code == errors.UNEXPLAINED_ZERO_WINDOWS
     assert raised.value.stage == errors.INFER
-    assert raised.value.recording == ONE[0].id
+    assert raised.value.recording is ONE[0]
 
     explained = CoverageBuilder(ONE)
     explained.begin_recording(0)
@@ -262,7 +261,9 @@ def test_rows_are_built_in_work_order_whatever_the_processing_order():
         builder.record(build_window())
         builder.end_recording()
 
-    assert [row.recording for row in builder.build()] == [one.id for one in recordings]
+    assert [(row.namespace, row.value) for row in builder.build()] == [
+        (one.namespace, one.value) for one in recordings
+    ]
 
 
 def test_rows_carry_the_works_audio_digest_exactly():

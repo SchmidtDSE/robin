@@ -13,7 +13,6 @@ from robin_contracts.work import (
     InferenceWork,
     PinnedFile,
     PinnedModel,
-    RecordingId,
     RecordingRef,
     partition,
     work_digest,
@@ -122,9 +121,9 @@ def test_the_same_value_in_two_namespaces_is_two_recordings():
         )
     )
 
-    assert [recording.id for recording in work.recordings] == [
-        RecordingId(namespace="soundhub", value="42"),
-        RecordingId(namespace="arbimon", value="42"),
+    assert [(one.namespace, one.value) for one in work.recordings] == [
+        ("soundhub", "42"),
+        ("arbimon", "42"),
     ]
 
 
@@ -197,27 +196,10 @@ def test_work_digest_ignores_settings_key_order():
     assert work_digest(one) == work_digest(other)
 
 
-def test_a_recording_id_is_derived_from_its_ref_and_not_stored():
-    recording = build_recording(namespace="soundhub", value="rec:42")
-
-    assert recording.id == RecordingId(namespace="soundhub", value="rec:42")
-    assert "id" not in recording.model_dump()
-
-
-def test_a_recording_id_prints_as_a_pair_that_no_two_identities_share():
-    # Messages name recordings by this text, so a separator inside a value must not
-    # make two recordings read alike.
-    first = RecordingId(namespace="a/b", value="c")
-    second = RecordingId(namespace="a", value="b/c")
-
-    assert str(first) == "('a/b', 'c')"
-    assert str(first) != str(second)
-
-
 @pytest.mark.parametrize("field", ["namespace", "value"])
-def test_a_recording_id_refuses_empty_text(field):
+def test_a_recording_refuses_an_empty_identity(field):
     with pytest.raises(ValidationError):
-        RecordingId(**({"namespace": "soundhub", "value": "42"} | {field: ""}))
+        build_recording(**{field: ""})
 
 
 @pytest.mark.parametrize("card", [CARD, HEAD], ids=["model", "head"])

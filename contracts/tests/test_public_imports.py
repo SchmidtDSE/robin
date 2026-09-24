@@ -100,7 +100,6 @@ def test_work_reexports_are_importable():
         InferenceWork,
         PinnedFile,
         PinnedModel,
-        RecordingId,
         RecordingRef,
         partition,
         work_digest,
@@ -111,7 +110,6 @@ def test_work_reexports_are_importable():
     assert InferenceWork is not None
     assert PinnedFile is not None
     assert PinnedModel is not None
-    assert RecordingId is not None
     assert RecordingRef is not None
     assert partition is not None
     assert work_digest is not None

@@ -17,7 +17,6 @@ from robin_contracts.work import (
     InferenceWork,
     PinnedFile,
     PinnedModel,
-    RecordingId,
     RecordingRef,
 )
 from robin_inference_engine import errors
@@ -55,7 +54,11 @@ CARD = ModelCard(
 )
 BACKBONE_REF = ModelRef(name="backbone", version="2", digest=BACKBONE_DIGEST)
 
-SOUNDHUB_42 = RecordingId(namespace="soundhub", value="42")
+def a_recording(namespace: str, value: str) -> RecordingRef:
+    return RecordingRef(namespace=namespace, value=value, audio_uri=f"s3://b/{value}.wav")
+
+
+SOUNDHUB_42 = a_recording("soundhub", "42")
 
 
 def build_model(card: ModelCard | HeadCard = CARD) -> PinnedModel:
@@ -134,7 +137,7 @@ HEADER_KEYS = (*REQUIRED_KEYS, *REGISTRY_KEYS, *EMBEDDING_KEYS)
 def build_window(
     start: float = 0.0,
     *,
-    recording: RecordingId = SOUNDHUB_42,
+    recording: RecordingRef = SOUNDHUB_42,
     values=None,
     dim: int = DIM,
     dtype="float32",
@@ -260,7 +263,7 @@ def test_vectors_survive_a_float32_round_trip_exactly(tmp_path):
 
 
 def test_row_order_follows_the_windows_it_was_given(tmp_path):
-    other = RecordingId(namespace="arbimon", value="rec:7")
+    other = a_recording("arbimon", "rec:7")
     windows = [
         build_window(0.0, values=[0, 0, 0, 0]),
         build_window(5.0, values=[1, 1, 1, 1]),
@@ -723,12 +726,12 @@ def test_a_finite_value_that_does_not_survive_narrowing_is_refused(tmp_path):
 
     with pytest.raises(errors.EngineError) as exc:
         writer.write(
-            build_window(5.0, recording=RecordingId(namespace="arbimon", value="3"), values=source)
+            build_window(5.0, recording=a_recording("arbimon", "3"), values=source)
         )
 
     assert exc.value.code == errors.EMBEDDING_VALUE_OUT_OF_STORAGE_DTYPE_RANGE
     assert exc.value.stage == errors.WRITE_ARTIFACT
-    assert exc.value.recording == RecordingId(namespace="arbimon", value="3")
+    assert exc.value.recording == a_recording("arbimon", "3")
     assert exc.value.window_start_s == 5.0
     assert "float16" in exc.value.detail
 

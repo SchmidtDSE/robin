@@ -59,30 +59,14 @@ NonEmptyText = Annotated[str, AfterValidator(_non_empty)]
 REGISTRY_ROLE = "taxa_registry"
 
 
-class RecordingId(BaseModel, frozen=True, extra="forbid"):
-    """A recording's identity: its archive, and its identifier within that archive."""
-
-    namespace: NonEmptyText
-    value: NonEmptyText
-
-    def __str__(self) -> str:
-        # Quoted as a pair: any separator could also appear inside a value.
-        return f"({self.namespace!r}, {self.value!r})"
-
-
 class RecordingRef(BaseModel, frozen=True, extra="forbid"):
-    """One recording: its identity, and where its audio is."""
+    """One recording: its identity, `namespace` and `value`, and where its audio is."""
 
     namespace: NonEmptyText
     value: NonEmptyText
     audio_uri: NonEmptyText
     audio_digest: BytesDigest | None = None
     duration_seconds: Annotated[float, AfterValidator(_positive_duration)] | None = None
-
-    @property
-    def id(self) -> RecordingId:
-        """This recording's identity, as results and the engine name it."""
-        return RecordingId(namespace=self.namespace, value=self.value)
 
 
 class PinnedFile(BaseModel, frozen=True, extra="forbid"):
@@ -150,7 +134,7 @@ class InferenceWork(BaseModel, frozen=True, extra="forbid"):
     def _recordings_are_identified_once_each(self) -> "InferenceWork":
         if not self.recordings:
             raise ValueError("a work must name at least one recording")
-        identities = [recording.id for recording in self.recordings]
+        identities = [(recording.namespace, recording.value) for recording in self.recordings]
         if len(set(identities)) != len(identities):
             raise ValueError("a repeated (namespace, value) is an error, never a merge")
         return self

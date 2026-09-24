@@ -11,7 +11,7 @@ from robin_contracts.protocols import ModelCapabilities
 from robin_contracts.records import ClassScore, WindowOutput
 from robin_contracts.registry import TaxonRegistry
 from robin_contracts.specs import WindowGeometry
-from robin_contracts.work import RecordingId, RecordingRef
+from robin_contracts.work import RecordingRef
 from robin_inference_engine import errors
 
 # BirdNET's adapter rounds library-reported bounds to one decimal, so a bound carries
@@ -37,7 +37,7 @@ class AcceptedWindow:
     `recording` is the recording that was open when the window arrived.
     """
 
-    recording: RecordingId
+    recording: RecordingRef
     start: float
     end: float
     scores: tuple[ClassScore, ...]
@@ -82,7 +82,7 @@ class AcceptanceBoundary:
             raise RuntimeError(f"position {position} is not one of this work's recordings")
         if position in self._processed:
             raise RuntimeError(
-                f"recording {self._recordings[position].id} at position {position} "
+                f"recording {errors.named(self._recordings[position])} at position {position} "
                 "was already processed"
             )
         self._processed.add(position)
@@ -108,15 +108,15 @@ class AcceptanceBoundary:
         # compared against and no array the adapter still owns.
         self._last_start = window.start
         return AcceptedWindow(
-            recording=self._open_id(),
+            recording=self._open(),
             start=window.start,
             end=window.end,
             scores=scores,
             embedding=None if window.embedding is None else window.embedding.copy(),
         )
 
-    def _open_id(self) -> RecordingId:
-        return self._recordings[self._open_recording].id
+    def _open(self) -> RecordingRef:
+        return self._recordings[self._open_recording]
 
     def _check_bounds(self, window: WindowOutput) -> None:
         if not math.isfinite(window.start) or not math.isfinite(window.end):
@@ -139,7 +139,8 @@ class AcceptanceBoundary:
             raise self._refuse(
                 errors.DUPLICATE_WINDOW,
                 window,
-                f"recording {self._open_id()} already produced a window at {window.start}",
+                f"recording {errors.named(self._open())} already produced a window at "
+                f"{window.start}",
             )
         raise self._refuse(
             errors.WINDOW_OUT_OF_ORDER,
@@ -368,6 +369,6 @@ class AcceptanceBoundary:
             code,
             errors.ACCEPT_WINDOW,
             detail,
-            recording=self._open_id(),
+            recording=self._open(),
             window_start_s=window.start,
         )
