@@ -25,7 +25,7 @@ ArtifactKind = Literal["scores", "embeddings", "detections"]
 ZeroWindowReason = Literal["shorter_than_window", "no_input_windows"]
 FailureStage = Literal[
     "validate_request",
-    "resolve_model",
+    "acquire_model",
     "load_registry",
     "acquire_audio",
     "read_input_artifact",
@@ -61,12 +61,10 @@ class RecordingCoverage(BaseModel, frozen=True, extra="forbid"):
     """What one recording finished, counted in windows; rows only check them.
 
     The recording is named by its `namespace` and `value`, as in every artifact row.
-    `audio_digest` is the work's, copied exactly, `null` included.
     """
 
     namespace: NonEmptyText
     value: NonEmptyText
-    audio_digest: BytesDigest | None
     windows_completed: _Count
     score_rows: _Count
     embedding_rows: _Count

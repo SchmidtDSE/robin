@@ -245,9 +245,6 @@ def test_the_card_is_part_of_the_work_digest():
 
 def test_digest_fields_reject_the_wrong_family():
     with pytest.raises(ValidationError):
-        build_pinned_model(registry_fingerprint=RECORD_DIGEST)
-
-    with pytest.raises(ValidationError):
         build_file(digest=RECORD_DIGEST)
 
     # An unlabelled digest is refused too: nothing in it says what was hashed.
@@ -257,10 +254,6 @@ def test_digest_fields_reject_the_wrong_family():
     short = "0" * 40
     with pytest.raises(ValidationError):
         build_file(digest=f"sha256:{short}")
-    with pytest.raises(ValidationError):
-        build_pinned_model(registry_fingerprint=f"sha256:{short}")
-    with pytest.raises(ValidationError):
-        build_recording(audio_digest=f"sha256:{short}")
     with pytest.raises(ValidationError):
         EmbeddingArtifactInput(
             contract_id="robin.embeddings.arrow/1",

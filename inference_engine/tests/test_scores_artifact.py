@@ -98,7 +98,6 @@ def build_work() -> InferenceWork:
                     uri="s3://b/registry.csv", digest=REGISTRY_FINGERPRINT, size_bytes=8
                 ),
             },
-            registry_fingerprint=REGISTRY_FINGERPRINT,
         ),
         input=AudioInput(),
         settings={},

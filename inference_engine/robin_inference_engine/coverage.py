@@ -89,7 +89,6 @@ class CoverageBuilder:
         self._rows[self._open_recording] = RecordingCoverage(
             namespace=recording.namespace,
             value=recording.value,
-            audio_digest=recording.audio_digest,
             windows_completed=self._windows_completed,
             score_rows=self._score_rows,
             embedding_rows=self._embedding_rows,
@@ -147,13 +146,6 @@ def _check_recording_coverage(
             f"coverage names recordings {covered}, in that order; "
             f"it must name this work's {expected}, in the work's order"
         )
-    for recording, row in zip(work.recordings, success.coverage):
-        if row.audio_digest != recording.audio_digest:
-            raise RuntimeError(
-                f"coverage gives recording {errors.named(recording)} audio_digest "
-                f"{row.audio_digest}, "
-                f"the work gives {recording.audio_digest}"
-            )
 
 
 def _check_requested_artifacts(

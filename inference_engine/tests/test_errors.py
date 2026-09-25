@@ -13,6 +13,10 @@ DECLARED_STAGES = get_args(FailureReport.model_fields["stage"].annotation)
 FAMILIES = (
     (errors.ACCEPT_WINDOW, errors.ACCEPT_WINDOW_FAILURES),
     (errors.VALIDATE_REQUEST, errors.VALIDATE_REQUEST_FAILURES),
+    (errors.ACQUIRE_MODEL, errors.ACQUIRE_MODEL_FAILURES),
+    (errors.LOAD_REGISTRY, errors.LOAD_REGISTRY_FAILURES),
+    (errors.CONSTRUCT_MODEL, errors.CONSTRUCT_MODEL_FAILURES),
+    (errors.ACQUIRE_AUDIO, errors.ACQUIRE_AUDIO_FAILURES),
     (errors.INFER, errors.INFER_FAILURES),
     (errors.READ_INPUT_ARTIFACT, errors.READ_INPUT_ARTIFACT_FAILURES),
     (errors.WRITE_ARTIFACT, errors.WRITE_ARTIFACT_FAILURES),
@@ -27,10 +31,14 @@ def test_every_declared_constant_is_a_stage_or_one_of_its_codes():
     }
 
     assert len(set(errors.ACCEPT_WINDOW_FAILURES)) == 14
-    assert len(set(errors.VALIDATE_REQUEST_FAILURES)) == 15
-    assert len(set(errors.INFER_FAILURES)) == 1
+    assert len(set(errors.VALIDATE_REQUEST_FAILURES)) == 17
+    assert len(set(errors.ACQUIRE_MODEL_FAILURES)) == 2
+    assert len(set(errors.LOAD_REGISTRY_FAILURES)) == 2
+    assert len(set(errors.CONSTRUCT_MODEL_FAILURES)) == 5
+    assert len(set(errors.ACQUIRE_AUDIO_FAILURES)) == 1
+    assert len(set(errors.INFER_FAILURES)) == 2
     assert len(set(errors.READ_INPUT_ARTIFACT_FAILURES)) == 6
-    assert len(set(errors.WRITE_ARTIFACT_FAILURES)) == 1
+    assert len(set(errors.WRITE_ARTIFACT_FAILURES)) == 2
     assert declared == {stage for stage, _ in FAMILIES} | {
         code for _, codes in FAMILIES for code in codes
     }

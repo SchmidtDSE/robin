@@ -67,7 +67,6 @@ def build_pinned_model(card: ModelCard | HeadCard | None = None, **overrides) ->
     fields = {
         "card": build_card() if card is None else card,
         "files": {"weights": WEIGHTS, REGISTRY_ROLE: REGISTRY_FILE},
-        "registry_fingerprint": REGISTRY_FINGERPRINT,
     }
     return PinnedModel(**(fields | overrides))
 
@@ -533,7 +532,7 @@ def test_an_emitting_instance_declaring_either_width_is_accepted(declared):
     )
 
 
-UNLABELLED = {"files": {"weights": WEIGHTS}, "registry_fingerprint": None}
+UNLABELLED = {"files": {"weights": WEIGHTS}}
 
 
 @pytest.mark.parametrize("card", [build_card(), build_head()], ids=["backbone", "head"])
@@ -547,10 +546,12 @@ def test_scores_from_a_work_pinning_no_registry_file_are_refused(card):
     assert REGISTRY_ROLE in exc.value.detail
 
 
-def test_a_registry_fingerprint_differing_from_the_pinned_one_is_refused():
+def test_a_loaded_registry_differing_from_its_pinned_file_is_refused():
     with pytest.raises(errors.EngineError) as exc:
         refuse_request(build_work(), registry=build_registry(fingerprint=OTHER_FINGERPRINT))
     assert exc.value.code == errors.REGISTRY_FINGERPRINT_MISMATCH
+    assert REGISTRY_FILE.digest in exc.value.detail
+    assert OTHER_FINGERPRINT in exc.value.detail
 
     with pytest.raises(errors.EngineError) as exc:
         refuse_request(build_work(), registry=None)
@@ -839,4 +840,9 @@ def test_every_refusal_code_is_reachable():
             refuse()
         raised.add(exc.value.code)
 
-    assert raised == set(errors.VALIDATE_REQUEST_FAILURES)
+    # run_work refuses these two itself, and its own tests reach them.
+    raised_by_the_engine = {
+        errors.DETECTIONS_NOT_AVAILABLE,
+        errors.EMBEDDING_INPUT_NOT_AVAILABLE,
+    }
+    assert raised == set(errors.VALIDATE_REQUEST_FAILURES) - raised_by_the_engine

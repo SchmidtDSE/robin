@@ -50,7 +50,6 @@ def build_model(card: ModelCard | HeadCard = CARD, **overrides) -> PinnedModel:
     fields = {
         "card": card,
         "files": {"weights": WEIGHTS, REGISTRY_ROLE: REGISTRY_FILE},
-        "registry_fingerprint": REGISTRY_FINGERPRINT,
     }
     return PinnedModel(**(fields | overrides))
 

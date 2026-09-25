@@ -70,7 +70,6 @@ def build_model(card: ModelCard | HeadCard = CARD) -> PinnedModel:
                 uri="s3://b/registry.csv", digest=REGISTRY_FINGERPRINT, size_bytes=8
             ),
         },
-        registry_fingerprint=REGISTRY_FINGERPRINT,
     )
 
 REPOSITORY = Path(__file__).resolve().parents[2]

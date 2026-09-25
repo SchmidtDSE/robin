@@ -1,6 +1,7 @@
 """What the engine hands back: its artifacts, its completion evidence, its failure."""
 
 import re
+from typing import get_args
 
 import pytest
 from pydantic import TypeAdapter, ValidationError
@@ -11,6 +12,7 @@ from robin_contracts.output_contracts import ScoresRequest, ThresholdPolicy
 from robin_contracts.results import (
     ArtifactRecord,
     FailureReport,
+    FailureStage,
     InferenceFailure,
     InferenceResult,
     InferenceSuccess,
@@ -36,7 +38,7 @@ GEOMETRY = WindowGeometry(window=3.0, hop=3.0, pad="drop")
 
 DECLARED_STAGES = (
     "validate_request",
-    "resolve_model",
+    "acquire_model",
     "load_registry",
     "acquire_audio",
     "read_input_artifact",
@@ -88,7 +90,6 @@ def build_coverage(**overrides) -> RecordingCoverage:
     fields = {
         "namespace": "soundhub",
         "value": "42",
-        "audio_digest": None,
         "windows_completed": 2,
         "score_rows": 0,
         "embedding_rows": 0,
@@ -308,19 +309,6 @@ def test_the_same_value_in_two_namespaces_is_two_coverage_rows():
     assert len(build_success(coverage=coverage).coverage) == 2
 
 
-@pytest.mark.parametrize("digest", [None, FILE_DIGEST])
-def test_coverage_keeps_the_audio_digest_exactly_null_included(digest):
-    row = build_coverage(audio_digest=digest)
-
-    assert RecordingCoverage.model_validate(row.model_dump(mode="json")).audio_digest == digest
-    assert row.model_dump(mode="json")["audio_digest"] == digest
-
-
-def test_coverage_audio_digest_refuses_the_canonical_family():
-    with pytest.raises(ValidationError):
-        build_coverage(audio_digest=RECORD_DIGEST)
-
-
 def test_a_coverage_refusal_names_the_recording():
     with pytest.raises(ValidationError, match=re.escape("('soundhub', '42')")):
         build_coverage(
@@ -441,6 +429,7 @@ def test_a_failure_report_refuses_an_undeclared_stage():
     with pytest.raises(ValidationError):
         build_report(stage="publish")
 
+    assert get_args(FailureStage) == DECLARED_STAGES
     for stage in DECLARED_STAGES:
         assert build_report(stage=stage).stage == stage
 

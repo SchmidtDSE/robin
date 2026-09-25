@@ -62,6 +62,8 @@ RECIPE_MODEL_DISAGREES = "recipe_model_disagrees"
 REGISTRY_REQUIRED = "registry_required"
 REGISTRY_FINGERPRINT_MISMATCH = "registry_fingerprint_mismatch"
 HEAD_CLASS_NOT_IN_REGISTRY = "head_class_not_in_registry"
+DETECTIONS_NOT_AVAILABLE = "detections_not_available"
+EMBEDDING_INPUT_NOT_AVAILABLE = "embedding_input_not_available"
 
 VALIDATE_REQUEST_FAILURES = (
     SCORES_NOT_EMITTED,
@@ -79,18 +81,78 @@ VALIDATE_REQUEST_FAILURES = (
     REGISTRY_REQUIRED,
     REGISTRY_FINGERPRINT_MISMATCH,
     HEAD_CLASS_NOT_IN_REGISTRY,
+    DETECTIONS_NOT_AVAILABLE,
+    EMBEDDING_INPUT_NOT_AVAILABLE,
 )
 
 
 # ---------------------------------------------------------------------------
-# infer: what the engine refuses to call a completed recording.
+# acquire_model: a pinned model file the engine could not fetch or does not trust.
+# ---------------------------------------------------------------------------
+
+ACQUIRE_MODEL = "acquire_model"
+
+MODEL_FILE_UNAVAILABLE = "model_file_unavailable"
+MODEL_FILE_DIGEST_MISMATCH = "model_file_digest_mismatch"
+
+ACQUIRE_MODEL_FAILURES = (MODEL_FILE_UNAVAILABLE, MODEL_FILE_DIGEST_MISMATCH)
+
+
+# ---------------------------------------------------------------------------
+# load_registry: what the engine refuses to read as a label binding.
+# ---------------------------------------------------------------------------
+
+LOAD_REGISTRY = "load_registry"
+
+REGISTRY_UNREADABLE = "registry_unreadable"
+REGISTRY_INVALID = "registry_invalid"
+
+LOAD_REGISTRY_FAILURES = (REGISTRY_UNREADABLE, REGISTRY_INVALID)
+
+
+# ---------------------------------------------------------------------------
+# construct_model: what the engine refuses to run as a model.
+# ---------------------------------------------------------------------------
+
+CONSTRUCT_MODEL = "construct_model"
+
+MODEL_NOT_INSTALLED = "model_not_installed"
+MODEL_REGISTERED_TWICE = "model_registered_twice"
+MODEL_ENTRY_POINT_UNLOADABLE = "model_entry_point_unloadable"
+MODEL_CONSTRUCTION_FAILED = "model_construction_failed"
+MODEL_PROTOCOL_UNSATISFIED = "model_protocol_unsatisfied"
+
+CONSTRUCT_MODEL_FAILURES = (
+    MODEL_NOT_INSTALLED,
+    MODEL_REGISTERED_TWICE,
+    MODEL_ENTRY_POINT_UNLOADABLE,
+    MODEL_CONSTRUCTION_FAILED,
+    MODEL_PROTOCOL_UNSATISFIED,
+)
+
+
+# ---------------------------------------------------------------------------
+# acquire_audio: fetching a recording's audio.
+# ---------------------------------------------------------------------------
+
+ACQUIRE_AUDIO = "acquire_audio"
+
+AUDIO_UNAVAILABLE = "audio_unavailable"
+
+ACQUIRE_AUDIO_FAILURES = (AUDIO_UNAVAILABLE,)
+
+
+# ---------------------------------------------------------------------------
+# infer: what the engine refuses to call a completed recording, and a model that
+# failed while producing one.
 # ---------------------------------------------------------------------------
 
 INFER = "infer"
 
 UNEXPLAINED_ZERO_WINDOWS = "unexplained_zero_windows"
+MODEL_RUN_FAILED = "model_run_failed"
 
-INFER_FAILURES = (UNEXPLAINED_ZERO_WINDOWS,)
+INFER_FAILURES = (UNEXPLAINED_ZERO_WINDOWS, MODEL_RUN_FAILED)
 
 
 # ---------------------------------------------------------------------------
@@ -118,14 +180,19 @@ READ_INPUT_ARTIFACT_FAILURES = (
 
 
 # ---------------------------------------------------------------------------
-# write_artifact: what the engine refuses to put in a file.
+# write_artifact: what the engine refuses to put in a file, and a file it could not
+# publish.
 # ---------------------------------------------------------------------------
 
 WRITE_ARTIFACT = "write_artifact"
 
 EMBEDDING_VALUE_OUT_OF_STORAGE_DTYPE_RANGE = "embedding_value_out_of_storage_dtype_range"
+ARTIFACT_PUBLICATION_FAILED = "artifact_publication_failed"
 
-WRITE_ARTIFACT_FAILURES = (EMBEDDING_VALUE_OUT_OF_STORAGE_DTYPE_RANGE,)
+WRITE_ARTIFACT_FAILURES = (
+    EMBEDDING_VALUE_OUT_OF_STORAGE_DTYPE_RANGE,
+    ARTIFACT_PUBLICATION_FAILED,
+)
 
 
 # ---------------------------------------------------------------------------

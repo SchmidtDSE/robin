@@ -117,19 +117,22 @@ def _refuse_unlabelled_scores(work: InferenceWork) -> None:
 def _refuse_a_substituted_registry(
     work: InferenceWork, registry: TaxonRegistry | None
 ) -> None:
-    pinned = work.model.registry_fingerprint
+    # Compared with the bytes that were loaded, not only the file that was verified,
+    # so a file replaced between the two reads is still refused.
+    pinned = work.model.files.get(REGISTRY_ROLE)
     if pinned is None:
         return
     if registry is None:
         raise _refused(
             errors.REGISTRY_FINGERPRINT_MISMATCH,
-            f"the work pins registry fingerprint {pinned} but no registry was supplied",
+            f"the work pins {REGISTRY_ROLE} file digest {pinned.digest} but no registry "
+            f"was loaded",
         )
-    if registry.fingerprint != pinned:
+    if registry.fingerprint != pinned.digest:
         raise _refused(
             errors.REGISTRY_FINGERPRINT_MISMATCH,
-            f"the work pins registry fingerprint {pinned} but the supplied registry is "
-            f"{registry.fingerprint}",
+            f"the work pins {REGISTRY_ROLE} file digest {pinned.digest} but the loaded "
+            f"registry's fingerprint is {registry.fingerprint}",
         )
 
 

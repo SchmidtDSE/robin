@@ -32,7 +32,6 @@ HEX = "0" * 64
 FILE_DIGEST = f"sha256:{HEX}"
 RECORD_DIGEST = f"sha256:v1:{HEX}"
 
-AUDIO_DIGEST = "sha256:" + "a" * 64
 CARD = ModelCard(
     model_name="owl",
     model_version="1",
@@ -62,20 +61,17 @@ def build_scores_request(**overrides) -> ScoresRequest:
     return ScoresRequest(**(fields | overrides))
 
 
-def build_recordings(values=("0",), digests=None) -> tuple[RecordingRef, ...]:
-    digests = digests if digests is not None else (None,) * len(values)
+def build_recordings(values=("0",)) -> tuple[RecordingRef, ...]:
     return tuple(
-        RecordingRef(
-            namespace="soundhub", value=value, audio_uri=f"s3://b/{value}.wav", audio_digest=digest
-        )
-        for value, digest in zip(values, digests, strict=True)
+        RecordingRef(namespace="soundhub", value=value, audio_uri=f"s3://b/{value}.wav")
+        for value in values
     )
 
 
-def build_work(values=("0",), outputs=None, digests=None) -> InferenceWork:
+def build_work(values=("0",), outputs=None) -> InferenceWork:
     return InferenceWork(
         schema_version="robin.inference-work/1",
-        recordings=build_recordings(values, digests),
+        recordings=build_recordings(values),
         model=PinnedModel(
             card=CARD,
             files={"weights": PinnedFile(uri="s3://b/owl.tflite", digest=FILE_DIGEST, size_bytes=8)},
@@ -266,15 +262,6 @@ def test_rows_are_built_in_work_order_whatever_the_processing_order():
     ]
 
 
-def test_rows_carry_the_works_audio_digest_exactly():
-    recordings = build_recordings(("0", "1"), digests=(AUDIO_DIGEST, None))
-
-    first, second = cover(recordings)
-
-    assert first.audio_digest == AUDIO_DIGEST
-    assert second.audio_digest is None
-
-
 @pytest.mark.parametrize("position", [1, -1])
 def test_a_recording_must_be_one_of_the_works(position):
     with pytest.raises(RuntimeError, match="not one of this work's"):
@@ -355,22 +342,6 @@ def test_coverage_must_follow_the_works_order():
         check_completion_evidence(work, reordered)
 
 
-@pytest.mark.parametrize(
-    ("given", "covered"),
-    [
-        pytest.param(AUDIO_DIGEST, None, id="digest_dropped"),
-        pytest.param(None, AUDIO_DIGEST, id="digest_invented"),
-        pytest.param(AUDIO_DIGEST, "sha256:" + "b" * 64, id="digest_changed"),
-    ],
-)
-def test_coverage_must_carry_each_recordings_audio_digest_as_the_work_gave_it(given, covered):
-    work = build_work(digests=(given,))
-    coverage = cover(build_recordings(digests=(covered,)))
-
-    with pytest.raises(RuntimeError, match="audio_digest"):
-        check_completion_evidence(work, build_success(work, coverage=coverage))
-
-
 def test_every_requested_kind_has_an_artifact_and_no_other_does():
     work = build_work()
 
@@ -424,7 +395,6 @@ def test_the_result_must_carry_this_works_digest():
 def test_a_consistent_result_passes():
     work = build_work(
         values=("0", "1"),
-        digests=(AUDIO_DIGEST, None),
         outputs=(
             build_scores_request(),
             DetectionsRequest(

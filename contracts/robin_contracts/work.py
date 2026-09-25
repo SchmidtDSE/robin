@@ -65,7 +65,6 @@ class RecordingRef(BaseModel, frozen=True, extra="forbid"):
     namespace: NonEmptyText
     value: NonEmptyText
     audio_uri: NonEmptyText
-    audio_digest: BytesDigest | None = None
     duration_seconds: Annotated[float, AfterValidator(_positive_duration)] | None = None
 
 
@@ -85,7 +84,6 @@ class PinnedModel(BaseModel, frozen=True, extra="forbid"):
 
     card: ModelCard | HeadCard
     files: Mapping[NonEmptyText, PinnedFile]
-    registry_fingerprint: BytesDigest | None = None
 
 
 class AudioInput(BaseModel, frozen=True, extra="forbid"):
@@ -152,7 +150,11 @@ class InferenceWork(BaseModel, frozen=True, extra="forbid"):
 
 
 def work_digest(work: InferenceWork) -> str:
-    """The scientific identity of a work: everything but its resource preferences."""
+    """The identity of a work: everything but its resource preferences.
+
+    Audio is identified by its uri, not its bytes, so replacing a file at the same uri
+    leaves the digest unchanged.
+    """
     return sha256_v1(work.model_dump(mode="json", exclude={"resources"}))
 
 
