@@ -5,7 +5,6 @@ import inspect
 import tempfile
 from collections import Counter
 from pathlib import Path
-from typing import get_protocol_members
 
 import numpy as np
 import pytest
@@ -60,7 +59,8 @@ PORTS = (
 
 @pytest.mark.parametrize(("port", "members", "_"), PORTS)
 def test_each_port_declares_exactly_its_members(port, members, _):
-    assert get_protocol_members(port) == members
+    declared = {name for name in vars(port) if not name.startswith("_")}
+    assert declared == members
 
 
 @pytest.mark.parametrize(("port", "members", "double"), PORTS)
