@@ -18,11 +18,12 @@ class FileAcquisition(Protocol):
 
 
 class ArtifactWriter(Protocol):
-    """Publishes a finished local file and returns the record that names it.
+    """Publishes one recording's finished local file and returns the record that names it.
 
-    `create` reads `source` before returning and must not depend on it afterwards: the
-    engine deletes it. It is create-only and content-addressed, so publishing the same
-    bytes again succeeds and different bytes under the same key are refused.
+    The file is published at the location its kind and recording give under the
+    writer's root. The writer is create-only there: publishing the same bytes again
+    succeeds, and different bytes already at that location are refused. `create` reads
+    `source` before returning and must not depend on it afterwards: the engine deletes it.
     """
 
     def create(
@@ -30,6 +31,8 @@ class ArtifactWriter(Protocol):
         *,
         kind: ArtifactKind,
         contract_id: ArtifactContractId,
+        namespace: str,
+        value: str,
         source: Path,
         checksum: str,
         rows: int,

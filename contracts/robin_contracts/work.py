@@ -158,6 +158,20 @@ def work_digest(work: InferenceWork) -> str:
     return sha256_v1(work.model_dump(mode="json", exclude={"resources"}))
 
 
+def recording_work_digest(work: InferenceWork, recording: RecordingRef) -> str:
+    """The digest of `work` with `recordings` holding only a single `recording`.
+
+    The digest is independent of the other recordings in the work.
+    Raises ValueError if `recording` is not in `work.recordings`.
+    """
+    if recording not in work.recordings:
+        raise ValueError(
+            f"recording ({recording.namespace!r}, {recording.value!r}) with audio "
+            f"{recording.audio_uri!r} is not one of this work's recordings"
+        )
+    return work_digest(work.model_copy(update={"recordings": (recording,)}))
+
+
 def partition(count: int, batch_size: int) -> tuple[tuple[int, ...], ...]:
     """Dense, ordered batches of recording positions covering every position exactly once."""
     if batch_size <= 0:

@@ -104,10 +104,12 @@ def build_artifact(**overrides) -> ArtifactRecord:
     fields = {
         "kind": "scores",
         "contract_id": "robin.scores.arrow/1",
+        "namespace": "soundhub",
+        "value": "0",
         "uri": "s3://bucket/scores.arrow",
         "checksum": FILE_DIGEST,
         "size_bytes": 64,
-        "rows": 0,
+        "rows": 1,
     }
     return ArtifactRecord(**(fields | overrides))
 
@@ -131,6 +133,15 @@ def cover_nothing(recordings):
     return builder.build()
 
 
+def scores_records(coverage) -> tuple[ArtifactRecord, ...]:
+    """One scores record for each recording that counted score rows."""
+    return tuple(
+        build_artifact(value=row.value, rows=row.score_rows)
+        for row in coverage
+        if row.score_rows
+    )
+
+
 def build_success(work: InferenceWork, **overrides) -> InferenceSuccess:
     coverage = overrides.pop("coverage") if "coverage" in overrides else cover(work.recordings)
     fields = {
@@ -139,7 +150,7 @@ def build_success(work: InferenceWork, **overrides) -> InferenceSuccess:
         "recipe": build_recipe(),
         "model": work.model,
         "window_geometry": GEOMETRY,
-        "artifacts": (build_artifact(rows=sum(row.score_rows for row in coverage)),),
+        "artifacts": scores_records(coverage),
         "coverage": coverage,
         "resolved_scores_request": build_scores_request(),
     }
@@ -342,29 +353,37 @@ def test_coverage_must_follow_the_works_order():
         check_completion_evidence(work, reordered)
 
 
-def test_every_requested_kind_has_an_artifact_and_no_other_does():
+def test_a_requested_kind_may_have_no_artifacts():
     work = build_work()
 
-    with pytest.raises(RuntimeError):
-        check_completion_evidence(
-            work,
-            build_success(
-                work,
-                coverage=cover_nothing(work.recordings),
-                artifacts=(),
-                resolved_scores_request=None,
-            ),
-        )
+    success = build_success(work, coverage=cover_nothing(work.recordings), artifacts=())
+
+    assert check_completion_evidence(work, success) is None
+
+
+def test_no_artifact_has_a_kind_the_work_did_not_request():
+    work = build_work()
+    coverage = cover(work.recordings)
 
     detections = build_artifact(kind="detections", contract_id="robin.detections.parquet/1")
     unrequested = build_success(
         work,
-        coverage=cover_nothing(work.recordings),
-        artifacts=(build_artifact(), detections),
+        coverage=coverage,
+        artifacts=(*scores_records(coverage), detections),
         resolved_detection_policy=ThresholdPolicy(min_score=0.5),
     )
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="detections"):
         check_completion_evidence(work, unrequested)
+
+    embedded = cover(work.recordings, embedding=np.zeros(4, dtype=np.float32))
+    embeddings = build_artifact(kind="embeddings", contract_id="robin.embeddings.arrow/1")
+    with pytest.raises(RuntimeError, match="embeddings"):
+        check_completion_evidence(
+            work,
+            build_success(
+                work, coverage=embedded, artifacts=(*scores_records(embedded), embeddings)
+            ),
+        )
 
     embeddings_only = build_work(
         outputs=(EmbeddingsRequest(contract_id="robin.embeddings.arrow/1"),)
@@ -373,10 +392,8 @@ def test_every_requested_kind_has_an_artifact_and_no_other_does():
         embeddings_only,
         build_success(
             embeddings_only,
-            coverage=cover_nothing(embeddings_only.recordings),
-            artifacts=(
-                build_artifact(kind="embeddings", contract_id="robin.embeddings.arrow/1"),
-            ),
+            coverage=cover(embeddings_only.recordings, scores=(), embedding=np.zeros(4)),
+            artifacts=(embeddings,),
             resolved_scores_request=None,
         ),
     )
@@ -408,7 +425,7 @@ def test_a_consistent_result_passes():
         work,
         coverage=coverage,
         artifacts=(
-            build_artifact(rows=sum(row.score_rows for row in coverage)),
+            *scores_records(coverage),
             build_artifact(kind="detections", contract_id="robin.detections.parquet/1"),
         ),
         resolved_detection_policy=ThresholdPolicy(min_score=0.5),

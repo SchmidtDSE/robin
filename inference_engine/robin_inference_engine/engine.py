@@ -209,25 +209,31 @@ def _infer(
     )
     coverage = CoverageBuilder(work.recordings)
 
-    with _WindowWriters(
-        work,
-        model=model,
-        registry_uri=registry_uri,
-        registry_fingerprint=registry_fingerprint,
-        staging=staging,
-    ) as writers:
-        for position, recording in enumerate(work.recordings):
-            _run_recording(
-                position,
-                recording,
-                model=model,
-                audio=audio,
-                boundary=boundary,
-                coverage=coverage,
-                writers=writers,
-                log=log,
-            )
-        staged = writers.close()
+    def open_writers(position: int, recording: RecordingRef) -> _WindowWriters:
+        return _WindowWriters(
+            work,
+            recording,
+            model=model,
+            registry_uri=registry_uri,
+            registry_fingerprint=registry_fingerprint,
+            staging=staging / str(position),
+        )
+
+    staged: list[StagedArtifact] = []
+    for position, recording in enumerate(work.recordings):
+        staged += _run_recording(
+            position,
+            recording,
+            model=model,
+            audio=audio,
+            boundary=boundary,
+            coverage=coverage,
+            open_writers=open_writers,
+            log=log,
+        )
+
+    # Publishing waits for the last recording, so a work that fails while running
+    # publishes nothing.
 
     success = InferenceSuccess(
         schema_version=RESULT_CONTRACT_ID,
@@ -253,10 +259,13 @@ def _run_recording(
     audio: FileAcquisition,
     boundary: AcceptanceBoundary,
     coverage: CoverageBuilder,
-    writers: "_WindowWriters",
+    open_writers: Callable[[int, RecordingRef], "_WindowWriters"],
     log: Log,
-) -> None:
-    """Run one recording through the model, then always finish it."""
+) -> tuple[StagedArtifact, ...]:
+    """Run one recording through the model, then always finish it.
+
+    Returns the recording's staged files that hold rows.
+    """
     boundary.begin_recording(position)
     coverage.begin_recording(position)
     path: Path | None = None
@@ -264,13 +273,15 @@ def _run_recording(
     failed = True
     try:
         path = _fetch_audio(audio, recording)
-        windows = _start(model, recording, AudioClip(path=path))
-        accepted = 0
-        for window in _each(windows, recording):
-            kept = boundary.accept(window)
-            coverage.record(kept)
-            writers.write(kept)
-            accepted += 1
+        with open_writers(position, recording) as writers:
+            windows = _start(model, recording, AudioClip(path=path))
+            accepted = 0
+            for window in _each(windows, recording):
+                kept = boundary.accept(window)
+                coverage.record(kept)
+                writers.write(kept)
+                accepted += 1
+            staged = writers.close()
         coverage.end_recording(
             zero_window_reason=None
             if accepted
@@ -278,6 +289,7 @@ def _run_recording(
         )
         log(f"recording {errors.named(recording)}: {accepted} windows accepted")
         failed = False
+        return staged
     finally:
         steps = _recording_cleanup(model, audio, recording, path=path, windows=windows)
         _finish(steps, failed=failed, log=log)
@@ -348,11 +360,13 @@ def _embeddings(work: InferenceWork) -> EmbeddingsRequest | None:
 
 
 class _WindowWriters:
-    """The writers this work requested, each holding an open file in staging."""
+    """One recording's writers, one per requested kind, each holding an open file in
+    its own `staging` directory."""
 
     def __init__(
         self,
         work: InferenceWork,
+        recording: RecordingRef,
         *,
         model: Model,
         registry_uri: str | None,
@@ -363,12 +377,14 @@ class _WindowWriters:
             return required_metadata(
                 contract_id=contract_id,
                 work=work,
+                recording=recording,
                 recipe=model.recipe,
                 registry_uri=registry_uri,
                 registry_fingerprint=registry_fingerprint,
             )
 
         capabilities = model.capabilities
+        staging.mkdir()
         self._writers: list[ScoresWriter | EmbeddingsWriter] = []
         try:
             scores = _scores(work)
@@ -376,6 +392,7 @@ class _WindowWriters:
                 self._writers.append(
                     ScoresWriter(
                         staging / "scores.arrow",
+                        recording=recording,
                         metadata=shared(SCORES_CONTRACT_ID)
                         | score_metadata(scores, score_domain=capabilities.score_domain),
                     )
@@ -387,6 +404,7 @@ class _WindowWriters:
                 self._writers.append(
                     EmbeddingsWriter(
                         staging / "embeddings.arrow",
+                        recording=recording,
                         dim=capabilities.embedding_dim,
                         storage_dtype=storage_dtype,
                         metadata=shared(EMBEDDINGS_CONTRACT_ID)
@@ -407,7 +425,15 @@ class _WindowWriters:
             writer.write(window)
 
     def close(self) -> tuple[StagedArtifact, ...]:
-        return tuple(writer.close() for writer in self._writers)
+        """Finish every file, and keep only those holding rows.
+
+        A recording with no rows of a kind has no file, so an empty one is deleted here
+        and never reaches the writer port.
+        """
+        staged = tuple(writer.close() for writer in self._writers)
+        for empty in (one for one in staged if not one.rows):
+            empty.path.unlink()
+        return tuple(one for one in staged if one.rows)
 
     def __enter__(self) -> "_WindowWriters":
         return self
@@ -430,6 +456,8 @@ def _publish(artifacts: ArtifactWriter, staged: StagedArtifact) -> ArtifactRecor
         return artifacts.create(
             kind=staged.kind,
             contract_id=staged.contract_id,
+            namespace=staged.recording.namespace,
+            value=staged.recording.value,
             source=staged.path,
             checksum=staged.checksum,
             rows=staged.rows,
@@ -438,7 +466,9 @@ def _publish(artifacts: ArtifactWriter, staged: StagedArtifact) -> ArtifactRecor
         raise errors.EngineError(
             errors.ARTIFACT_PUBLICATION_FAILED,
             errors.WRITE_ARTIFACT,
-            f"publishing the {staged.kind} artifact raised {type(exc).__name__}: {exc}",
+            f"publishing the {staged.kind} artifact of recording "
+            f"{errors.named(staged.recording)} raised {type(exc).__name__}: {exc}",
+            recording=staged.recording,
         ) from exc
 
 

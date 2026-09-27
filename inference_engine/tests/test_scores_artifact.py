@@ -115,6 +115,7 @@ def build_metadata(request: ScoresRequest | None = None, **overrides) -> dict[by
     shared = required_metadata(
         contract_id=overrides.pop("contract_id", CONTRACT_ID),
         work=build_work(),
+        recording=SOUNDHUB_42,
         recipe=build_recipe(),
         registry_uri="s3://b/registry.csv",
         registry_fingerprint=REGISTRY_FINGERPRINT,
@@ -143,7 +144,7 @@ def build_window(
 
 
 def write_artifact(path, windows, *, metadata=None):
-    with ScoresWriter(path, metadata=metadata or build_metadata()) as writer:
+    with ScoresWriter(path, recording=SOUNDHUB_42, metadata=metadata or build_metadata()) as writer:
         for window in windows:
             writer.write(window)
         return writer.close()
@@ -171,6 +172,7 @@ def test_a_window_writes_one_row_per_label(tmp_path):
     assert staged.rows == 3
     assert staged.kind == "scores"
     assert staged.contract_id == CONTRACT_ID
+    assert staged.recording == SOUNDHUB_42
 
 
 def test_a_window_with_no_scores_writes_no_rows(tmp_path):
@@ -182,56 +184,43 @@ def test_a_window_with_no_scores_writes_no_rows(tmp_path):
     assert read_rows(staged.path, staged.checksum) == []
 
 
-def test_the_schema_is_the_declared_five_fields_with_declared_types(tmp_path):
+def test_the_schema_is_the_declared_four_fields_with_declared_types(tmp_path):
     staged = write_artifact(tmp_path / "scores.arrow", [build_window()])
 
     with read_scores(staged.path, expected_checksum=staged.checksum):
         pass
 
-    assert SCORES_SCHEMA.names == [
-        "recording_namespace", "recording_value", "window_start_s", "window_end_s", "label",
-        "score",
-    ]
+    assert SCORES_SCHEMA.names == ["window_start_s", "window_end_s", "label", "score"]
     assert [field.type for field in SCORES_SCHEMA] == [
-        pa.string(), pa.string(), pa.float64(), pa.float64(), pa.string(), pa.float64()
+        pa.float64(), pa.float64(), pa.string(), pa.float64()
     ]
     assert all(not field.nullable for field in SCORES_SCHEMA)
 
 
 def test_rows_survive_a_round_trip(tmp_path):
-    recording = a_recording("arbimon", "rec:7")
-    window = build_window(6.0, recording=recording, labels=("owl", "wren"), scores=[0.0, 1.0])
+    window = build_window(6.0, labels=("owl", "wren"), scores=[0.0, 1.0])
 
     staged = write_artifact(tmp_path / "scores.arrow", [window])
 
     assert read_rows(staged.path, staged.checksum) == [
         [
-            {"recording_namespace": "arbimon", "recording_value": "rec:7",
-             "window_start_s": 6.0, "window_end_s": 18.0, "label": "owl", "score": 0.0},
-            {"recording_namespace": "arbimon", "recording_value": "rec:7",
-             "window_start_s": 6.0, "window_end_s": 18.0, "label": "wren", "score": 1.0},
+            {"window_start_s": 6.0, "window_end_s": 18.0, "label": "owl", "score": 0.0},
+            {"window_start_s": 6.0, "window_end_s": 18.0, "label": "wren", "score": 1.0},
         ]
     ]
 
 
 def test_row_order_follows_the_windows_it_was_given(tmp_path):
-    other = a_recording("arbimon", "42")
     windows = [
         build_window(0.0, labels=("b", "a")),
         build_window(6.0, labels=("a", "b")),
-        build_window(0.0, recording=other, labels=("a", "b")),
     ]
 
     staged = write_artifact(tmp_path / "scores.arrow", windows)
 
     rows = [row for batch in read_rows(staged.path, staged.checksum) for row in batch]
-    assert [
-        (row["recording_namespace"], row["recording_value"], row["window_start_s"], row["label"])
-        for row in rows
-    ] == [
-        ("soundhub", "42", 0.0, "b"), ("soundhub", "42", 0.0, "a"),
-        ("soundhub", "42", 6.0, "a"), ("soundhub", "42", 6.0, "b"),
-        ("arbimon", "42", 0.0, "a"), ("arbimon", "42", 0.0, "b"),
+    assert [(row["window_start_s"], row["label"]) for row in rows] == [
+        (0.0, "b"), (0.0, "a"), (6.0, "a"), (6.0, "b"),
     ]
 
 
@@ -254,8 +243,6 @@ def test_the_writer_places_each_value_under_its_own_column_name(tmp_path, monkey
     # error.
     swapped = pa.schema(
         [
-            SCORES_SCHEMA.field("recording_namespace"),
-            SCORES_SCHEMA.field("recording_value"),
             SCORES_SCHEMA.field("window_end_s"),
             SCORES_SCHEMA.field("window_start_s"),
             SCORES_SCHEMA.field("label"),
@@ -275,7 +262,7 @@ def test_the_file_grows_before_close(tmp_path):
     labels = tuple(f"label-{index}" for index in range(100))
     path = tmp_path / "scores.arrow"
 
-    with ScoresWriter(path, metadata=build_metadata()) as writer:
+    with ScoresWriter(path, recording=SOUNDHUB_42, metadata=build_metadata()) as writer:
         for n in range(120):
             writer.write(build_window(float(n) * 12.0, labels=labels))
         assert path.stat().st_size > 0
@@ -288,7 +275,7 @@ def test_a_writer_refuses_a_header_declaring_another_contract(tmp_path):
     path = tmp_path / "scores.arrow"
 
     with pytest.raises(RuntimeError) as exc:
-        ScoresWriter(path, metadata=build_metadata(contract_id="robin.embeddings.arrow/1"))
+        ScoresWriter(path, recording=SOUNDHUB_42, metadata=build_metadata(contract_id="robin.embeddings.arrow/1"))
 
     assert "robin.embeddings.arrow/1" in str(exc.value)
     assert not path.exists()
@@ -303,7 +290,7 @@ def test_a_writer_refuses_a_header_missing_a_required_key(tmp_path):
     path = tmp_path / "scores.arrow"
 
     with pytest.raises(RuntimeError) as exc:
-        ScoresWriter(path, metadata=metadata)
+        ScoresWriter(path, recording=SOUNDHUB_42, metadata=metadata)
 
     assert "robin.recipe" in str(exc.value)
     assert not path.exists()
@@ -319,7 +306,7 @@ def test_a_writer_refuses_a_header_missing_a_key_its_retention_requires(tmp_path
     path = tmp_path / "scores.arrow"
 
     with pytest.raises(RuntimeError) as exc:
-        ScoresWriter(path, metadata=metadata)
+        ScoresWriter(path, recording=SOUNDHUB_42, metadata=metadata)
 
     assert "robin.score_top_k" in str(exc.value)
     assert not path.exists()
@@ -330,7 +317,7 @@ def test_a_writer_refuses_a_retention_the_contract_does_not_declare(tmp_path):
     path = tmp_path / "scores.arrow"
 
     with pytest.raises(RuntimeError) as exc:
-        ScoresWriter(path, metadata=metadata)
+        ScoresWriter(path, recording=SOUNDHUB_42, metadata=metadata)
 
     assert "banana" in str(exc.value)
     assert not path.exists()
@@ -358,7 +345,7 @@ def test_a_schema_only_stream_reads_back(tmp_path):
 def test_the_writer_leaves_its_file_for_the_caller(tmp_path):
     path = tmp_path / "scores.arrow"
 
-    with ScoresWriter(path, metadata=build_metadata()) as writer:
+    with ScoresWriter(path, recording=SOUNDHUB_42, metadata=build_metadata()) as writer:
         writer.write(build_window())
         staged = writer.close()
         assert staged.path.exists()
@@ -368,7 +355,7 @@ def test_the_writer_leaves_its_file_for_the_caller(tmp_path):
 
 
 def test_write_after_close_is_refused(tmp_path):
-    writer = ScoresWriter(tmp_path / "scores.arrow", metadata=build_metadata())
+    writer = ScoresWriter(tmp_path / "scores.arrow", recording=SOUNDHUB_42, metadata=build_metadata())
     writer.close()
 
     with pytest.raises(RuntimeError):
@@ -376,7 +363,7 @@ def test_write_after_close_is_refused(tmp_path):
 
 
 def test_close_twice_is_refused(tmp_path):
-    writer = ScoresWriter(tmp_path / "scores.arrow", metadata=build_metadata())
+    writer = ScoresWriter(tmp_path / "scores.arrow", recording=SOUNDHUB_42, metadata=build_metadata())
     writer.close()
 
     with pytest.raises(RuntimeError):
@@ -388,7 +375,7 @@ def test_a_writer_released_before_close_refuses_to_stage(tmp_path):
     # a row count and a checksum for a file that was never finished.
     path = tmp_path / "scores.arrow"
     with pytest.raises(ZeroDivisionError):
-        with ScoresWriter(path, metadata=build_metadata()) as writer:
+        with ScoresWriter(path, recording=SOUNDHUB_42, metadata=build_metadata()) as writer:
             writer.write(build_window())
             raise ZeroDivisionError
 
@@ -452,6 +439,7 @@ def test_a_reader_refuses_a_scores_artifact_that_names_no_registry(tmp_path):
     metadata = required_metadata(
         contract_id=CONTRACT_ID,
         work=build_work(),
+        recording=SOUNDHUB_42,
         recipe=build_recipe(),
         registry_uri=None,
         registry_fingerprint=None,
@@ -484,7 +472,7 @@ def test_a_reader_refuses_a_header_that_is_not_utf8(tmp_path):
 
 
 def test_a_reader_refuses_a_stream_carrying_no_metadata_at_all(tmp_path):
-    # The right five columns and an empty header is what every tool but this writer
+    # The right four columns and an empty header is what every tool but this writer
     # produces, and Arrow reports that header as absent rather than as empty.
     path = tmp_path / "scores.arrow"
     checksum = write_raw_stream(path, SCORES_SCHEMA)
@@ -533,26 +521,11 @@ def test_a_reader_refuses_a_missing_field(tmp_path):
     assert "window_end_s" in exc.value.detail
 
 
-def test_a_reader_refuses_an_artifact_missing_the_recording_namespace(tmp_path):
-    narrowed = pa.schema(
-        [field for field in SCORES_SCHEMA if field.name != "recording_namespace"]
-    ).with_metadata(build_metadata())
-    path = tmp_path / "scores.arrow"
-    checksum = write_raw_stream(path, narrowed)
-
-    with pytest.raises(errors.EngineError) as exc:
-        with read_scores(path, expected_checksum=checksum):
-            pass
-
-    assert exc.value.code == errors.ARTIFACT_SCHEMA_INVALID
-    assert "recording_namespace" in exc.value.detail
-
-
-def test_a_reader_refuses_a_recording_value_stored_as_a_number(tmp_path):
-    # A value is text, so a number column is refused: "042" would lose its leading zero.
+def test_a_reader_refuses_a_label_stored_as_a_number(tmp_path):
+    # A label is text, so a number column is refused rather than read as one.
     numbered = pa.schema(
         [
-            pa.field(field.name, pa.int64() if field.name == "recording_value" else field.type,
+            pa.field(field.name, pa.int64() if field.name == "label" else field.type,
                      nullable=False)
             for field in SCORES_SCHEMA
         ]
@@ -565,7 +538,7 @@ def test_a_reader_refuses_a_recording_value_stored_as_a_number(tmp_path):
             pass
 
     assert exc.value.code == errors.ARTIFACT_SCHEMA_INVALID
-    assert "recording_value" in exc.value.detail
+    assert "label" in exc.value.detail
 
 
 def test_a_reader_refuses_a_narrowed_score_type(tmp_path):
@@ -684,8 +657,6 @@ def test_a_reader_accepts_additional_columns(tmp_path):
         list(SCORES_SCHEMA) + [pa.field("provenance", pa.string(), nullable=False)]
     ).with_metadata(build_metadata())
     rows = [{
-        "recording_namespace": "soundhub",
-        "recording_value": "42",
         "window_start_s": 0.0,
         "window_end_s": 12.0,
         "label": "owl",

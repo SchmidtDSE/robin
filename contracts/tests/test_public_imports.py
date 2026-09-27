@@ -102,6 +102,7 @@ def test_work_reexports_are_importable():
         PinnedModel,
         RecordingRef,
         partition,
+        recording_work_digest,
         work_digest,
     )
 
@@ -112,7 +113,14 @@ def test_work_reexports_are_importable():
     assert PinnedModel is not None
     assert RecordingRef is not None
     assert partition is not None
+    assert recording_work_digest is not None
     assert work_digest is not None
+
+
+def test_layout_reexports_are_importable():
+    from robin_contracts import artifact_path
+
+    assert callable(artifact_path)
 
 
 def test_spec_reexports_are_importable():

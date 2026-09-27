@@ -120,6 +120,7 @@ def build_metadata(
     fields = {
         "contract_id": CONTRACT_ID,
         "work": build_work(),
+        "recording": SOUNDHUB_42,
         "recipe": build_recipe(dtype=storage_dtype),
         "registry_uri": "s3://b/registry.csv",
         "registry_fingerprint": REGISTRY_FINGERPRINT,
@@ -165,7 +166,7 @@ def write_artifact(
         dim=dim, source_dtype=source_dtype, storage_dtype=storage_dtype
     )
     with EmbeddingsWriter(
-        path, dim=dim, storage_dtype=storage_dtype, metadata=header
+        path, recording=SOUNDHUB_42, dim=dim, storage_dtype=storage_dtype, metadata=header
     ) as writer:
         for window in windows:
             writer.write(window)
@@ -188,15 +189,11 @@ def read_rows(path, checksum):
 # --- the schema ------------------------------------------------------------
 
 
-def test_the_schema_is_the_declared_five_fields_with_declared_types():
+def test_the_schema_is_the_declared_three_fields_with_declared_types():
     schema = embeddings_schema(DIM, "float32")
 
-    assert schema.names == [
-        "recording_namespace", "recording_value", "window_start_s", "window_end_s", "embedding"
-    ]
-    assert [field.type for field in schema][:4] == [
-        pa.string(), pa.string(), pa.float64(), pa.float64()
-    ]
+    assert schema.names == ["window_start_s", "window_end_s", "embedding"]
+    assert [field.type for field in schema][:2] == [pa.float64(), pa.float64()]
     assert schema.field("embedding").type == pa.list_(pa.float32(), DIM)
     assert all(not field.nullable for field in schema)
 
@@ -226,6 +223,7 @@ def test_a_window_writes_one_row(tmp_path):
     assert staged.rows == 1
     assert staged.kind == "embeddings"
     assert staged.contract_id == CONTRACT_ID
+    assert staged.recording == SOUNDHUB_42
 
 
 def test_a_window_with_no_embedding_writes_no_row(tmp_path):
@@ -239,8 +237,6 @@ def test_a_window_with_no_embedding_writes_no_row(tmp_path):
     assert staged.rows == 1
     assert read_rows(staged.path, staged.checksum)[0] == [
         {
-            "recording_namespace": "soundhub",
-            "recording_value": "42",
             "window_start_s": 0.0,
             "window_end_s": 5.0,
             "embedding": [0.0, 1.0, 2.0, 3.0],
@@ -262,24 +258,19 @@ def test_vectors_survive_a_float32_round_trip_exactly(tmp_path):
 
 
 def test_row_order_follows_the_windows_it_was_given(tmp_path):
-    other = a_recording("arbimon", "rec:7")
     windows = [
         build_window(0.0, values=[0, 0, 0, 0]),
         build_window(5.0, values=[1, 1, 1, 1]),
-        build_window(0.0, recording=other, values=[2, 2, 2, 2]),
+        build_window(10.0, values=[2, 2, 2, 2]),
     ]
 
     staged = write_artifact(tmp_path / "embeddings.arrow", windows)
 
     rows = [row for batch in read_rows(staged.path, staged.checksum) for row in batch]
-    assert [
-        (row["recording_namespace"], row["recording_value"], row["window_start_s"],
-         row["embedding"][0])
-        for row in rows
-    ] == [
-        ("soundhub", "42", 0.0, 0.0),
-        ("soundhub", "42", 5.0, 1.0),
-        ("arbimon", "rec:7", 0.0, 2.0),
+    assert [(row["window_start_s"], row["embedding"][0]) for row in rows] == [
+        (0.0, 0.0),
+        (5.0, 1.0),
+        (10.0, 2.0),
     ]
 
 
@@ -314,7 +305,7 @@ def test_the_writer_leaves_its_file_for_the_caller(tmp_path):
     path = tmp_path / "embeddings.arrow"
 
     with EmbeddingsWriter(
-        path, dim=DIM, storage_dtype="float32", metadata=build_metadata()
+        path, recording=SOUNDHUB_42, dim=DIM, storage_dtype="float32", metadata=build_metadata()
     ) as writer:
         writer.write(build_window())
         staged = writer.close()
@@ -326,7 +317,7 @@ def test_the_writer_leaves_its_file_for_the_caller(tmp_path):
 
 def test_write_after_close_is_refused(tmp_path):
     writer = EmbeddingsWriter(
-        tmp_path / "embeddings.arrow", dim=DIM, storage_dtype="float32",
+        tmp_path / "embeddings.arrow", recording=SOUNDHUB_42, dim=DIM, storage_dtype="float32",
         metadata=build_metadata(),
     )
     writer.close()
@@ -337,7 +328,7 @@ def test_write_after_close_is_refused(tmp_path):
 
 def test_close_twice_is_refused(tmp_path):
     writer = EmbeddingsWriter(
-        tmp_path / "embeddings.arrow", dim=DIM, storage_dtype="float32",
+        tmp_path / "embeddings.arrow", recording=SOUNDHUB_42, dim=DIM, storage_dtype="float32",
         metadata=build_metadata(),
     )
     writer.close()
@@ -352,7 +343,7 @@ def test_a_writer_released_before_close_refuses_to_stage(tmp_path):
     path = tmp_path / "embeddings.arrow"
     with pytest.raises(ZeroDivisionError):
         with EmbeddingsWriter(
-            path, dim=DIM, storage_dtype="float32", metadata=build_metadata()
+            path, recording=SOUNDHUB_42, dim=DIM, storage_dtype="float32", metadata=build_metadata()
         ) as writer:
             writer.write(build_window())
             raise ZeroDivisionError
@@ -390,7 +381,7 @@ def test_a_vector_of_another_width_is_an_engine_defect(tmp_path):
     # The acceptance boundary has already refused every other width, so a wrong one
     # reaching the writer is the engine contradicting itself, not an untrusted input.
     writer = EmbeddingsWriter(
-        tmp_path / "embeddings.arrow", dim=DIM, storage_dtype="float32",
+        tmp_path / "embeddings.arrow", recording=SOUNDHUB_42, dim=DIM, storage_dtype="float32",
         metadata=build_metadata(),
     )
 
@@ -425,7 +416,7 @@ def test_the_file_grows_before_close(tmp_path):
     path = tmp_path / "embeddings.arrow"
 
     with EmbeddingsWriter(
-        path, dim=WIDE, storage_dtype="float32", metadata=build_metadata(dim=WIDE)
+        path, recording=SOUNDHUB_42, dim=WIDE, storage_dtype="float32", metadata=build_metadata(dim=WIDE)
     ) as writer:
         for n in range(ENOUGH_TO_FLUSH):
             writer.write(build_window(float(n) * 5.0, dim=WIDE))
@@ -475,7 +466,7 @@ def test_a_writer_refuses_a_header_declaring_another_contract(tmp_path):
 
     with pytest.raises(RuntimeError) as exc:
         EmbeddingsWriter(
-            path, dim=DIM, storage_dtype="float32",
+            path, recording=SOUNDHUB_42, dim=DIM, storage_dtype="float32",
             metadata=build_metadata(contract_id="robin.scores.arrow/1"),
         )
 
@@ -492,7 +483,7 @@ def test_a_writer_refuses_a_header_missing_a_required_key(tmp_path):
     path = tmp_path / "embeddings.arrow"
 
     with pytest.raises(RuntimeError) as exc:
-        EmbeddingsWriter(path, dim=DIM, storage_dtype="float32", metadata=metadata)
+        EmbeddingsWriter(path, recording=SOUNDHUB_42, dim=DIM, storage_dtype="float32", metadata=metadata)
 
     assert "robin.backbone_ref" in str(exc.value)
     assert not path.exists()
@@ -503,13 +494,13 @@ def test_a_writer_refuses_a_header_that_contradicts_the_stream_it_would_write(tm
 
     with pytest.raises(RuntimeError) as exc:
         EmbeddingsWriter(
-            path, dim=DIM, storage_dtype="float32", metadata=build_metadata(dim=DIM + 1)
+            path, recording=SOUNDHUB_42, dim=DIM, storage_dtype="float32", metadata=build_metadata(dim=DIM + 1)
         )
     assert "robin.embedding_dim" in str(exc.value)
 
     with pytest.raises(RuntimeError) as exc:
         EmbeddingsWriter(
-            path, dim=DIM, storage_dtype="float32",
+            path, recording=SOUNDHUB_42, dim=DIM, storage_dtype="float32",
             metadata=build_metadata(storage_dtype="float16"),
         )
     assert "robin.embedding_storage_dtype" in str(exc.value)
@@ -522,7 +513,7 @@ def test_a_writer_refuses_an_invalid_dimension_before_creating_a_file(tmp_path, 
 
     with pytest.raises(RuntimeError) as exc:
         EmbeddingsWriter(
-            path, dim=dim, storage_dtype="float32", metadata=build_metadata(dim=dim)
+            path, recording=SOUNDHUB_42, dim=dim, storage_dtype="float32", metadata=build_metadata(dim=dim)
         )
 
     assert "robin.embedding_dim" in str(exc.value)
@@ -534,7 +525,7 @@ def test_a_writer_refuses_a_header_that_is_not_utf8(tmp_path):
     path = tmp_path / "embeddings.arrow"
 
     with pytest.raises(RuntimeError) as exc:
-        EmbeddingsWriter(path, dim=DIM, storage_dtype="float32", metadata=metadata)
+        EmbeddingsWriter(path, recording=SOUNDHUB_42, dim=DIM, storage_dtype="float32", metadata=metadata)
 
     assert "UTF-8" in str(exc.value)
     assert not path.exists()
@@ -719,7 +710,7 @@ def test_a_finite_value_that_does_not_survive_narrowing_is_refused(tmp_path):
     overflows = float(np.finfo(np.float16).max) * 2
     source = np.asarray([1.0, overflows, 1.0, 1.0], dtype=np.float32)
     writer = EmbeddingsWriter(
-        tmp_path / "embeddings.arrow", dim=DIM, storage_dtype="float16",
+        tmp_path / "embeddings.arrow", recording=SOUNDHUB_42, dim=DIM, storage_dtype="float16",
         metadata=build_metadata(storage_dtype="float16"),
     )
 
@@ -740,7 +731,7 @@ def test_a_file_a_refusal_interrupted_still_closes_and_reads_back(tmp_path):
     # afterwards has to produce a readable artifact holding exactly the good window.
     overflows = float(np.finfo(np.float16).max) * 2
     writer = EmbeddingsWriter(
-        tmp_path / "embeddings.arrow", dim=DIM, storage_dtype="float16",
+        tmp_path / "embeddings.arrow", recording=SOUNDHUB_42, dim=DIM, storage_dtype="float16",
         metadata=build_metadata(storage_dtype="float16"),
     )
     writer.write(build_window())
@@ -755,8 +746,6 @@ def test_a_file_a_refusal_interrupted_still_closes_and_reads_back(tmp_path):
     assert staged.checksum == checksum_file(staged.path)
     assert read_rows(staged.path, staged.checksum)[0] == [
         {
-            "recording_namespace": "soundhub",
-            "recording_value": "42",
             "window_start_s": 0.0,
             "window_end_s": 5.0,
             "embedding": [0.0, 1.0, 2.0, 3.0],
@@ -926,7 +915,7 @@ def test_a_reader_refuses_another_contracts_artifact(tmp_path):
 
 
 def test_a_reader_refuses_a_stream_carrying_no_metadata_at_all(tmp_path):
-    # The right five columns and an empty header is what every tool but this writer
+    # The right three columns and an empty header is what every tool but this writer
     # produces, and Arrow reports that header as absent rather than as empty.
     path = tmp_path / "embeddings.arrow"
     checksum = write_raw_stream(path, embeddings_schema(DIM, "float32"))
@@ -982,47 +971,6 @@ def test_a_reader_refuses_a_missing_field(tmp_path):
 
     assert exc.value.code == errors.ARTIFACT_SCHEMA_INVALID
     assert "window_end_s" in exc.value.detail
-
-
-def test_a_reader_refuses_an_artifact_missing_the_recording_namespace(tmp_path):
-    narrowed = pa.schema(
-        [
-            field
-            for field in embeddings_schema(DIM, "float32")
-            if field.name != "recording_namespace"
-        ]
-    ).with_metadata(build_metadata())
-    path = tmp_path / "embeddings.arrow"
-    checksum = write_raw_stream(path, narrowed)
-
-    with pytest.raises(errors.EngineError) as exc:
-        with read_embeddings(path, expected_checksum=checksum):
-            pass
-
-    assert exc.value.code == errors.ARTIFACT_SCHEMA_INVALID
-    assert "recording_namespace" in exc.value.detail
-
-
-def test_a_reader_refuses_a_recording_value_stored_as_a_number(tmp_path):
-    numbered = pa.schema(
-        [
-            pa.field(
-                field.name,
-                pa.int64() if field.name == "recording_value" else field.type,
-                nullable=False,
-            )
-            for field in embeddings_schema(DIM, "float32")
-        ]
-    ).with_metadata(build_metadata())
-    path = tmp_path / "embeddings.arrow"
-    checksum = write_raw_stream(path, numbered)
-
-    with pytest.raises(errors.EngineError) as exc:
-        with read_embeddings(path, expected_checksum=checksum):
-            pass
-
-    assert exc.value.code == errors.ARTIFACT_SCHEMA_INVALID
-    assert "recording_value" in exc.value.detail
 
 
 def test_a_reader_refuses_a_narrowed_bound_type(tmp_path):
@@ -1099,8 +1047,6 @@ def test_a_reader_accepts_additional_columns(tmp_path):
     ).with_metadata(build_metadata())
     rows = [
         {
-            "recording_namespace": "soundhub",
-            "recording_value": "42",
             "window_start_s": 0.0,
             "window_end_s": 5.0,
             "embedding": [0.0, 1.0, 2.0, 3.0],

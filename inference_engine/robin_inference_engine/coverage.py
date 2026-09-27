@@ -125,7 +125,7 @@ def check_completion_evidence(work: InferenceWork, success: InferenceSuccess) ->
     """
     _check_work_digest(work, success)
     _check_recording_coverage(work, success)
-    _check_requested_artifacts(work, success)
+    _check_artifacts_were_requested(work, success)
 
 
 def _check_work_digest(work: InferenceWork, success: InferenceSuccess) -> None:
@@ -148,12 +148,14 @@ def _check_recording_coverage(
         )
 
 
-def _check_requested_artifacts(
+def _check_artifacts_were_requested(
     work: InferenceWork, success: InferenceSuccess
 ) -> None:
+    # A requested kind may have no artifacts: a recording with no rows has no file.
     requested: set[ArtifactKind] = {output.kind for output in work.outputs}
-    written = {artifact.kind for artifact in success.artifacts}
-    if written != requested:
+    unrequested = {artifact.kind for artifact in success.artifacts} - requested
+    if unrequested:
         raise RuntimeError(
-            f"result names {sorted(written)}, this work requires {sorted(requested)}"
+            f"result names {sorted(unrequested)} artifacts, which this work did not "
+            f"request; it requests {sorted(requested)}"
         )

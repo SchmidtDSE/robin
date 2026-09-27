@@ -47,10 +47,12 @@ def _named(namespace: str, value: str) -> str:
 
 
 class ArtifactRecord(BaseModel, frozen=True, extra="forbid"):
-    """One artifact this work wrote: what it is, where it is, what it hashes to."""
+    """One file this work wrote: its kind, its recording, where it is, what it hashes to."""
 
     kind: ArtifactKind
     contract_id: ArtifactContractId
+    namespace: NonEmptyText
+    value: NonEmptyText
     uri: NonEmptyText
     checksum: BytesDigest
     size_bytes: _Count
@@ -60,7 +62,7 @@ class ArtifactRecord(BaseModel, frozen=True, extra="forbid"):
 class RecordingCoverage(BaseModel, frozen=True, extra="forbid"):
     """What one recording finished, counted in windows; rows only check them.
 
-    The recording is named by its `namespace` and `value`, as in every artifact row.
+    The recording is named by its `namespace` and `value`, as in its artifact records.
     """
 
     namespace: NonEmptyText
@@ -181,43 +183,64 @@ class InferenceSuccess(BaseModel, frozen=True, extra="forbid"):
         return self
 
     @model_validator(mode="after")
-    def _validate_artifact_kinds(self) -> "InferenceSuccess":
-        kinds = [artifact.kind for artifact in self.artifacts]
-        if len(set(kinds)) != len(kinds):
-            raise ValueError(f"a work writes one artifact per kind, got {kinds}")
+    def _validate_artifact_uniqueness(self) -> "InferenceSuccess":
+        seen: set[tuple[str, str, str]] = set()
+        for artifact in self.artifacts:
+            key = (artifact.kind, artifact.namespace, artifact.value)
+            if key in seen:
+                raise ValueError(
+                    f"recording {_named(artifact.namespace, artifact.value)} has two "
+                    f"{artifact.kind} artifacts; a recording has one file per kind"
+                )
+            seen.add(key)
         return self
 
     @model_validator(mode="after")
     def _validate_artifact_row_counts(self) -> "InferenceSuccess":
-        written = {artifact.kind: artifact.rows for artifact in self.artifacts}
-        counted = {
-            "scores": sum(row.score_rows for row in self.coverage),
-            "embeddings": sum(row.embedding_rows for row in self.coverage),
-        }
-        for kind, total in counted.items():
-            if kind not in written:
-                if total:
-                    raise ValueError(
-                        f"coverage counts {total} {kind} rows with no artifact to hold them"
-                    )
-                continue
-            if total != written[kind]:
+        covered = {(row.namespace, row.value) for row in self.coverage}
+        for artifact in self.artifacts:
+            name = _named(artifact.namespace, artifact.value)
+            if (artifact.namespace, artifact.value) not in covered:
                 raise ValueError(
-                    f"coverage counts {total} {kind} rows; the artifact holds {written[kind]}"
+                    f"a {artifact.kind} artifact names recording {name}, "
+                    "which has no coverage row"
+                )
+            if artifact.rows == 0:
+                raise ValueError(
+                    f"recording {name} has a {artifact.kind} artifact with no rows; "
+                    "a recording with no rows of a kind has no file"
+                )
+        # Coverage has no detection count, so detections are checked above only.
+        held = {
+            (artifact.kind, artifact.namespace, artifact.value): artifact.rows
+            for artifact in self.artifacts
+            if artifact.kind != "detections"
+        }
+        counted = {
+            (kind, row.namespace, row.value): rows
+            for row in self.coverage
+            for kind, rows in (("scores", row.score_rows), ("embeddings", row.embedding_rows))
+            if rows
+        }
+        for kind, namespace, value in sorted(held.keys() | counted.keys()):
+            key = (kind, namespace, value)
+            if held.get(key) != counted.get(key):
+                raise ValueError(
+                    f"recording {_named(namespace, value)}: coverage counts "
+                    f"{counted.get(key, 0)} {kind} rows, and its {kind} artifact holds "
+                    f"{held.get(key, 'none')}"
                 )
         return self
 
     @model_validator(mode="after")
     def _validate_resolved_requests(self) -> "InferenceSuccess":
+        # One direction only: a requested kind whose recordings produced no rows has
+        # no artifacts.
         kinds = {artifact.kind for artifact in self.artifacts}
-        if (self.resolved_scores_request is not None) != ("scores" in kinds):
-            raise ValueError(
-                "resolved_scores_request is present exactly when a scores artifact is"
-            )
-        if (self.resolved_detection_policy is not None) != ("detections" in kinds):
-            raise ValueError(
-                "resolved_detection_policy is present exactly when a detections artifact is"
-            )
+        if "scores" in kinds and self.resolved_scores_request is None:
+            raise ValueError("a scores artifact needs resolved_scores_request")
+        if "detections" in kinds and self.resolved_detection_policy is None:
+            raise ValueError("a detections artifact needs resolved_detection_policy")
         return self
 
 

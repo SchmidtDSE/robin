@@ -12,6 +12,7 @@ from robin_contracts.embedding_transforms import (
     L2Norm,
 )
 from robin_contracts.inputs import AudioClip, Embedding, Input
+from robin_contracts.layout import artifact_path
 from robin_contracts.output_contracts import (
     DetectionPolicy,
     DetectionsRequest,
@@ -60,6 +61,7 @@ from robin_contracts.work import (
     PinnedModel,
     RecordingRef,
     partition,
+    recording_work_digest,
     work_digest,
 )
 
@@ -112,10 +114,12 @@ __all__ = [
     "WindowGeometry",
     "WindowOutput",
     "ZeroWindowReason",
+    "artifact_path",
     "canonical_json_bytes",
     "noop",
     "partition",
     "read_card",
+    "recording_work_digest",
     "sha256_v1",
     "window_count",
     "work_digest",

@@ -17,6 +17,7 @@ from pathlib import Path
 
 from robin_contracts.cards import HeadCard, ModelCard
 from robin_contracts.inputs import Input
+from robin_contracts.layout import artifact_path
 from robin_contracts.protocols import ModelCapabilities, ModelContext
 from robin_contracts.records import WindowOutput
 from robin_contracts.results import ArtifactContractId, ArtifactKind, ArtifactRecord
@@ -148,8 +149,10 @@ class LocalFiles:
 
 
 class CopyingWriter:
-    """Copies each staged file into `destination`, named by its checksum.
+    """Copies each staged file to its recording's place under `destination`.
 
+    It is create-only there: a file already holding the same bytes is left as it is
+    and its uri recorded in `replayed`, and one holding other bytes is refused.
     `fail_on` counts creates from 1.
     """
 
@@ -160,26 +163,36 @@ class CopyingWriter:
         self._calls = calls
         self._fail_on = fail_on
         self._creates = 0
+        self.replayed: list[str] = []
 
     def create(
         self,
         *,
         kind: ArtifactKind,
         contract_id: ArtifactContractId,
+        namespace: str,
+        value: str,
         source: Path,
         checksum: str,
         rows: int,
     ) -> ArtifactRecord:
-        self._calls.append(("create", kind))
+        self._calls.append(("create", kind, namespace, value))
         self._creates += 1
         if self._creates == self._fail_on:
             raise OSError(f"create number {self._creates} failed")
-        self._destination.mkdir(parents=True, exist_ok=True)
-        published = self._destination / f"{kind}-{checksum.removeprefix('sha256:')}"
-        shutil.copyfile(source, published)
+        published = self._destination / artifact_path(kind, namespace, value)
+        if published.exists():
+            if published.read_bytes() != source.read_bytes():
+                raise FileExistsError(f"{published} already holds different bytes")
+            self.replayed.append(published.as_uri())
+        else:
+            published.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, published)
         return ArtifactRecord(
             kind=kind,
             contract_id=contract_id,
+            namespace=namespace,
+            value=value,
             uri=published.as_uri(),
             checksum=checksum,
             size_bytes=published.stat().st_size,

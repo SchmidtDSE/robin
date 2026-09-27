@@ -1,6 +1,8 @@
-"""The score stream: one row per window and label, verified when it is read back.
+"""The score stream: one recording's rows, one per window and label, verified when it
+is read back.
 
-The header carries the run's provenance, so the file can be interpreted on its own.
+The header carries the run's provenance, so the file can be interpreted on its own. The
+rows do not name their recording: the published path and the artifact record do.
 Rows are written in bounded batches, so the whole artifact is never held in memory,
 and the reader checks the whole file before returning any row.
 """
@@ -15,6 +17,7 @@ import pyarrow as pa
 
 from robin_contracts.output_contracts import ScoresContractId
 from robin_contracts.protocols import ScoreRetention
+from robin_contracts.work import RecordingRef
 from robin_inference_engine import errors
 from robin_inference_engine.accept_window import AcceptedWindow
 from robin_inference_engine.artifacts.metadata import (
@@ -50,8 +53,6 @@ SCORE_BATCH_ROWS = 8192
 
 SCORES_SCHEMA = pa.schema(
     [
-        pa.field("recording_namespace", pa.string(), nullable=False),
-        pa.field("recording_value", pa.string(), nullable=False),
         pa.field("window_start_s", pa.float64(), nullable=False),
         pa.field("window_end_s", pa.float64(), nullable=False),
         pa.field("label", pa.string(), nullable=False),
@@ -61,15 +62,18 @@ SCORES_SCHEMA = pa.schema(
 
 
 class ScoresWriter:
-    """Writes accepted windows to one Arrow stream, a batch at a time.
+    """Writes one recording's accepted windows to an Arrow stream, a batch at a time.
 
     It checks the header it is given, writes the windows it is given, and leaves
     the file on disk. The caller publishes the finished bytes and deletes the file.
     """
 
-    def __init__(self, path: Path, *, metadata: Mapping[bytes, bytes]) -> None:
+    def __init__(
+        self, path: Path, *, recording: RecordingRef, metadata: Mapping[bytes, bytes]
+    ) -> None:
         _require_writable_header(metadata)
         self._path = path
+        self._recording = recording
         self._file: pa.OSFile | None = pa.OSFile(str(path), "wb")
         self._stream = pa.ipc.new_stream(
             self._file, SCORES_SCHEMA.with_metadata(dict(metadata))
@@ -84,8 +88,6 @@ class ScoresWriter:
         if self._closed or self._stream is None:
             raise RuntimeError(f"{self._path.name} is closed; no window can be added")
         for score in window.scores:
-            self._pending["recording_namespace"].append(window.recording.namespace)
-            self._pending["recording_value"].append(window.recording.value)
             self._pending["window_start_s"].append(window.start)
             self._pending["window_end_s"].append(window.end)
             self._pending["label"].append(score.label)
@@ -110,6 +112,7 @@ class ScoresWriter:
         return StagedArtifact(
             kind="scores",
             contract_id=CONTRACT_ID,
+            recording=self._recording,
             path=self._path,
             checksum=checksum_file(self._path),
             rows=self._rows,

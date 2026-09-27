@@ -11,7 +11,7 @@ from robin_contracts.cards import HeadCard, model_ref
 from robin_contracts.output_contracts import ScoresRequest
 from robin_contracts.results import ArtifactContractId
 from robin_contracts.specs import Recipe
-from robin_contracts.work import InferenceWork, work_digest
+from robin_contracts.work import InferenceWork, RecordingRef, recording_work_digest
 from robin_inference_engine import errors
 
 # Named because other modules use these keys on their own.
@@ -31,7 +31,7 @@ BACKBONE_CARD_DIGEST_KEY = "robin.backbone_card_digest"
 # Every artifact carries these keys, whatever its contract.
 REQUIRED_KEYS: tuple[str, ...] = (
     CONTRACT_KEY,
-    "robin.work_digest",
+    "robin.recording_work_digest",
     "robin.recipe_fingerprint",
     "robin.recipe",
     "robin.model_ref",
@@ -58,16 +58,21 @@ def required_metadata(
     *,
     contract_id: ArtifactContractId,
     work: InferenceWork,
+    recording: RecordingRef,
     recipe: Recipe,
     registry_uri: str | None,
     registry_fingerprint: str | None,
 ) -> dict[bytes, bytes]:
-    """The provenance keys every window artifact carries, as Arrow metadata."""
+    """The provenance keys every window artifact carries, as Arrow metadata.
+
+    The work is identified narrowed to `recording`, the one recording the file holds,
+    so the header does not depend on which other recordings shared the work.
+    """
     _require_a_whole_registry_binding(registry_uri, registry_fingerprint)
     model = model_ref(work.model.card)
     values: dict[str, str] = {
         CONTRACT_KEY: contract_id,
-        "robin.work_digest": work_digest(work),
+        "robin.recording_work_digest": recording_work_digest(work, recording),
         # Not a duplicate: one key holds the recipe, the other its digest.
         "robin.recipe_fingerprint": recipe.id,
         "robin.recipe": canonical_json_bytes(recipe).decode("utf-8"),

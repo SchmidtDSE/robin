@@ -1,4 +1,6 @@
-"""Read and write Arrow streams containing one raw embedding per window.
+"""Read and write Arrow streams containing one recording's raw embeddings, one per window.
+
+The rows do not name their recording: the published path and the artifact record do.
 
 The reader verifies the file checksum, schema and required metadata before yielding
 an iterator. Batches are decoded as the caller iterates; malformed batches raise a
@@ -15,6 +17,7 @@ import numpy as np
 import pyarrow as pa
 
 from robin_contracts.output_contracts import EmbeddingsContractId
+from robin_contracts.work import RecordingRef
 from robin_inference_engine import errors
 from robin_inference_engine.accept_window import AcceptedWindow
 from robin_inference_engine.artifacts.metadata import (
@@ -62,11 +65,9 @@ _EMBEDDING_FIELD = "embedding"
 
 
 def embeddings_schema(dim: int, storage_dtype: str) -> pa.Schema:
-    """The five declared fields, with the width and value type in the list type."""
+    """The three declared fields, with the width and value type in the list type."""
     return pa.schema(
         [
-            pa.field("recording_namespace", pa.string(), nullable=False),
-            pa.field("recording_value", pa.string(), nullable=False),
             pa.field("window_start_s", pa.float64(), nullable=False),
             pa.field("window_end_s", pa.float64(), nullable=False),
             pa.field(
@@ -79,16 +80,17 @@ def embeddings_schema(dim: int, storage_dtype: str) -> pa.Schema:
 
 
 class EmbeddingsWriter:
-    """Writes one vector per accepted window to an Arrow stream, a batch at a time.
+    """Writes one vector per accepted window of one recording to an Arrow stream, a
+    batch at a time.
 
-    The caller supplies the width, so a work that completes no window still writes a
-    correctly typed artifact.
+    The caller supplies the width, so a stream holding no window is still correctly typed.
     """
 
     def __init__(
         self,
         path: Path,
         *,
+        recording: RecordingRef,
         dim: int,
         storage_dtype: str,
         metadata: Mapping[bytes, bytes],
@@ -100,6 +102,7 @@ class EmbeddingsWriter:
         self._value_dtype = _NUMPY_VALUE_TYPE[storage_dtype]
         self._batch_rows = max(1, EMBEDDING_BATCH_BYTES // (dim * self._value_dtype.itemsize))
         self._path = path
+        self._recording = recording
         self._file: pa.OSFile | None = pa.OSFile(str(path), "wb")
         self._stream = pa.ipc.new_stream(
             self._file, self._schema.with_metadata(dict(metadata))
@@ -117,8 +120,6 @@ class EmbeddingsWriter:
             return
         self._require_declared_width(window)
         stored = self._narrowed(window)
-        self._pending["recording_namespace"].append(window.recording.namespace)
-        self._pending["recording_value"].append(window.recording.value)
         self._pending["window_start_s"].append(window.start)
         self._pending["window_end_s"].append(window.end)
         self._pending[_EMBEDDING_FIELD].append(stored)
@@ -140,6 +141,7 @@ class EmbeddingsWriter:
         return StagedArtifact(
             kind="embeddings",
             contract_id=CONTRACT_ID,
+            recording=self._recording,
             path=self._path,
             checksum=checksum_file(self._path),
             rows=self._rows,

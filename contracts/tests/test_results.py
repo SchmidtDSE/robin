@@ -78,6 +78,8 @@ def build_artifact(**overrides) -> ArtifactRecord:
     fields = {
         "kind": "scores",
         "contract_id": "robin.scores.arrow/1",
+        "namespace": "soundhub",
+        "value": "42",
         "uri": "s3://bucket/scores.arrow",
         "checksum": FILE_DIGEST,
         "size_bytes": 1024,
@@ -154,6 +156,17 @@ def test_an_artifact_record_refuses_an_unknown_contract_id(contract_id):
 def test_an_artifact_checksum_refuses_the_canonical_family(checksum):
     with pytest.raises(ValidationError):
         build_artifact(checksum=checksum)
+
+
+@pytest.mark.parametrize("field", ["namespace", "value"])
+def test_an_artifact_record_names_its_recording(field):
+    fields = build_artifact().model_dump() | {field: ""}
+    with pytest.raises(ValidationError):
+        ArtifactRecord(**fields)
+
+    del fields[field]
+    with pytest.raises(ValidationError):
+        ArtifactRecord(**fields)
 
 
 def test_zero_rows_is_a_real_value():
@@ -320,92 +333,172 @@ def test_a_coverage_refusal_names_the_recording():
         )
 
 
-def test_score_rows_sum_to_the_scores_artifact_rows():
-    scores = build_artifact(rows=5)
+def build_embeddings_artifact(**overrides) -> ArtifactRecord:
+    return build_artifact(
+        **({"kind": "embeddings", "contract_id": "robin.embeddings.arrow/1"} | overrides)
+    )
+
+
+def build_detections_artifact(**overrides) -> ArtifactRecord:
+    return build_artifact(
+        **({"kind": "detections", "contract_id": "robin.detections.parquet/1"} | overrides)
+    )
+
+
+def test_each_scores_record_holds_its_recordings_score_rows():
     coverage = (
         build_coverage(value="42", score_rows=2),
         build_coverage(value="43", score_rows=3),
     )
 
     success = build_success(
-        artifacts=(scores,),
+        artifacts=(build_artifact(value="42", rows=2), build_artifact(value="43", rows=3)),
         coverage=coverage,
         resolved_scores_request=build_scores_request(),
     )
 
-    assert success.artifacts[0].rows == 5
+    assert [artifact.rows for artifact in success.artifacts] == [2, 3]
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match=re.escape("('soundhub', '42')")):
         build_success(
-            artifacts=(build_artifact(rows=6),),
+            artifacts=(build_artifact(value="42", rows=3), build_artifact(value="43", rows=2)),
             coverage=coverage,
             resolved_scores_request=build_scores_request(),
         )
 
 
-def test_embedding_rows_sum_to_the_embeddings_artifact_rows():
-    embeddings = build_artifact(
-        kind="embeddings", contract_id="robin.embeddings.arrow/1", rows=3
-    )
+def test_each_embeddings_record_holds_its_recordings_embedding_rows():
     coverage = (
         build_coverage(value="42", embedding_rows=2),
         build_coverage(value="43", embedding_rows=1),
     )
 
-    assert build_success(artifacts=(embeddings,), coverage=coverage).artifacts[0].rows == 3
+    success = build_success(
+        artifacts=(
+            build_embeddings_artifact(value="42", rows=2),
+            build_embeddings_artifact(value="43", rows=1),
+        ),
+        coverage=coverage,
+    )
+
+    assert [artifact.rows for artifact in success.artifacts] == [2, 1]
 
     with pytest.raises(ValidationError):
         build_success(
             artifacts=(
-                build_artifact(kind="embeddings", contract_id="robin.embeddings.arrow/1", rows=4),
+                build_embeddings_artifact(value="42", rows=2),
+                build_embeddings_artifact(value="43", rows=2),
             ),
             coverage=coverage,
         )
 
 
-def test_a_kind_with_no_artifact_carries_no_rows():
+def test_a_recording_counting_rows_of_a_kind_has_a_record_of_that_kind():
     assert build_success(coverage=(build_coverage(embedding_rows=0),)).artifacts == ()
 
     with pytest.raises(ValidationError):
         build_success(coverage=(build_coverage(embedding_rows=2),))
 
-
-def test_a_requested_kind_with_zero_rows_still_gets_an_artifact():
-    success = build_success(
-        artifacts=(build_artifact(rows=0),),
-        coverage=(build_coverage(score_rows=0),),
-        resolved_scores_request=build_scores_request(),
-    )
-
-    assert success.artifacts[0].rows == 0
-
-
-def test_an_artifact_kind_appears_at_most_once():
-    with pytest.raises(ValidationError):
+    # One recording's record does not stand for another's rows.
+    with pytest.raises(ValidationError, match=re.escape("('soundhub', '43')")):
         build_success(
-            artifacts=(build_artifact(rows=0), build_artifact(rows=0)),
+            artifacts=(build_artifact(value="42", rows=2),),
+            coverage=(
+                build_coverage(value="42", score_rows=2),
+                build_coverage(value="43", score_rows=1),
+            ),
             resolved_scores_request=build_scores_request(),
         )
 
 
-def test_a_resolved_request_accompanies_its_artifact():
-    detections = build_artifact(kind="detections", contract_id="robin.detections.parquet/1")
+BUILDERS = {
+    "scores": build_artifact,
+    "embeddings": build_embeddings_artifact,
+    "detections": build_detections_artifact,
+}
+
+
+@pytest.mark.parametrize("kind", BUILDERS)
+def test_a_record_names_a_recording_in_coverage(kind):
+    with pytest.raises(ValidationError, match=re.escape("('soundhub', '99')")):
+        build_success(
+            artifacts=(BUILDERS[kind](value="99", rows=1),),
+            resolved_scores_request=build_scores_request(),
+            resolved_detection_policy=ThresholdPolicy(min_score=0.5),
+        )
+
+
+@pytest.mark.parametrize("kind", BUILDERS)
+def test_a_zero_row_record_is_refused(kind):
+    # A recording with no rows of a kind has no file; its coverage count says so.
+    with pytest.raises(ValidationError, match="no rows"):
+        build_success(
+            artifacts=(BUILDERS[kind](rows=0),),
+            resolved_scores_request=build_scores_request(),
+            resolved_detection_policy=ThresholdPolicy(min_score=0.5),
+        )
+
+
+def test_a_scores_request_with_no_scores_records_is_accepted():
+    success = build_success(
+        coverage=(build_coverage(score_rows=0),),
+        resolved_scores_request=build_scores_request(
+            retention="thresholded", min_score=0.5
+        ),
+    )
+
+    assert success.artifacts == ()
+    assert success.resolved_scores_request is not None
+
+
+def test_a_recording_has_at_most_one_record_per_kind():
+    with pytest.raises(ValidationError, match=re.escape("('soundhub', '42')")):
+        build_success(
+            artifacts=(build_artifact(rows=2), build_artifact(rows=2)),
+            coverage=(build_coverage(score_rows=2),),
+            resolved_scores_request=build_scores_request(),
+        )
+
+    success = build_success(
+        artifacts=(
+            build_artifact(namespace="soundhub", rows=2),
+            build_artifact(namespace="arbimon", rows=2),
+        ),
+        coverage=(
+            build_coverage(namespace="soundhub", score_rows=2),
+            build_coverage(namespace="arbimon", score_rows=2),
+        ),
+        resolved_scores_request=build_scores_request(),
+    )
+
+    assert len(success.artifacts) == 2
+
+
+def test_a_record_requires_the_resolved_request_for_its_kind():
+    scores = build_artifact(rows=2)
+    detections = build_detections_artifact(rows=1)
+    coverage = (build_coverage(score_rows=2),)
     policy = ThresholdPolicy(min_score=0.5)
 
     with pytest.raises(ValidationError):
-        build_success(artifacts=(build_artifact(),))
+        build_success(artifacts=(scores,), coverage=coverage)
 
     with pytest.raises(ValidationError):
-        build_success(resolved_scores_request=build_scores_request())
+        build_success(
+            artifacts=(scores, detections),
+            coverage=coverage,
+            resolved_scores_request=build_scores_request(),
+        )
 
-    with pytest.raises(ValidationError):
-        build_success(artifacts=(detections,))
-
-    with pytest.raises(ValidationError):
-        build_success(resolved_detection_policy=policy)
+    # A request whose recordings produced no rows has no records.
+    assert build_success(resolved_scores_request=build_scores_request()).artifacts == ()
+    assert build_success(
+        resolved_scores_request=build_scores_request(), resolved_detection_policy=policy
+    ).artifacts == ()
 
     success = build_success(
-        artifacts=(build_artifact(), detections),
+        artifacts=(scores, detections),
+        coverage=coverage,
         resolved_scores_request=build_scores_request(),
         resolved_detection_policy=policy,
     )

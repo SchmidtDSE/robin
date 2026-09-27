@@ -5,6 +5,7 @@ import hashlib
 
 import pytest
 
+from robin_contracts.work import RecordingRef
 from robin_inference_engine import errors
 from robin_inference_engine.artifacts.staging import (
     CHECKSUM_CHUNK_BYTES,
@@ -18,14 +19,16 @@ from robin_inference_engine.artifacts.staging import (
     unreadable,
 )
 
-FIELDS = {"kind", "contract_id", "path", "checksum", "rows"}
+FIELDS = {"kind", "contract_id", "recording", "path", "checksum", "rows"}
 CHECKSUM = "sha256:" + "0" * 64
+RECORDING = RecordingRef(namespace="soundhub", value="42", audio_uri="s3://b/42.wav")
 
 
 def build_staged(tmp_path) -> StagedArtifact:
     return StagedArtifact(
         kind="scores",
         contract_id="robin.scores.arrow/1",
+        recording=RECORDING,
         path=tmp_path / "scores.arrow",
         checksum="sha256:" + "0" * 64,
         rows=3,
@@ -106,6 +109,10 @@ def test_a_staged_artifact_carries_no_uri_and_no_size(tmp_path):
     staged = build_staged(tmp_path)
 
     assert {field.name for field in dataclasses.fields(staged)} == FIELDS
+
+
+def test_a_staged_artifact_carries_the_recording_it_holds(tmp_path):
+    assert build_staged(tmp_path).recording == RECORDING
 
 
 def test_a_staged_artifact_is_frozen(tmp_path):

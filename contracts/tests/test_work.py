@@ -15,6 +15,7 @@ from robin_contracts.work import (
     PinnedModel,
     RecordingRef,
     partition,
+    recording_work_digest,
     work_digest,
 )
 
@@ -241,6 +242,66 @@ def test_the_card_is_part_of_the_work_digest():
     assert work_digest(build_work()) != work_digest(
         build_work(model=build_pinned_model(card=other_card))
     )
+
+
+R = build_recording(value="42", audio_uri="s3://bucket/42.wav")
+S = build_recording(value="43", audio_uri="s3://bucket/43.wav")
+T = build_recording(value="44", audio_uri="s3://bucket/44.wav")
+
+
+def test_a_recording_work_digest_is_the_digest_of_the_work_holding_only_that_recording():
+    work = build_work(recordings=(R, S), settings={"sensitivity": 1.0})
+
+    assert recording_work_digest(work, S) == work_digest(
+        build_work(recordings=(S,), settings={"sensitivity": 1.0})
+    )
+
+
+def test_a_recording_work_digest_does_not_depend_on_the_other_recordings():
+    one = build_work(recordings=(R, S))
+    other = build_work(recordings=(T, R))
+
+    assert work_digest(one) != work_digest(other)
+    assert recording_work_digest(one, R) == recording_work_digest(other, R)
+
+
+def test_two_recordings_of_one_work_have_different_recording_work_digests():
+    work = build_work(recordings=(R, S))
+
+    assert recording_work_digest(work, R) != recording_work_digest(work, S)
+
+
+def test_a_recording_work_digest_changes_with_the_audio_uri():
+    moved = R.model_copy(update={"audio_uri": "s3://bucket/moved.wav"})
+
+    assert recording_work_digest(build_work(recordings=(R,)), R) != recording_work_digest(
+        build_work(recordings=(moved,)), moved
+    )
+
+
+def test_a_recording_work_digest_changes_with_settings():
+    one = build_work(recordings=(R,), settings={"sensitivity": 1.0})
+    other = build_work(recordings=(R,), settings={"sensitivity": 1.5})
+
+    assert recording_work_digest(one, R) != recording_work_digest(other, R)
+
+
+def test_a_recording_work_digest_ignores_resources():
+    quiet = build_work(recordings=(R, S), resources={"device": "cpu"})
+    loud = build_work(recordings=(R, S), resources={"device": "gpu", "batch_size": 64})
+
+    assert recording_work_digest(quiet, R) == recording_work_digest(loud, R)
+
+
+def test_a_recording_work_digest_refuses_a_recording_the_work_does_not_name():
+    work = build_work(recordings=(R, S))
+    # Same identity, different audio: not the recording this work ran.
+    moved = R.model_copy(update={"audio_uri": "s3://bucket/moved.wav"})
+
+    with pytest.raises(ValueError):
+        recording_work_digest(work, T)
+    with pytest.raises(ValueError):
+        recording_work_digest(work, moved)
 
 
 def test_digest_fields_reject_the_wrong_family():

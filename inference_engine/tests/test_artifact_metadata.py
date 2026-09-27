@@ -16,6 +16,7 @@ from robin_contracts.work import (
     PinnedFile,
     PinnedModel,
     RecordingRef,
+    recording_work_digest,
 )
 from robin_inference_engine import errors
 from robin_inference_engine.artifacts.metadata import (
@@ -72,12 +73,14 @@ def build_recipe(**overrides) -> Recipe:
     return Recipe(**(fields | overrides))
 
 
+SOUNDHUB_42 = RecordingRef(namespace="soundhub", value="42", audio_uri="s3://b/42.wav")
+SOUNDHUB_43 = RecordingRef(namespace="soundhub", value="43", audio_uri="s3://b/43.wav")
+
+
 def build_work(**overrides) -> InferenceWork:
     fields = {
         "schema_version": "robin.inference-work/1",
-        "recordings": (
-            RecordingRef(namespace="soundhub", value="42", audio_uri="s3://b/42.wav"),
-        ),
+        "recordings": (SOUNDHUB_42,),
         "model": build_model(),
         "input": AudioInput(),
         "settings": {},
@@ -91,6 +94,7 @@ def build_metadata(**overrides) -> dict[bytes, bytes]:
     fields = {
         "contract_id": "robin.scores.arrow/1",
         "work": build_work(),
+        "recording": SOUNDHUB_42,
         "recipe": build_recipe(),
         "registry_uri": "s3://b/registry.csv",
         "registry_fingerprint": REGISTRY_FINGERPRINT,
@@ -169,13 +173,31 @@ def test_model_ref_is_name_slash_version():
     assert decode_metadata(build_metadata())["robin.model_ref"] == "owl/1"
 
 
-def test_the_work_digest_ignores_resources():
+def test_the_recording_work_digest_ignores_resources():
     plain = build_metadata(work=build_work(resources={}))
     resourced = build_metadata(work=build_work(resources={"gpus": 4}))
 
     assert (
-        decode_metadata(plain)["robin.work_digest"]
-        == decode_metadata(resourced)["robin.work_digest"]
+        decode_metadata(plain)["robin.recording_work_digest"]
+        == decode_metadata(resourced)["robin.recording_work_digest"]
+    )
+
+
+def test_the_header_carries_the_digest_of_the_work_narrowed_to_its_recording():
+    work = build_work(recordings=(SOUNDHUB_42, SOUNDHUB_43))
+
+    headers = {
+        recording.value: decode_metadata(build_metadata(work=work, recording=recording))
+        for recording in work.recordings
+    }
+
+    for recording in work.recordings:
+        assert headers[recording.value]["robin.recording_work_digest"] == (
+            recording_work_digest(work, recording)
+        )
+    assert (
+        headers["42"]["robin.recording_work_digest"]
+        != headers["43"]["robin.recording_work_digest"]
     )
 
 

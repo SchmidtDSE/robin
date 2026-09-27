@@ -3,7 +3,6 @@
 import hashlib
 import inspect
 import tempfile
-from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -21,6 +20,7 @@ from doubles import (
 from robin_contracts.canonical import canonical_json_bytes
 from robin_contracts.cards import HeadCard, ModelCard, ModelRef, model_ref
 from robin_contracts.embedding_transforms import Identity, L2Norm
+from robin_contracts.layout import artifact_path
 from robin_contracts.output_contracts import (
     DetectionsRequest,
     EmbeddingsRequest,
@@ -38,10 +38,17 @@ from robin_contracts.results import (
     InferenceSuccess,
 )
 from robin_contracts.specs import AudioSpec, Recipe, RunnerResampled
-from robin_contracts.work import REGISTRY_ROLE, EmbeddingArtifactInput, InferenceWork, work_digest
+from robin_contracts.work import (
+    REGISTRY_ROLE,
+    EmbeddingArtifactInput,
+    InferenceWork,
+    recording_work_digest,
+    work_digest,
+)
 from robin_inference_engine import engine, errors
 from robin_inference_engine.artifacts.embeddings import read_embeddings
 from robin_inference_engine.artifacts.scores import read_scores
+from robin_inference_engine.artifacts.staging import checksum_file
 from robin_inference_engine.coverage import check_completion_evidence
 from robin_inference_engine.engine import run_work
 from robin_inference_engine.load_registry import load_registry
@@ -512,7 +519,18 @@ def script(*counts: int, **kwargs) -> list[list[WindowOutput]]:
 
 
 def published(rig: Rig, record: ArtifactRecord) -> Path:
-    return rig.destination / f"{record.kind}-{record.checksum.removeprefix('sha256:')}"
+    return rig.destination / artifact_path(record.kind, record.namespace, record.value)
+
+
+def published_files(rig: Rig) -> set[str]:
+    """Every file under the destination, as a path relative to it."""
+    if not rig.destination.exists():
+        return set()
+    return {
+        path.relative_to(rig.destination).as_posix()
+        for path in rig.destination.rglob("*")
+        if path.is_file()
+    }
 
 
 def rows_of(rig: Rig, record: ArtifactRecord) -> list[dict]:
@@ -532,18 +550,24 @@ def success_of(rig: Rig, result, work: InferenceWork) -> InferenceSuccess:
     assert [(row.namespace, row.value) for row in result.coverage] == [
         (one.namespace, one.value) for one in work.recordings
     ]
-    kinds = {one.kind: one for one in result.artifacts}
-    for kind, field in (("scores", "score_rows"), ("embeddings", "embedding_rows")):
-        per_recording = {(row.namespace, row.value): getattr(row, field) for row in result.coverage}
-        if kind not in kinds:
-            assert set(per_recording.values()) == {0}
-            continue
-        rows = rows_of(rig, kinds[kind])
-        assert kinds[kind].rows == len(rows) == sum(per_recording.values())
-        # Every row names a recording of this work, as many times as it produced rows.
-        named = Counter((row["recording_namespace"], row["recording_value"]) for row in rows)
-        assert {key: count for key, count in per_recording.items() if count} == named
-    assert (result.resolved_scores_request is not None) == ("scores" in kinds)
+    counted = {
+        (row.namespace, row.value): {"scores": row.score_rows, "embeddings": row.embedding_rows}
+        for row in result.coverage
+    }
+    # A record for every recording and kind with rows, holding exactly those rows.
+    assert {
+        (one.kind, one.namespace, one.value): one.rows for one in result.artifacts
+    } == {
+        (kind, *identity): count
+        for identity, counts in counted.items()
+        for kind, count in counts.items()
+        if count
+    }
+    for record in result.artifacts:
+        assert record.uri == published(rig, record).as_uri()
+        assert len(rows_of(rig, record)) == record.rows
+    requested_scores = any(isinstance(one, ScoresRequest) for one in work.outputs)
+    assert (result.resolved_scores_request is not None) == requested_scores
     check_completion_evidence(work, result)
     return result
 
@@ -636,6 +660,10 @@ def test_recordings_sharing_a_value_in_two_namespaces_stay_apart(rig):
         ("soundhub", "7", 2),
         ("another-archive", "7", 1),
     ]
+    assert published_files(rig) == {
+        artifact_path("scores", "soundhub", "7"),
+        artifact_path("scores", "another-archive", "7"),
+    }
 
 
 def test_the_model_is_built_from_the_verified_files_and_the_work(rig):
@@ -656,28 +684,165 @@ def test_the_model_is_built_from_the_verified_files_and_the_work(rig):
 
 
 # ---------------------------------------------------------------------------
+# One file per recording and kind, at the place its recording gives.
+# ---------------------------------------------------------------------------
+
+
+def window_at(
+    start: float, *, score: float | None = 0.75, embedding: float | None = 1.0
+) -> WindowOutput:
+    return WindowOutput(
+        start=start,
+        end=start + 3.0,
+        scores=() if score is None else tuple(ClassScore(label, score) for label in LABELS),
+        embedding=None if embedding is None else np.full(DIM, embedding, dtype=np.float32),
+    )
+
+
+def test_each_recording_gets_its_own_file_of_each_kind(rig):
+    work = rig.work(recordings=2, outputs=(scores_request(), embeddings_request()))
+    model = rig.model(
+        [
+            [window_at(0.0, score=0.25), window_at(3.0, score=0.25)],
+            [window_at(30.0, score=0.5), window_at(33.0, score=0.5), window_at(36.0, score=0.5)],
+        ]
+    )
+
+    result = success_of(rig, rig.run(work, model), work)
+
+    assert [(one.kind, one.value) for one in result.artifacts] == [
+        ("scores", "0"),
+        ("embeddings", "0"),
+        ("scores", "1"),
+        ("embeddings", "1"),
+    ]
+    assert published_files(rig) == {
+        artifact_path(kind, "test", value)
+        for kind in ("scores", "embeddings")
+        for value in ("0", "1")
+    }
+    starts = {
+        (one.kind, one.value): sorted({row["window_start_s"] for row in rows_of(rig, one)})
+        for one in result.artifacts
+    }
+    assert starts == {
+        ("scores", "0"): [0.0, 3.0],
+        ("embeddings", "0"): [0.0, 3.0],
+        ("scores", "1"): [30.0, 33.0, 36.0],
+        ("embeddings", "1"): [30.0, 33.0, 36.0],
+    }
+    for record in result.artifacts:
+        read = read_scores if record.kind == "scores" else read_embeddings
+        with read(published(rig, record), expected_checksum=record.checksum) as stream:
+            assert stream.metadata["robin.recording_work_digest"] == recording_work_digest(
+                work, next(one for one in work.recordings if one.value == record.value)
+            )
+
+
+def test_a_recording_with_no_score_rows_still_gets_its_embeddings_file(rig):
+    request, capabilities = thresholded_rig_parts()
+    work = rig.work(recordings=2, outputs=(request, embeddings_request()))
+    model = rig.model(
+        [[window_at(0.0), window_at(3.0)], [window_at(0.0, score=None)]],
+        capabilities=capabilities,
+    )
+
+    result = success_of(rig, rig.run(work, model), work)
+
+    assert [(one.kind, one.value) for one in result.artifacts] == [
+        ("scores", "0"),
+        ("embeddings", "0"),
+        ("embeddings", "1"),
+    ]
+    assert result.coverage[1].score_rows == 0
+    assert artifact_path("scores", "test", "1") not in published_files(rig)
+    assert artifact_path("embeddings", "test", "1") in published_files(rig)
+
+
+def test_a_value_holding_a_slash_publishes_inside_its_own_folder(rig):
+    work = rig.work(recordings=(rig.build.recording("a/b"),))
+
+    result = success_of(rig, rig.run(work, rig.model(script(1))), work)
+
+    (record,) = result.artifacts
+    (relative,) = published_files(rig)
+    assert relative == artifact_path("scores", "test", "a/b")
+    assert relative.split("/") == [
+        "scores",
+        "recording_namespace=test",
+        "recording_value=a%2Fb",
+        "scores.arrow",
+    ]
+    assert record.uri == (rig.destination / relative).as_uri()
+
+
+@pytest.mark.parametrize("kind", ["scores", "embeddings"])
+def test_a_recordings_file_does_not_depend_on_its_batch(rig, kind):
+    request = scores_request() if kind == "scores" else embeddings_request()
+
+    def at(start: float, value: float) -> WindowOutput:
+        # Scores a work did not request are dropped; an unrequested embedding is refused.
+        return window_at(start, score=value, embedding=value if kind == "embeddings" else None)
+
+    r, s_, t = (rig.build.recording(value) for value in ("r", "s", "t"))
+    r_windows = [at(0.0, 0.25), at(3.0, 0.5)]
+    first_work = rig.work(recordings=(r, s_), outputs=(request,))
+    second_work = rig.work(recordings=(t, r), outputs=(request,))
+    writer = CopyingWriter(rig.destination, rig.calls)
+    location = rig.destination / artifact_path(kind, "test", "r")
+
+    first = success_of(
+        rig,
+        rig.run(first_work, rig.model([r_windows, [at(6.0, 0.75)]]), artifacts=writer),
+        first_work,
+    )
+    first_bytes = location.read_bytes()
+    second = success_of(
+        rig,
+        rig.run(second_work, rig.model([[at(9.0, 0.5)], r_windows]), artifacts=writer),
+        second_work,
+    )
+
+    assert work_digest(first_work) != work_digest(second_work)
+    assert location.read_bytes() == first_bytes
+    first_r, second_r = (
+        next(one for one in result.artifacts if one.value == "r") for result in (first, second)
+    )
+    assert (first_r.uri, first_r.checksum) == (second_r.uri, second_r.checksum)
+    assert writer.replayed == [location.as_uri()]
+
+
+# ---------------------------------------------------------------------------
 # What completion evidence requires at its edges.
 # ---------------------------------------------------------------------------
 
 
-def test_a_requested_kind_with_no_rows_still_gets_an_artifact(rig):
-    # Also shows that an accepted window carrying no scores counts as completed.
-    floor = 0.5
+def thresholded_rig_parts(floor: float = 0.5):
     request = ScoresRequest(
         contract_id="robin.scores.arrow/1", retention="thresholded", min_score=floor
     )
     capabilities = build_capabilities(
         supported_retention=frozenset({"thresholded"}), native_score_floor=floor
     )
-    work = rig.work(outputs=(request,))
+    return request, capabilities
+
+
+def test_a_work_where_no_recording_has_score_rows_has_no_scores_records(rig):
+    # Also shows that an accepted window carrying no scores counts as completed.
+    request, capabilities = thresholded_rig_parts()
+    work = rig.work(recordings=2, outputs=(request,))
 
     result = success_of(
-        rig, rig.run(work, rig.model(script(3, scores=False), capabilities=capabilities)), work
+        rig, rig.run(work, rig.model(script(3, 2, scores=False), capabilities=capabilities)), work
     )
 
-    assert artifact(result, "scores").rows == 0
-    assert rows_of(rig, artifact(result, "scores")) == []
-    assert result.coverage[0].windows_completed == 3
+    assert result.artifacts == ()
+    assert result.resolved_scores_request == request
+    assert [(row.windows_completed, row.score_rows) for row in result.coverage] == [
+        (3, 0),
+        (2, 0),
+    ]
+    assert published_files(rig) == set()
 
 
 def test_a_recording_too_short_for_a_dropping_geometry_completes_with_its_reason(rig):
@@ -688,7 +853,8 @@ def test_a_recording_too_short_for_a_dropping_geometry_completes_with_its_reason
 
     (row,) = result.coverage
     assert (row.windows_completed, row.zero_window_reason) == (0, "shorter_than_window")
-    assert artifact(result, "scores").rows == 0
+    assert result.artifacts == ()
+    assert published_files(rig) == set()
 
 
 def test_zero_windows_from_a_recording_of_unknown_duration_are_unexplained(rig):
@@ -719,9 +885,9 @@ def assert_failed_cleanly(rig: Rig, result: InferenceFailure) -> None:
     assert rig.calls.count(("clean_up",)) == 1
     assert rig.released_model_files() == rig.model_files.returned
     text = canonical_json_bytes(result).decode()
-    published_files = list(rig.destination.iterdir()) if rig.destination.exists() else []
     assert rig.destination.as_uri() not in text
-    assert not any(path.name.split("-", 1)[1] in text for path in published_files)
+    for relative in published_files(rig):
+        assert checksum_file(rig.destination / relative) not in text
 
 
 def test_an_adapter_raising_mid_recording_fails_the_work(rig):
@@ -766,18 +932,20 @@ def test_a_vector_too_large_for_its_storage_width_fails_the_work(rig):
 
 
 def test_a_writer_that_fails_on_the_second_create_fails_the_work(rig):
-    work = rig.work(outputs=(scores_request(), embeddings_request()))
+    work = rig.work(recordings=2)
     writer = CopyingWriter(rig.destination, rig.calls, fail_on=2)
+    before = work_directories()
 
-    result = rig.run(work, rig.model(script(2, embedding=True)), artifacts=writer)
+    result = rig.run(work, rig.model(script(2, 1)), artifacts=writer)
 
     failure = failure_of(
         result, work, code=errors.ARTIFACT_PUBLICATION_FAILED, stage=errors.WRITE_ARTIFACT
     )
     assert "OSError" in failure.detail
-    assert (failure.namespace, failure.value) == (None, None)
-    # The first artifact's bytes were published, and the result still names none.
-    assert [path.name.split("-")[0] for path in rig.destination.iterdir()] == ["scores"]
+    assert (failure.namespace, failure.value) == ("test", "1")
+    # The first recording's file was published, and the result still names none.
+    assert published_files(rig) == {artifact_path("scores", "test", "0")}
+    assert work_directories() == before
     assert_failed_cleanly(rig, result)
 
 
@@ -830,7 +998,9 @@ def test_a_successful_work_calls_every_component_in_order(rig):
     assert rig.calls == [
         *model_file_fetches(rig),
         *recordings_run(rig, work, range(3)),
-        ("create", "scores"),
+        ("create", "scores", "test", "0"),
+        ("create", "scores", "test", "1"),
+        ("create", "scores", "test", "2"),
         ("clean_up",),
         *model_file_releases(rig),
     ]

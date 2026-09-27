@@ -8,6 +8,7 @@ from pathlib import Path
 import pyarrow as pa
 
 from robin_contracts.results import ArtifactContractId, ArtifactKind
+from robin_contracts.work import RecordingRef
 from robin_inference_engine import errors
 
 CHECKSUM_CHUNK_BYTES = 1 << 20
@@ -15,14 +16,16 @@ CHECKSUM_CHUNK_BYTES = 1 << 20
 
 @dataclass(frozen=True, slots=True)
 class StagedArtifact:
-    """A finished artifact on local disk, before a writer port publishes it.
+    """A finished artifact on local disk, holding one recording's rows, before a writer
+    port publishes it.
 
-    It has no uri and no size: the destination is the publisher's choice, and the
+    It has no uri and no size: the writer places it by its kind and recording, and the
     size is measured from the finished file once it is published.
     """
 
     kind: ArtifactKind
     contract_id: ArtifactContractId
+    recording: RecordingRef
     path: Path
     checksum: str
     rows: int
