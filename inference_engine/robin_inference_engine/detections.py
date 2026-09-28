@@ -1,6 +1,7 @@
 """One recording's detections: the scores a policy selects, ranked, and named by the registry."""
 
 from collections.abc import Iterator, Mapping
+from dataclasses import fields
 from pathlib import Path
 from typing import get_args
 
@@ -11,7 +12,7 @@ import pyarrow.parquet as pq
 
 from robin_contracts.canonical import sha256_v1
 from robin_contracts.output_contracts import DetectionPolicy, DetectionsContractId, TopKPolicy
-from robin_contracts.registry import TaxonRegistry
+from robin_contracts.registry import RegistryEntry, TaxonRegistry
 from robin_contracts.specs import Recipe
 from robin_contracts.work import InferenceWork, RecordingRef, recording_work_digest
 from robin_inference_engine import errors
@@ -46,12 +47,12 @@ DETECTIONS_SCHEMA = pa.schema(
     ]
 )
 
-# Typed from the detections schema, so joined columns come out with the declared types.
+_REGISTRY_ENTRY_FIELDS = frozenset(field.name for field in fields(RegistryEntry))
+
+# The detections columns a registry entry supplies, typed as the detections file declares
+# them, so joined columns come out with the declared types.
 REGISTRY_SCHEMA = pa.schema(
-    [
-        DETECTIONS_SCHEMA.field(name)
-        for name in ("label", "label_kind", "scientific_name", "common_name", "gbif_taxon_key")
-    ]
+    [field for field in DETECTIONS_SCHEMA if field.name in _REGISTRY_ENTRY_FIELDS]
 )
 
 
