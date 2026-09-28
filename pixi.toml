@@ -27,7 +27,8 @@ boundary = "pytest tests/boundary -v"
 imports = "python -c \"import robin_contracts, robin_inference_engine, robin_run_manager, robin_worker, robin_adapters\""
 test-contracts = "pytest contracts/tests -v"
 test-engine = "pytest inference_engine/tests -v"
-test = "pytest contracts/tests inference_engine/tests tests/boundary -v"
+test-adapters = "pytest adapters/tests -v"
+test = "pytest contracts/tests inference_engine/tests adapters/tests tests/boundary -v"
 
 [tasks.wheels]
 cmd = """

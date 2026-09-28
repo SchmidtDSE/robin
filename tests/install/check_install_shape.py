@@ -108,7 +108,12 @@ _register(
 _register(
     "adapters",
     install=("robin-adapters",),
-    required=("robin_adapters", "robin_contracts"),
+    required=(
+        "robin_adapters",
+        "robin_adapters.file_provider.local",
+        "robin_adapters.artifact_writer.local",
+        "robin_contracts",
+    ),
 )
 _register(
     "meta-all",
