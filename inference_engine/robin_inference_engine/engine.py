@@ -21,6 +21,7 @@ from robin_contracts.output_contracts import (
     ScoresContractId,
     ScoresRequest,
 )
+from robin_contracts.ports import ArtifactWriter, FileProvider
 from robin_contracts.protocols import Log, Model, ModelContext, noop
 from robin_contracts.records import WindowOutput
 from robin_contracts.registry import TaxonRegistry
@@ -55,7 +56,6 @@ from robin_inference_engine.artifacts.staging import StagedArtifact, checksum_fi
 from robin_inference_engine.construct_model import construct_model
 from robin_inference_engine.coverage import CoverageBuilder, check_completion_evidence
 from robin_inference_engine.load_registry import load_registry
-from robin_inference_engine.ports import ArtifactWriter, FileProvider
 from robin_inference_engine.validate_request import refuse_instance, refuse_request
 
 RESULT_CONTRACT_ID: ResultContractId = get_args(ResultContractId)[0]

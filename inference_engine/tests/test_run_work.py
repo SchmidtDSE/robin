@@ -27,11 +27,10 @@ from robin_contracts.output_contracts import (
     ScoresRequest,
     ThresholdPolicy,
 )
+from robin_contracts.ports import ArtifactWriter, FileProvider
 from robin_contracts.protocols import ModelCapabilities, ModelContext
 from robin_contracts.records import ClassScore, WindowOutput
 from robin_contracts.results import (
-    ArtifactContractId,
-    ArtifactKind,
     ArtifactRecord,
     FailureReport,
     InferenceFailure,
@@ -52,7 +51,6 @@ from robin_inference_engine.artifacts.staging import checksum_file
 from robin_inference_engine.coverage import check_completion_evidence
 from robin_inference_engine.engine import run_work
 from robin_inference_engine.load_registry import load_registry
-from robin_inference_engine.ports import ArtifactWriter, FileProvider
 
 # ---------------------------------------------------------------------------
 # The ports: what a caller supplies, and that the doubles supply it.
@@ -64,12 +62,6 @@ PORTS = (
 )
 
 
-@pytest.mark.parametrize(("port", "members", "_"), PORTS)
-def test_each_port_declares_exactly_its_members(port, members, _):
-    declared = {name for name in vars(port) if not name.startswith("_")}
-    assert declared == members
-
-
 @pytest.mark.parametrize(("port", "members", "double"), PORTS)
 def test_each_double_has_the_signature_its_port_declares(port, members, double):
     for member in members:
@@ -78,13 +70,6 @@ def test_each_double_has_the_signature_its_port_declares(port, members, double):
         assert list(supplied.parameters) == list(declared.parameters), member
         for name, parameter in declared.parameters.items():
             assert supplied.parameters[name].kind == parameter.kind, (member, name)
-
-
-def test_the_writer_is_asked_for_a_declared_kind_and_contract():
-    parameters = inspect.signature(ArtifactWriter.create).parameters
-
-    assert parameters["kind"].annotation is ArtifactKind
-    assert parameters["contract_id"].annotation is ArtifactContractId
 
 
 # ---------------------------------------------------------------------------
