@@ -114,13 +114,13 @@ def build_artifact(**overrides) -> ArtifactRecord:
     return ArtifactRecord(**(fields | overrides))
 
 
-def cover(recordings, **per_recording):
+def cover(recordings, detection_rows=0, **per_recording):
     """One coverage row per recording, each with one completed window."""
     builder = CoverageBuilder(recordings)
     for position, recording in enumerate(recordings):
         builder.begin_recording(position)
         builder.record(build_window(recording=recording, **per_recording))
-        builder.end_recording()
+        builder.end_recording(detection_rows=detection_rows)
     return builder.build()
 
 
@@ -247,6 +247,20 @@ def test_embedding_rows_count_only_the_windows_carrying_one():
     assert row.embedding_rows == 1
 
 
+def test_detection_rows_are_the_count_passed_when_the_recording_ends():
+    builder = CoverageBuilder(TWO)
+    builder.begin_recording(0)
+    builder.record(build_window(scores=(ClassScore("gull", 0.9), ClassScore("tern", 0.1))))
+    builder.end_recording(detection_rows=2)
+    builder.begin_recording(1)
+    builder.record(build_window(recording=TWO[1]))
+    builder.end_recording()
+    counted, defaulted = builder.build()
+
+    assert counted.detection_rows == 2
+    assert defaulted.detection_rows == 0
+
+
 def test_bounds_span_the_first_start_and_the_greatest_end():
     builder = CoverageBuilder(ONE)
     builder.begin_recording(0)
@@ -363,7 +377,7 @@ def test_a_requested_kind_may_have_no_artifacts():
 
 def test_no_artifact_has_a_kind_the_work_did_not_request():
     work = build_work()
-    coverage = cover(work.recordings)
+    coverage = cover(work.recordings, detection_rows=1)
 
     detections = build_artifact(kind="detections", contract_id="robin.detections.parquet/1")
     unrequested = build_success(
@@ -420,13 +434,18 @@ def test_a_consistent_result_passes():
             ),
         ),
     )
-    coverage = cover(work.recordings)
+    coverage = cover(work.recordings, detection_rows=1)
     success = build_success(
         work,
         coverage=coverage,
         artifacts=(
             *scores_records(coverage),
-            build_artifact(kind="detections", contract_id="robin.detections.parquet/1"),
+            *(
+                build_artifact(
+                    kind="detections", contract_id="robin.detections.parquet/1", value=row.value
+                )
+                for row in coverage
+            ),
         ),
         resolved_detection_policy=ThresholdPolicy(min_score=0.5),
     )

@@ -62,7 +62,6 @@ RECIPE_MODEL_DISAGREES = "recipe_model_disagrees"
 REGISTRY_REQUIRED = "registry_required"
 REGISTRY_FINGERPRINT_MISMATCH = "registry_fingerprint_mismatch"
 HEAD_CLASS_NOT_IN_REGISTRY = "head_class_not_in_registry"
-DETECTIONS_NOT_AVAILABLE = "detections_not_available"
 EMBEDDING_INPUT_NOT_AVAILABLE = "embedding_input_not_available"
 
 VALIDATE_REQUEST_FAILURES = (
@@ -81,7 +80,6 @@ VALIDATE_REQUEST_FAILURES = (
     REGISTRY_REQUIRED,
     REGISTRY_FINGERPRINT_MISMATCH,
     HEAD_CLASS_NOT_IN_REGISTRY,
-    DETECTIONS_NOT_AVAILABLE,
     EMBEDDING_INPUT_NOT_AVAILABLE,
 )
 
@@ -193,6 +191,18 @@ WRITE_ARTIFACT_FAILURES = (
     EMBEDDING_VALUE_OUT_OF_STORAGE_DTYPE_RANGE,
     ARTIFACT_PUBLICATION_FAILED,
 )
+
+
+# ---------------------------------------------------------------------------
+# aggregate: a recording's scores the engine could not turn into detections.
+# ---------------------------------------------------------------------------
+
+AGGREGATE = "aggregate"
+
+UNMATCHED_LABELS = "unmatched_labels"
+AGGREGATION_FAILED = "aggregation_failed"
+
+AGGREGATE_FAILURES = (UNMATCHED_LABELS, AGGREGATION_FAILED)
 
 
 # ---------------------------------------------------------------------------

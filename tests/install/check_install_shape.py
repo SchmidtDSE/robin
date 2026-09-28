@@ -92,7 +92,7 @@ _register(
     "inference-engine",
     install=("robin-inference-engine",),
     required=("robin_inference_engine", "robin_contracts"),
-    runtimes=("pyarrow",),
+    runtimes=("pyarrow", "duckdb"),
 )
 _register(
     "run-manager",
@@ -103,7 +103,7 @@ _register(
     "worker",
     install=("robin-worker",),
     required=_ROBIN_COMPONENTS,
-    runtimes=("pyarrow",),
+    runtimes=("pyarrow", "duckdb"),
 )
 _register(
     "adapters",
@@ -119,7 +119,7 @@ _register(
     "meta-all",
     install=("robin-bioacoustics[all]",),
     required=_ROBIN_COMPONENTS,
-    runtimes=("pyarrow",),
+    runtimes=("pyarrow", "duckdb"),
 )
 
 

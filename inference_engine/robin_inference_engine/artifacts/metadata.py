@@ -8,7 +8,7 @@ from collections.abc import Iterable, Mapping
 
 from robin_contracts.canonical import canonical_json_bytes
 from robin_contracts.cards import HeadCard, model_ref
-from robin_contracts.output_contracts import ScoresRequest
+from robin_contracts.output_contracts import DetectionPolicy, ScoresRequest
 from robin_contracts.results import ArtifactContractId
 from robin_contracts.specs import Recipe
 from robin_contracts.work import InferenceWork, RecordingRef, recording_work_digest
@@ -27,6 +27,8 @@ EMBEDDING_SOURCE_DTYPE_KEY = "robin.embedding_source_dtype"
 EMBEDDING_STORAGE_DTYPE_KEY = "robin.embedding_storage_dtype"
 BACKBONE_REF_KEY = "robin.backbone_ref"
 BACKBONE_CARD_DIGEST_KEY = "robin.backbone_card_digest"
+DETECTION_POLICY_KEY = "robin.detection_policy"
+SOURCE_ARTIFACTS_KEY = "robin.source_artifacts"
 
 # Every artifact carries these keys, whatever its contract.
 REQUIRED_KEYS: tuple[str, ...] = (
@@ -63,7 +65,7 @@ def required_metadata(
     registry_uri: str | None,
     registry_fingerprint: str | None,
 ) -> dict[bytes, bytes]:
-    """The provenance keys every window artifact carries, as Arrow metadata.
+    """The provenance keys every artifact carries, as Arrow metadata.
 
     The work is identified narrowed to `recording`, the one recording the file holds,
     so the header does not depend on which other recordings shared the work.
@@ -120,6 +122,21 @@ def score_metadata(request: ScoresRequest, *, score_domain: str) -> dict[bytes, 
     if request.retention == "top_k":
         values[SCORE_TOP_K_KEY] = repr(request.top_k)
     return _encode(values)
+
+
+def detection_metadata(
+    policy: DetectionPolicy, *, source_contract_id: str, source_checksum: str
+) -> dict[bytes, bytes]:
+    """The keys recording which policy selected the detections, and from which scores file."""
+    # The scores file is named by its bytes, not its uri: the uri is known only once it
+    # is published, and would make these bytes depend on where that is.
+    source = {"contract_id": source_contract_id, "checksum": source_checksum}
+    return _encode(
+        {
+            DETECTION_POLICY_KEY: canonical_json_bytes(policy).decode("utf-8"),
+            SOURCE_ARTIFACTS_KEY: canonical_json_bytes([source]).decode("utf-8"),
+        }
+    )
 
 
 def decode_metadata(raw: Mapping[bytes, bytes] | None) -> dict[str, str]:

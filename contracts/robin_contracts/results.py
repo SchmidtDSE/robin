@@ -70,6 +70,7 @@ class RecordingCoverage(BaseModel, frozen=True, extra="forbid"):
     windows_completed: _Count
     score_rows: _Count
     embedding_rows: _Count
+    detection_rows: _Count
     first_window_start_s: _Seconds | None = None
     last_window_end_s: _Seconds | None = None
     zero_window_reason: ZeroWindowReason | None = None
@@ -107,10 +108,13 @@ class RecordingCoverage(BaseModel, frozen=True, extra="forbid"):
                 f"recording {self._name()}: a recording that completed no window "
                 "declares why, and one that completed windows declares no reason"
             )
-        if self.windows_completed == 0 and (self.score_rows or self.embedding_rows):
+        if self.windows_completed == 0 and (
+            self.score_rows or self.embedding_rows or self.detection_rows
+        ):
             raise ValueError(
                 f"recording {self._name()} completed no window yet carries "
-                f"{self.score_rows} score and {self.embedding_rows} embedding rows"
+                f"{self.score_rows} score, {self.embedding_rows} embedding and "
+                f"{self.detection_rows} detection rows"
             )
         return self
 
@@ -120,6 +124,16 @@ class RecordingCoverage(BaseModel, frozen=True, extra="forbid"):
             raise ValueError(
                 f"recording {self._name()}: {self.embedding_rows} embedding rows from "
                 f"{self.windows_completed} completed windows"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_detection_row_count(self) -> "RecordingCoverage":
+        # Every detection is one of the recording's score rows.
+        if self.detection_rows > self.score_rows:
+            raise ValueError(
+                f"recording {self._name()}: {self.detection_rows} detection rows from "
+                f"{self.score_rows} score rows"
             )
         return self
 
@@ -210,25 +224,27 @@ class InferenceSuccess(BaseModel, frozen=True, extra="forbid"):
                     f"recording {name} has a {artifact.kind} artifact with no rows; "
                     "a recording with no rows of a kind has no file"
                 )
-        # Coverage has no detection count, so detections are checked above only.
-        held = {
+        artifact_rows = {
             (artifact.kind, artifact.namespace, artifact.value): artifact.rows
             for artifact in self.artifacts
-            if artifact.kind != "detections"
         }
-        counted = {
+        coverage_rows = {
             (kind, row.namespace, row.value): rows
             for row in self.coverage
-            for kind, rows in (("scores", row.score_rows), ("embeddings", row.embedding_rows))
+            for kind, rows in (
+                ("scores", row.score_rows),
+                ("embeddings", row.embedding_rows),
+                ("detections", row.detection_rows),
+            )
             if rows
         }
-        for kind, namespace, value in sorted(held.keys() | counted.keys()):
+        for kind, namespace, value in sorted(artifact_rows.keys() | coverage_rows.keys()):
             key = (kind, namespace, value)
-            if held.get(key) != counted.get(key):
+            if artifact_rows.get(key) != coverage_rows.get(key):
                 raise ValueError(
                     f"recording {_named(namespace, value)}: coverage counts "
-                    f"{counted.get(key, 0)} {kind} rows, and its {kind} artifact holds "
-                    f"{held.get(key, 'none')}"
+                    f"{coverage_rows.get(key, 0)} {kind} rows, and its {kind} artifact holds "
+                    f"{artifact_rows.get(key, 'none')}"
                 )
         return self
 

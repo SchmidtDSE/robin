@@ -7,7 +7,7 @@ import pytest
 
 from robin_contracts.cards import HeadCard, ModelCard, ModelRef, card_digest, model_ref
 from robin_contracts.embedding_transforms import L2Norm
-from robin_contracts.output_contracts import ScoresRequest
+from robin_contracts.output_contracts import ScoresRequest, ThresholdPolicy, TopKPolicy
 from robin_contracts.specs import AudioSpec, Recipe, RunnerResampled
 from robin_contracts.work import (
     REGISTRY_ROLE,
@@ -24,6 +24,7 @@ from robin_inference_engine.artifacts.metadata import (
     REGISTRY_KEYS,
     REQUIRED_KEYS,
     decode_metadata,
+    detection_metadata,
     embedding_metadata,
     require_metadata_keys,
     required_metadata,
@@ -245,6 +246,37 @@ def test_a_floor_round_trips_through_its_repr():
     stored = decode_metadata(score_metadata(request, score_domain="probability"))
 
     assert float(stored["robin.score_floor"]) == floor
+
+
+def test_detection_metadata_records_the_policy_and_the_scores_file_it_selected_from():
+    policy = ThresholdPolicy(min_score=0.1 + 0.2)
+
+    decoded = decode_metadata(
+        detection_metadata(
+            policy, source_contract_id="robin.scores.arrow/1", source_checksum=FILE_DIGEST
+        )
+    )
+
+    assert set(decoded) == {"robin.detection_policy", "robin.source_artifacts"}
+    assert ThresholdPolicy.model_validate_json(decoded["robin.detection_policy"]) == policy
+    # One scores file, named by its contract and bytes but not by where it was published.
+    assert json.loads(decoded["robin.source_artifacts"]) == [
+        {"contract_id": "robin.scores.arrow/1", "checksum": FILE_DIGEST}
+    ]
+
+
+def test_a_top_k_policy_with_no_floor_records_the_floor_as_null():
+    decoded = decode_metadata(
+        detection_metadata(
+            TopKPolicy(k=3), source_contract_id="robin.scores.arrow/1", source_checksum=FILE_DIGEST
+        )
+    )
+
+    assert json.loads(decoded["robin.detection_policy"]) == {
+        "kind": "top_k",
+        "k": 3,
+        "min_score": None,
+    }
 
 
 def test_every_key_and_value_is_utf8_bytes():

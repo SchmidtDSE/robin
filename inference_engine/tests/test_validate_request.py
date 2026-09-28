@@ -840,9 +840,6 @@ def test_every_refusal_code_is_reachable():
             refuse()
         raised.add(exc.value.code)
 
-    # run_work refuses these two itself, and its own tests reach them.
-    raised_by_the_engine = {
-        errors.DETECTIONS_NOT_AVAILABLE,
-        errors.EMBEDDING_INPUT_NOT_AVAILABLE,
-    }
+    # run_work refuses this one itself, and its own tests reach it.
+    raised_by_the_engine = {errors.EMBEDDING_INPUT_NOT_AVAILABLE}
     assert raised == set(errors.VALIDATE_REQUEST_FAILURES) - raised_by_the_engine

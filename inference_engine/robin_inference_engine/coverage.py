@@ -67,8 +67,13 @@ class CoverageBuilder:
             window.end if self._greatest_end is None else max(self._greatest_end, window.end)
         )
 
-    def end_recording(self, *, zero_window_reason: ZeroWindowReason | None = None) -> None:
-        """Close the open recording and build its row, refusing an unexplained zero."""
+    def end_recording(
+        self, *, zero_window_reason: ZeroWindowReason | None = None, detection_rows: int = 0
+    ) -> None:
+        """Close the open recording and build its row, refusing an unexplained zero.
+
+        `detection_rows` is passed in: detections are counted after the windows, not per window.
+        """
         if self._open_recording is None:
             raise RuntimeError("no recording is open to end")
         if self._windows_completed and zero_window_reason is not None:
@@ -92,6 +97,7 @@ class CoverageBuilder:
             windows_completed=self._windows_completed,
             score_rows=self._score_rows,
             embedding_rows=self._embedding_rows,
+            detection_rows=detection_rows,
             first_window_start_s=self._first_start,
             last_window_end_s=self._greatest_end,
             zero_window_reason=zero_window_reason,

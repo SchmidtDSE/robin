@@ -95,6 +95,7 @@ def build_coverage(**overrides) -> RecordingCoverage:
         "windows_completed": 2,
         "score_rows": 0,
         "embedding_rows": 0,
+        "detection_rows": 0,
         "first_window_start_s": 0.0,
         "last_window_end_s": 6.0,
     }
@@ -228,7 +229,10 @@ def test_window_bounds_are_null_exactly_when_no_window_completed(
         build_coverage(**fields)
 
 
-@pytest.mark.parametrize("overrides", [{"score_rows": 1}, {"embedding_rows": 1}])
+@pytest.mark.parametrize(
+    "overrides",
+    [{"score_rows": 1}, {"embedding_rows": 1}, {"detection_rows": 1}],
+)
 def test_a_recording_with_no_windows_carries_no_rows(overrides):
     with pytest.raises(ValidationError):
         build_coverage(
@@ -238,6 +242,22 @@ def test_a_recording_with_no_windows_carries_no_rows(overrides):
             zero_window_reason="shorter_than_window",
             **overrides,
         )
+
+
+def test_detection_rows_are_required():
+    fields = build_coverage().model_dump()
+    del fields["detection_rows"]
+
+    with pytest.raises(ValidationError, match="detection_rows"):
+        RecordingCoverage(**fields)
+
+
+def test_detection_rows_never_exceed_score_rows():
+    # Every detection is one of the recording's score rows.
+    assert build_coverage(score_rows=3, detection_rows=3).detection_rows == 3
+
+    with pytest.raises(ValidationError, match=re.escape("('soundhub', '42')")):
+        build_coverage(score_rows=3, detection_rows=4)
 
 
 def test_embedding_rows_never_exceed_completed_windows():
@@ -268,6 +288,7 @@ def test_window_bounds_must_be_finite_and_ordered(first, last):
         {"windows_completed": -1},
         {"score_rows": -1},
         {"embedding_rows": -1},
+        {"detection_rows": -1},
     ],
 )
 def test_negative_counts_are_refused(overrides):
@@ -393,6 +414,64 @@ def test_each_embeddings_record_holds_its_recordings_embedding_rows():
         )
 
 
+def test_each_detections_record_holds_its_recordings_detection_rows():
+    coverage = (
+        build_coverage(value="42", score_rows=4, detection_rows=2),
+        build_coverage(value="43", score_rows=4, detection_rows=1),
+    )
+    fields = {
+        "coverage": coverage,
+        "resolved_scores_request": build_scores_request(),
+        "resolved_detection_policy": ThresholdPolicy(min_score=0.5),
+    }
+    scores = (build_artifact(value="42", rows=4), build_artifact(value="43", rows=4))
+
+    success = build_success(
+        artifacts=(
+            *scores,
+            build_detections_artifact(value="42", rows=2),
+            build_detections_artifact(value="43", rows=1),
+        ),
+        **fields,
+    )
+
+    assert [artifact.rows for artifact in success.artifacts] == [4, 4, 2, 1]
+
+    with pytest.raises(ValidationError, match=re.escape("('soundhub', '43')")):
+        build_success(
+            artifacts=(
+                *scores,
+                build_detections_artifact(value="42", rows=2),
+                build_detections_artifact(value="43", rows=2),
+            ),
+            **fields,
+        )
+
+
+def test_a_detection_count_and_a_detections_record_come_together():
+    fields = {
+        "resolved_scores_request": build_scores_request(),
+        "resolved_detection_policy": ThresholdPolicy(min_score=0.5),
+    }
+    scores = build_artifact(rows=2)
+
+    # A count with no record.
+    with pytest.raises(ValidationError, match="detections"):
+        build_success(
+            artifacts=(scores,),
+            coverage=(build_coverage(score_rows=2, detection_rows=1),),
+            **fields,
+        )
+
+    # A record with no count.
+    with pytest.raises(ValidationError, match="detections"):
+        build_success(
+            artifacts=(scores, build_detections_artifact(rows=1)),
+            coverage=(build_coverage(score_rows=2, detection_rows=0),),
+            **fields,
+        )
+
+
 def test_a_recording_counting_rows_of_a_kind_has_a_record_of_that_kind():
     assert build_success(coverage=(build_coverage(embedding_rows=0),)).artifacts == ()
 
@@ -477,7 +556,7 @@ def test_a_recording_has_at_most_one_record_per_kind():
 def test_a_record_requires_the_resolved_request_for_its_kind():
     scores = build_artifact(rows=2)
     detections = build_detections_artifact(rows=1)
-    coverage = (build_coverage(score_rows=2),)
+    coverage = (build_coverage(score_rows=2, detection_rows=1),)
     policy = ThresholdPolicy(min_score=0.5)
 
     with pytest.raises(ValidationError):

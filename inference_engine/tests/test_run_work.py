@@ -2,10 +2,14 @@
 
 import hashlib
 import inspect
+import json
 import tempfile
 from pathlib import Path
 
 import numpy as np
+import pyarrow as pa
+import pyarrow.dataset as ds
+import pyarrow.parquet as pq
 import pytest
 
 from doubles import (
@@ -44,8 +48,9 @@ from robin_contracts.work import (
     recording_work_digest,
     work_digest,
 )
-from robin_inference_engine import engine, errors
+from robin_inference_engine import detections, engine, errors
 from robin_inference_engine.artifacts.embeddings import read_embeddings
+from robin_inference_engine.artifacts.metadata import decode_metadata
 from robin_inference_engine.artifacts.scores import read_scores
 from robin_inference_engine.artifacts.staging import checksum_file
 from robin_inference_engine.coverage import check_completion_evidence
@@ -216,21 +221,6 @@ def assert_nothing_constructed(rig: Rig) -> None:
 # ---------------------------------------------------------------------------
 # Refusals before any model instance exists.
 # ---------------------------------------------------------------------------
-
-
-def test_a_detections_request_is_refused_before_anything_is_fetched(rig):
-    detections = DetectionsRequest(
-        contract_id="robin.detections.parquet/1", policy=ThresholdPolicy(min_score=0.5)
-    )
-    work = rig.work(outputs=(scores_request(), detections))
-
-    result = rig.run(work)
-
-    failure_of(
-        result, work, code=errors.DETECTIONS_NOT_AVAILABLE, stage=errors.VALIDATE_REQUEST
-    )
-    assert rig.calls == []
-    assert_nothing_constructed(rig)
 
 
 def test_an_embedding_artifact_input_is_refused_before_anything_is_fetched(rig):
@@ -519,6 +509,10 @@ def published_files(rig: Rig) -> set[str]:
 
 
 def rows_of(rig: Rig, record: ArtifactRecord) -> list[dict]:
+    if record.kind == "detections":
+        path = published(rig, record)
+        assert checksum_file(path) == record.checksum
+        return pq.read_table(path).to_pylist()
     read = read_scores if record.kind == "scores" else read_embeddings
     with read(published(rig, record), expected_checksum=record.checksum) as stream:
         return [row for batch in stream.batches for row in batch.to_pylist()]
@@ -536,7 +530,11 @@ def success_of(rig: Rig, result, work: InferenceWork) -> InferenceSuccess:
         (one.namespace, one.value) for one in work.recordings
     ]
     counted = {
-        (row.namespace, row.value): {"scores": row.score_rows, "embeddings": row.embedding_rows}
+        (row.namespace, row.value): {
+            "scores": row.score_rows,
+            "embeddings": row.embedding_rows,
+            "detections": row.detection_rows,
+        }
         for row in result.coverage
     }
     # A record for every recording and kind with rows, holding exactly those rows.
@@ -553,6 +551,12 @@ def success_of(rig: Rig, result, work: InferenceWork) -> InferenceSuccess:
         assert len(rows_of(rig, record)) == record.rows
     requested_scores = any(isinstance(one, ScoresRequest) for one in work.outputs)
     assert (result.resolved_scores_request is not None) == requested_scores
+    requested_detections = next(
+        (one for one in work.outputs if isinstance(one, DetectionsRequest)), None
+    )
+    assert result.resolved_detection_policy == (
+        requested_detections.policy if requested_detections is not None else None
+    )
     check_completion_evidence(work, result)
     return result
 
@@ -795,6 +799,191 @@ def test_a_recordings_file_does_not_depend_on_its_batch(rig, kind):
     )
     assert (first_r.uri, first_r.checksum) == (second_r.uri, second_r.checksum)
     assert writer.replayed == [location.as_uri()]
+
+
+# ---------------------------------------------------------------------------
+# Detections, selected from each recording's scores file.
+# ---------------------------------------------------------------------------
+
+# One class of each kind: a resolved taxon, an organism with no key, and a sound.
+TAXA_CSV = (
+    b"class_index,label,label_kind,scientific_name,common_name,gbif_taxon_key\n"
+    b"0,owl,taxon,Strix varia,Barred Owl,2497921\n"
+    b"1,rain,non_taxonomic,,,\n"
+    b"2,spotted,unresolved,Strix occidentalis caurina,Northern Spotted Owl,\n"
+)
+POLICY = ThresholdPolicy(min_score=0.5)
+
+
+@pytest.fixture
+def taxa_rig(tmp_path) -> Rig:
+    return Rig(tmp_path, registry_csv=TAXA_CSV)
+
+
+def detections_request(policy=POLICY) -> DetectionsRequest:
+    return DetectionsRequest(contract_id="robin.detections.parquet/1", policy=policy)
+
+
+def taxa_window(start: float, owl: float, rain: float, spotted: float, **kwargs) -> WindowOutput:
+    """A window scoring every class, as full retention requires."""
+    scores = (ClassScore("owl", owl), ClassScore("rain", rain), ClassScore("spotted", spotted))
+    return WindowOutput(start=start, end=start + 3.0, scores=scores, **kwargs)
+
+
+def test_each_recording_selecting_something_gets_one_detections_file(taxa_rig):
+    rig = taxa_rig
+    work = rig.work(recordings=2, outputs=(scores_request(), detections_request()))
+    model = rig.model(
+        [
+            [taxa_window(0.0, 0.9, 0.6, 0.7), taxa_window(3.0, 0.1, 0.2, 0.5)],
+            [taxa_window(0.0, 0.1, 0.2, 0.3)],
+        ]
+    )
+
+    result = success_of(rig, rig.run(work, model), work)
+
+    record = artifact(result, "detections")
+    assert [(one.kind, one.value) for one in result.artifacts] == [
+        ("scores", "0"),
+        ("detections", "0"),
+        ("scores", "1"),
+    ]
+    assert record.rows == result.coverage[0].detection_rows == 4
+    assert result.coverage[1].detection_rows == 0
+    assert result.resolved_detection_policy == POLICY
+    assert artifact_path("detections", "test", "1") not in published_files(rig)
+    rows = rows_of(rig, record)
+    columns = ("window_start_s", "rank", "label", "label_kind", "gbif_taxon_key")
+    assert [tuple(row[name] for name in columns) for row in rows] == [
+        (0.0, 1, "owl", "taxon", 2497921),
+        (0.0, 2, "spotted", "unresolved", None),
+        (0.0, 3, "rain", "non_taxonomic", None),
+        (3.0, 1, "spotted", "unresolved", None),
+    ]
+    assert rows[1]["scientific_name"] == "Strix occidentalis caurina"
+    assert rows[2]["scientific_name"] is None
+
+
+def test_a_detections_header_names_the_scores_file_it_was_selected_from(taxa_rig):
+    rig = taxa_rig
+    work = rig.work(outputs=(scores_request(), detections_request()))
+
+    result = success_of(rig, rig.run(work, rig.model([[taxa_window(0.0, 0.9, 0.1, 0.1)]])), work)
+
+    scores, record = artifact(result, "scores"), artifact(result, "detections")
+    stored = decode_metadata(pq.read_schema(published(rig, record)).metadata)
+    assert stored["robin.contract"] == "robin.detections.parquet/1"
+    assert ThresholdPolicy.model_validate_json(stored["robin.detection_policy"]) == POLICY
+    assert json.loads(stored["robin.source_artifacts"]) == [
+        {"contract_id": scores.contract_id, "checksum": scores.checksum}
+    ]
+    assert stored["robin.recording_work_digest"] == recording_work_digest(
+        work, work.recordings[0]
+    )
+    # The retention keys describe the scores the rows were ranked among.
+    assert stored["robin.score_retention"] == "full"
+    assert stored["robin.registry_fingerprint"] == result.registry_fingerprint
+
+
+def test_a_recording_with_no_windows_has_no_detections(taxa_rig):
+    rig = taxa_rig
+    recording = rig.build.recording("0", duration_seconds=2.0)
+    work = rig.work(recordings=(recording,), outputs=(scores_request(), detections_request()))
+
+    result = success_of(rig, rig.run(work, rig.model(recipe=build_recipe(pad="drop"))), work)
+
+    assert result.artifacts == ()
+    assert result.coverage[0].detection_rows == 0
+    assert result.resolved_detection_policy == POLICY
+
+
+def test_a_recordings_detections_do_not_depend_on_its_batch(taxa_rig):
+    rig = taxa_rig
+    r, s_, t = (rig.build.recording(value) for value in ("r", "s", "t"))
+    outputs = (scores_request(), detections_request())
+    r_windows = [taxa_window(0.0, 0.9, 0.6, 0.7), taxa_window(3.0, 0.8, 0.1, 0.1)]
+    other = [taxa_window(0.0, 0.6, 0.6, 0.6)]
+    first_work = rig.work(recordings=(r, s_), outputs=outputs)
+    second_work = rig.work(recordings=(t, r), outputs=outputs)
+    writer = CopyingWriter(rig.destination, rig.calls)
+    location = rig.destination / artifact_path("detections", "test", "r")
+
+    first = rig.run(first_work, rig.model([r_windows, other]), artifacts=writer)
+    success_of(rig, first, first_work)
+    first_bytes = location.read_bytes()
+    first_ids = pq.read_table(location).column("detection_id").to_pylist()
+    second = rig.run(second_work, rig.model([other, r_windows]), artifacts=writer)
+    success_of(rig, second, second_work)
+
+    assert work_digest(first_work) != work_digest(second_work)
+    assert location.read_bytes() == first_bytes
+    assert pq.read_table(location).column("detection_id").to_pylist() == first_ids
+    assert location.as_uri() in writer.replayed
+
+
+def test_published_detections_read_as_one_dataset_naming_each_recording(taxa_rig):
+    rig = taxa_rig
+    recordings = (rig.build.recording("007"), rig.build.recording("x", namespace="other"))
+    work = rig.work(recordings=recordings, outputs=(scores_request(), detections_request()))
+    model = rig.model([[taxa_window(0.0, 0.9, 0.1, 0.1)], [taxa_window(0.0, 0.1, 0.8, 0.1)]])
+    success_of(rig, rig.run(work, model), work)
+
+    dataset = ds.dataset(
+        rig.destination / "detections",
+        format="parquet",
+        partitioning=ds.partitioning(
+            pa.schema([("recording_namespace", pa.string()), ("recording_value", pa.string())]),
+            flavor="hive",
+        ),
+    )
+    rows = dataset.to_table().to_pylist()
+
+    named = [(row["recording_namespace"], row["recording_value"], row["label"]) for row in rows]
+    assert sorted(named) == [
+        ("other", "x", "rain"),
+        ("test", "007", "owl"),
+    ]
+
+
+def test_a_failed_aggregation_fails_the_work_and_publishes_nothing(taxa_rig, monkeypatch):
+    rig = taxa_rig
+    monkeypatch.setattr(
+        detections,
+        "build_detections_sql",
+        lambda policy, *, recipe_fingerprint: ("SELECT label FROM nowhere", {}),
+    )
+    work = rig.work(recordings=2, outputs=(scores_request(), detections_request()))
+
+    result = rig.run(work, rig.model([[taxa_window(0.0, 0.9, 0.1, 0.1)]] * 2))
+
+    failure = failure_of(
+        result, work, code=errors.AGGREGATION_FAILED, stage=errors.AGGREGATE
+    )
+    assert (failure.namespace, failure.value) == ("test", "0")
+    assert not any(call[0] == "create" for call in rig.calls)
+    assert_failed_cleanly(rig, result)
+
+
+def test_scores_embeddings_and_detections_are_published_together(taxa_rig):
+    rig = taxa_rig
+    work = rig.work(
+        outputs=(scores_request(), embeddings_request(), detections_request())
+    )
+    embedding = np.ones(DIM, dtype=np.float32)
+    model = rig.model(
+        [
+            [
+                taxa_window(0.0, 0.9, 0.1, 0.1, embedding=embedding),
+                taxa_window(3.0, 0.6, 0.7, 0.1, embedding=embedding),
+            ]
+        ]
+    )
+
+    result = success_of(rig, rig.run(work, model), work)
+
+    assert [one.kind for one in result.artifacts] == ["scores", "embeddings", "detections"]
+    row = result.coverage[0]
+    assert (row.score_rows, row.embedding_rows, row.detection_rows) == (6, 2, 3)
 
 
 # ---------------------------------------------------------------------------

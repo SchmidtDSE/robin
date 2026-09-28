@@ -7,13 +7,18 @@ is a defect in the engine and is not caught.
 """
 
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import get_args
 
+import pyarrow as pa
+
 from robin_contracts.cards import model_ref
 from robin_contracts.inputs import AudioClip
 from robin_contracts.output_contracts import (
+    DetectionsContractId,
     DetectionsRequest,
     EmbeddingsContractId,
     EmbeddingsRequest,
@@ -47,6 +52,7 @@ from robin_inference_engine import errors
 from robin_inference_engine.accept_window import AcceptanceBoundary, AcceptedWindow
 from robin_inference_engine.artifacts.embeddings import EmbeddingsWriter
 from robin_inference_engine.artifacts.metadata import (
+    detection_metadata,
     embedding_metadata,
     required_metadata,
     score_metadata,
@@ -55,15 +61,32 @@ from robin_inference_engine.artifacts.scores import ScoresWriter
 from robin_inference_engine.artifacts.staging import StagedArtifact, checksum_file
 from robin_inference_engine.construct_model import construct_model
 from robin_inference_engine.coverage import CoverageBuilder, check_completion_evidence
+from robin_inference_engine.detections import registry_table, write_detections
 from robin_inference_engine.load_registry import load_registry
 from robin_inference_engine.validate_request import refuse_instance, refuse_request
 
 RESULT_CONTRACT_ID: ResultContractId = get_args(ResultContractId)[0]
 SCORES_CONTRACT_ID: ScoresContractId = get_args(ScoresContractId)[0]
 EMBEDDINGS_CONTRACT_ID: EmbeddingsContractId = get_args(EmbeddingsContractId)[0]
+DETECTIONS_CONTRACT_ID: DetectionsContractId = get_args(DetectionsContractId)[0]
 
 # A detail carries a message from code the engine does not own, which can be any size.
 DETAIL_LIMIT = 2000
+
+
+@dataclass(frozen=True, slots=True)
+class _Run:
+    """The work, its digest, the ports and the log, which every step of the run reads.
+
+    It holds only values fixed before the run starts, never anything the run creates.
+    """
+
+    work: InferenceWork
+    digest: str
+    model_files: FileProvider
+    audio: FileProvider
+    artifacts: ArtifactWriter
+    log: Log
 
 
 def run_work(
@@ -75,13 +98,18 @@ def run_work(
     log: Log = noop,
 ) -> InferenceResult:
     """Run every recording in `work` and return what was produced, or why it stopped."""
-    digest = work_digest(work)
+    run = _Run(
+        work=work,
+        digest=work_digest(work),
+        model_files=model_files,
+        audio=audio,
+        artifacts=artifacts,
+        log=log,
+    )
     try:
-        return _run(
-            work, digest, model_files=model_files, audio=audio, artifacts=artifacts, log=log
-        )
+        return _run(run)
     except errors.EngineError as error:
-        return _failure(digest, error)
+        return _failure(run.digest, error)
 
 
 def _failure(digest: str, error: errors.EngineError) -> InferenceFailure:
@@ -100,54 +128,24 @@ def _failure(digest: str, error: errors.EngineError) -> InferenceFailure:
     )
 
 
-def _run(
-    work: InferenceWork,
-    digest: str,
-    *,
-    model_files: FileProvider,
-    audio: FileProvider,
-    artifacts: ArtifactWriter,
-    log: Log,
-) -> InferenceResult:
-    _refuse_detections(work)
-    _refuse_embedding_input(work)
+def _run(run: _Run) -> InferenceResult:
+    _refuse_embedding_input(run.work)
     # One directory holds the model's scratch space and every staged artifact, so
     # removing it on the way out is the whole of the engine's own cleanup.
     with TemporaryDirectory(prefix="robin-work-") as temporary:
         fetched: list[Path] = []
-        failed = True
-        try:
-            result = _run_model(
-                work,
-                digest,
-                fetched=fetched,
-                root=Path(temporary),
-                model_files=model_files,
-                audio=audio,
-                artifacts=artifacts,
-                log=log,
-            )
-            failed = False
-            return result
-        finally:
-            # After clean_up, because the adapter may hold the files open until then.
-            releases = [_releasing_model_file(model_files, path) for path in fetched]
-            _finish(releases, failed=failed, log=log)
+        # After clean_up, because the adapter may hold the files open until then.
+        with _cleanup_on_exit(
+            lambda: [_releasing_model_file(run.model_files, path) for path in fetched],
+            log=run.log,
+        ):
+            return _run_model(run, fetched=fetched, root=Path(temporary))
 
 
-def _run_model(
-    work: InferenceWork,
-    digest: str,
-    *,
-    fetched: list[Path],
-    root: Path,
-    model_files: FileProvider,
-    audio: FileProvider,
-    artifacts: ArtifactWriter,
-    log: Log,
-) -> InferenceResult:
+def _run_model(run: _Run, *, fetched: list[Path], root: Path) -> InferenceResult:
     """Fetch and check everything the model needs, build it, run it, and clean it up."""
-    files = _fetch_model_files(work, model_files, fetched)
+    work = run.work
+    files = _fetch_model_files(work, run.model_files, fetched)
     registry = _load_registry(files)
     refuse_request(work, registry=registry)
 
@@ -160,109 +158,86 @@ def _run_model(
         settings=work.settings,
         scratch_dir=scratch_dir,
         emit_embeddings=_embeddings(work) is not None,
-        log=log,
+        log=run.log,
     )
     model = construct_model(ref=model_ref(work.model.card), context=context)
-    failed = True
-    try:
+    clean_up = _cleanup_step(model.clean_up, "clean_up", errors.MODEL_RUN_FAILED, errors.INFER)
+    with _cleanup_on_exit(lambda: [clean_up], log=run.log):
         refuse_instance(work, capabilities=model.capabilities, recipe=model.recipe)
         staging = root / "staging"
         staging.mkdir()
-        result = _infer(
-            work,
-            digest,
-            model=model,
-            registry=registry,
-            audio=audio,
-            artifacts=artifacts,
-            staging=staging,
-            log=log,
-        )
-        failed = False
-        return result
-    finally:
-        clean_up = _calling(model.clean_up, "clean_up", errors.MODEL_RUN_FAILED, errors.INFER)
-        _finish([clean_up], failed=failed, log=log)
+        return _infer(run, model=model, registry=registry, staging=staging)
 
 
 def _infer(
-    work: InferenceWork,
-    digest: str,
-    *,
-    model: Model,
-    registry: TaxonRegistry | None,
-    audio: FileProvider,
-    artifacts: ArtifactWriter,
-    staging: Path,
-    log: Log,
+    run: _Run, *, model: Model, registry: TaxonRegistry | None, staging: Path
 ) -> InferenceSuccess:
-    registry_uri = work.model.files[REGISTRY_ROLE].uri if registry is not None else None
-    registry_fingerprint = registry.fingerprint if registry is not None else None
-    scores = _scores(work)
+    work = run.work
+    outputs = _RecordingOutputs(work, model=model, registry=registry, staging=staging)
     boundary = AcceptanceBoundary(
         geometry=model.recipe.audio.geometry,
         capabilities=model.capabilities,
         recordings=work.recordings,
         registry=registry,
-        scores=scores,
+        scores=_scores(work),
         expect_embeddings=_embeddings(work) is not None,
     )
     coverage = CoverageBuilder(work.recordings)
-
-    def open_writers(position: int, recording: RecordingRef) -> _WindowWriters:
-        return _WindowWriters(
-            work,
-            recording,
-            model=model,
-            registry_uri=registry_uri,
-            registry_fingerprint=registry_fingerprint,
-            staging=staging / str(position),
-        )
-
     staged: list[StagedArtifact] = []
     for position, recording in enumerate(work.recordings):
         staged += _run_recording(
+            run,
             position,
             recording,
             model=model,
-            audio=audio,
             boundary=boundary,
             coverage=coverage,
-            open_writers=open_writers,
-            log=log,
+            outputs=outputs,
         )
-
     # Publishing waits for the last recording, so a work that fails while running
     # publishes nothing.
+    records = tuple(_publish(run.artifacts, one) for one in staged)
+    return _success(run, model=model, outputs=outputs, records=records, coverage=coverage)
 
+
+def _success(
+    run: _Run,
+    *,
+    model: Model,
+    outputs: "_RecordingOutputs",
+    records: tuple[ArtifactRecord, ...],
+    coverage: CoverageBuilder,
+) -> InferenceSuccess:
+    """The result of a completed work, checked against the work before it is returned."""
+    detections = outputs.detections
     success = InferenceSuccess(
         schema_version=RESULT_CONTRACT_ID,
-        work_digest=digest,
+        work_digest=run.digest,
         recipe=model.recipe,
-        model=work.model,
-        registry_uri=registry_uri,
-        registry_fingerprint=registry_fingerprint,
+        model=run.work.model,
+        registry_uri=outputs.registry_uri,
+        registry_fingerprint=outputs.registry_fingerprint,
         window_geometry=model.recipe.audio.geometry,
-        resolved_scores_request=scores,
-        artifacts=tuple(_publish(artifacts, one) for one in staged),
+        resolved_detection_policy=detections.policy if detections is not None else None,
+        resolved_scores_request=_scores(run.work),
+        artifacts=records,
         coverage=coverage.build(),
     )
-    check_completion_evidence(work, success)
+    check_completion_evidence(run.work, success)
     return success
 
 
 def _run_recording(
+    run: _Run,
     position: int,
     recording: RecordingRef,
     *,
     model: Model,
-    audio: FileProvider,
     boundary: AcceptanceBoundary,
     coverage: CoverageBuilder,
-    open_writers: Callable[[int, RecordingRef], "_WindowWriters"],
-    log: Log,
+    outputs: "_RecordingOutputs",
 ) -> tuple[StagedArtifact, ...]:
-    """Run one recording through the model, then always finish it.
+    """Run one recording through the model, then always clean up after it.
 
     Returns the recording's staged files that hold rows.
     """
@@ -270,10 +245,12 @@ def _run_recording(
     coverage.begin_recording(position)
     path: Path | None = None
     windows: Iterator[WindowOutput] | None = None
-    failed = True
-    try:
-        path = _fetch_audio(audio, recording)
-        with open_writers(position, recording) as writers:
+    with _cleanup_on_exit(
+        lambda: _recording_cleanup(model, run.audio, recording, path=path, windows=windows),
+        log=run.log,
+    ):
+        path = _fetch_audio(run.audio, recording)
+        with outputs.open_window_writers(position, recording) as writers:
             windows = _start(model, recording, AudioClip(path=path))
             accepted = 0
             for window in _each(windows, recording):
@@ -281,18 +258,18 @@ def _run_recording(
                 coverage.record(kept)
                 writers.write(kept)
                 accepted += 1
-            staged = writers.close()
+            staged = writers.finish()
+        detected = outputs.stage_detections(staged)
+        if detected is not None:
+            staged += (detected,)
         coverage.end_recording(
             zero_window_reason=None
             if accepted
-            else _zero_window_reason(recording, model.recipe.audio.geometry)
+            else _zero_window_reason(recording, model.recipe.audio.geometry),
+            detection_rows=detected.rows if detected is not None else 0,
         )
-        log(f"recording {errors.named(recording)}: {accepted} windows accepted")
-        failed = False
+        run.log(f"recording {errors.named(recording)}: {accepted} windows accepted")
         return staged
-    finally:
-        steps = _recording_cleanup(model, audio, recording, path=path, windows=windows)
-        _finish(steps, failed=failed, log=log)
 
 
 def _recording_cleanup(
@@ -309,10 +286,12 @@ def _recording_cleanup(
     close = getattr(windows, "close", None)
     if close is not None:
         steps.append(
-            _calling(close, "closing the run", errors.MODEL_RUN_FAILED, errors.INFER, recording)
+            _cleanup_step(
+                close, "closing the run", errors.MODEL_RUN_FAILED, errors.INFER, recording
+            )
         )
     steps.append(
-        _calling(
+        _cleanup_step(
             model.after_recording,
             "after_recording",
             errors.MODEL_RUN_FAILED,
@@ -322,7 +301,7 @@ def _recording_cleanup(
     )
     if path is not None:
         steps.append(
-            _calling(
+            _cleanup_step(
                 lambda: audio.release(path),
                 "release",
                 errors.AUDIO_UNAVAILABLE,
@@ -354,77 +333,157 @@ def _embeddings(work: InferenceWork) -> EmbeddingsRequest | None:
     return next((one for one in work.outputs if isinstance(one, EmbeddingsRequest)), None)
 
 
+def _detections(work: InferenceWork) -> DetectionsRequest | None:
+    return next((one for one in work.outputs if isinstance(one, DetectionsRequest)), None)
+
+
+# ---------------------------------------------------------------------------
+# Each recording's files: the window artifacts, then the detections selected from them.
+# ---------------------------------------------------------------------------
+
+
+class _RecordingOutputs:
+    """Opens each recording's window writers and stages its detections, with the headers all its
+    files share. Built once per work.
+    """
+
+    def __init__(
+        self,
+        work: InferenceWork,
+        *,
+        model: Model,
+        registry: TaxonRegistry | None,
+        staging: Path,
+    ) -> None:
+        self._work = work
+        self._model = model
+        self._staging = staging
+        self._scores = _scores(work)
+        self._embeddings = _embeddings(work)
+        self.registry_uri = work.model.files[REGISTRY_ROLE].uri if registry is not None else None
+        self.registry_fingerprint = registry.fingerprint if registry is not None else None
+        self.detections = _detections(work)
+        self._registry_table: pa.Table | None = None
+        if self.detections is not None:
+            if registry is None or self._scores is None:
+                raise RuntimeError(
+                    "detections were requested without a registry or the scores they select from"
+                )
+            self._registry_table = registry_table(registry)
+
+    def open_window_writers(self, position: int, recording: RecordingRef) -> "_WindowWriters":
+        """The recording's window writers, in a staging folder of its own."""
+        folder = self._staging / str(position)
+        folder.mkdir()
+        writers = _WindowWriters()
+        try:
+            if self._scores is not None:
+                writers.add(self._scores_writer(folder, recording))
+            if self._embeddings is not None:
+                writers.add(self._embeddings_writer(folder, recording))
+        except BaseException:
+            writers.release()
+            raise
+        return writers
+
+    def stage_detections(self, staged: tuple[StagedArtifact, ...]) -> StagedArtifact | None:
+        """The detections file selected from a recording's staged scores file.
+
+        Returns None when detections were not requested, the recording has no scores
+        file, or the policy selects nothing.
+        """
+        scores = next((one for one in staged if one.kind == "scores"), None)
+        if self.detections is None or self._registry_table is None or scores is None:
+            return None
+        folder = scores.path.parent
+        return write_detections(
+            scores,
+            folder / "detections.parquet",
+            work=self._work,
+            recipe=self._model.recipe,
+            policy=self.detections.policy,
+            registry=self._registry_table,
+            metadata=self._detections_header(scores),
+            temporary=folder,
+        )
+
+    def _scores_writer(self, folder: Path, recording: RecordingRef) -> ScoresWriter:
+        return ScoresWriter(
+            folder / "scores.arrow",
+            recording=recording,
+            metadata=self._header(SCORES_CONTRACT_ID, recording) | self._score_keys(),
+        )
+
+    def _embeddings_writer(self, folder: Path, recording: RecordingRef) -> EmbeddingsWriter:
+        capabilities = self._model.capabilities
+        # Stored at the recipe's width: it is inside the recipe fingerprint, and a
+        # request naming a different one was refused before inference.
+        storage_dtype = self._model.recipe.dtype
+        return EmbeddingsWriter(
+            folder / "embeddings.arrow",
+            recording=recording,
+            dim=capabilities.embedding_dim,
+            storage_dtype=storage_dtype,
+            metadata=self._header(EMBEDDINGS_CONTRACT_ID, recording)
+            | embedding_metadata(
+                self._work,
+                dim=capabilities.embedding_dim,
+                source_dtype=capabilities.embedding_dtype,
+                storage_dtype=storage_dtype,
+            ),
+        )
+
+    def _detections_header(self, scores: StagedArtifact) -> dict[bytes, bytes]:
+        if self.detections is None:
+            raise RuntimeError("no detections were requested, so there is no header for them")
+        return (
+            self._header(DETECTIONS_CONTRACT_ID, scores.recording)
+            # These describe the scores the detections were ranked among, not the selection.
+            | self._score_keys()
+            | detection_metadata(
+                self.detections.policy,
+                source_contract_id=scores.contract_id,
+                source_checksum=scores.checksum,
+            )
+        )
+
+    def _header(
+        self, contract_id: ArtifactContractId, recording: RecordingRef
+    ) -> dict[bytes, bytes]:
+        return required_metadata(
+            contract_id=contract_id,
+            work=self._work,
+            recording=recording,
+            recipe=self._model.recipe,
+            registry_uri=self.registry_uri,
+            registry_fingerprint=self.registry_fingerprint,
+        )
+
+    def _score_keys(self) -> dict[bytes, bytes]:
+        if self._scores is None:
+            raise RuntimeError("no scores were requested, so there are no score keys")
+        return score_metadata(self._scores, score_domain=self._model.capabilities.score_domain)
+
+
 # ---------------------------------------------------------------------------
 # The two window artifacts, written as windows are accepted.
 # ---------------------------------------------------------------------------
 
 
 class _WindowWriters:
-    """One recording's writers, one per requested kind, each holding an open file in
-    its own `staging` directory."""
+    """One recording's open writers, one per requested window kind."""
 
-    def __init__(
-        self,
-        work: InferenceWork,
-        recording: RecordingRef,
-        *,
-        model: Model,
-        registry_uri: str | None,
-        registry_fingerprint: str | None,
-        staging: Path,
-    ) -> None:
-        def shared(contract_id: ArtifactContractId) -> dict[bytes, bytes]:
-            return required_metadata(
-                contract_id=contract_id,
-                work=work,
-                recording=recording,
-                recipe=model.recipe,
-                registry_uri=registry_uri,
-                registry_fingerprint=registry_fingerprint,
-            )
-
-        capabilities = model.capabilities
-        staging.mkdir()
+    def __init__(self) -> None:
         self._writers: list[ScoresWriter | EmbeddingsWriter] = []
-        try:
-            scores = _scores(work)
-            if scores is not None:
-                self._writers.append(
-                    ScoresWriter(
-                        staging / "scores.arrow",
-                        recording=recording,
-                        metadata=shared(SCORES_CONTRACT_ID)
-                        | score_metadata(scores, score_domain=capabilities.score_domain),
-                    )
-                )
-            if _embeddings(work) is not None:
-                # Stored at the recipe's width: it is inside the recipe fingerprint,
-                # and a request naming a different one was refused before inference.
-                storage_dtype = model.recipe.dtype
-                self._writers.append(
-                    EmbeddingsWriter(
-                        staging / "embeddings.arrow",
-                        recording=recording,
-                        dim=capabilities.embedding_dim,
-                        storage_dtype=storage_dtype,
-                        metadata=shared(EMBEDDINGS_CONTRACT_ID)
-                        | embedding_metadata(
-                            work,
-                            dim=capabilities.embedding_dim,
-                            source_dtype=capabilities.embedding_dtype,
-                            storage_dtype=storage_dtype,
-                        ),
-                    )
-                )
-        except BaseException:
-            self._release()
-            raise
+
+    def add(self, writer: ScoresWriter | EmbeddingsWriter) -> None:
+        self._writers.append(writer)
 
     def write(self, window: AcceptedWindow) -> None:
         for writer in self._writers:
             writer.write(window)
 
-    def close(self) -> tuple[StagedArtifact, ...]:
+    def finish(self) -> tuple[StagedArtifact, ...]:
         """Finish every file, and keep only those holding rows.
 
         A recording with no rows of a kind has no file, so an empty one is deleted here
@@ -435,15 +494,16 @@ class _WindowWriters:
             empty.path.unlink()
         return tuple(one for one in staged if one.rows)
 
+    def release(self) -> None:
+        """Close every file handle, finished or not."""
+        for writer in self._writers:
+            writer.__exit__(None, None, None)
+
     def __enter__(self) -> "_WindowWriters":
         return self
 
     def __exit__(self, *exc: object) -> None:
-        self._release()
-
-    def _release(self) -> None:
-        for writer in self._writers:
-            writer.__exit__(None, None, None)
+        self.release()
 
 
 # ---------------------------------------------------------------------------
@@ -515,15 +575,6 @@ def _run_failure(recording: RecordingRef, exc: Exception) -> errors.EngineError:
 # ---------------------------------------------------------------------------
 # Requests this engine refuses.
 # ---------------------------------------------------------------------------
-
-
-def _refuse_detections(work: InferenceWork) -> None:
-    if any(isinstance(output, DetectionsRequest) for output in work.outputs):
-        raise errors.EngineError(
-            errors.DETECTIONS_NOT_AVAILABLE,
-            errors.VALIDATE_REQUEST,
-            "detections were requested, and this engine does not produce them",
-        )
 
 
 def _refuse_embedding_input(work: InferenceWork) -> None:
@@ -620,7 +671,7 @@ def _load_registry(files: dict[str, Path]) -> TaxonRegistry | None:
 
 
 def _releasing_model_file(model_files: FileProvider, path: Path) -> Callable[[], None]:
-    return _calling(
+    return _cleanup_step(
         lambda: model_files.release(path),
         f"releasing the model file {path}",
         errors.MODEL_FILE_UNAVAILABLE,
@@ -628,7 +679,7 @@ def _releasing_model_file(model_files: FileProvider, path: Path) -> Callable[[],
     )
 
 
-def _calling(
+def _cleanup_step(
     call: Callable[[], object],
     name: str,
     code: str,
@@ -648,7 +699,21 @@ def _calling(
     return step
 
 
-def _finish(steps: list[Callable[[], None]], *, failed: bool, log: Log) -> None:
+@contextmanager
+def _cleanup_on_exit(steps: Callable[[], list[Callable[[], None]]], *, log: Log) -> Iterator[None]:
+    """Run the cleanup `steps()` when the block ends, whether or not it raised.
+
+    `steps` is called at the end, so it sees whatever the block set up.
+    """
+    failed = True
+    try:
+        yield
+        failed = False
+    finally:
+        _run_cleanup_steps(steps(), failed=failed, log=log)
+
+
+def _run_cleanup_steps(steps: list[Callable[[], None]], *, failed: bool, log: Log) -> None:
     """Run every step, even after one fails.
 
     After an earlier failure, a failing step is logged and cannot replace the failure
