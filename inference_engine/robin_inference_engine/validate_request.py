@@ -10,17 +10,18 @@ from collections.abc import Iterator
 from typing import get_args
 
 from robin_contracts.cards import HeadCard, ModelCard, model_ref
-from robin_contracts.output_contracts import (
-    DetectionsRequest,
-    EmbeddingsRequest,
-    ScoresRequest,
-)
+from robin_contracts.output_contracts import ScoresRequest
 from robin_contracts.protocols import EmbeddingDtype, ModelCapabilities
 from robin_contracts.registry import TaxonRegistry
 from robin_contracts.specs import Recipe
 from robin_contracts.work import REGISTRY_ROLE, InferenceWork
 from robin_inference_engine import errors
 from robin_inference_engine.accept_window import PROBABILITY_RANGE
+from robin_inference_engine.requested_outputs import (
+    detections_request,
+    embeddings_request,
+    scores_request,
+)
 
 EMBEDDING_DTYPES: tuple[str, ...] = get_args(EmbeddingDtype)
 
@@ -43,7 +44,7 @@ def refuse_instance(
     """What only a configured instance can answer, once the factory has returned it."""
     card = work.model.card
     _refuse_a_recipe_for_another_model(card, recipe)
-    scores = _scores(work)
+    scores = scores_request(work)
     if scores is not None:
         _refuse_scores_the_instance_does_not_emit(capabilities)
         _refuse_an_unsupported_retention(scores, capabilities)
@@ -56,18 +57,6 @@ def refuse_instance(
     _refuse_an_embedding_precision_the_instance_will_not_emit(capabilities)
     _refuse_embeddings_the_instance_does_not_emit(work, capabilities)
     _refuse_a_storage_width_the_recipe_does_not_declare(work, recipe)
-
-
-def _scores(work: InferenceWork) -> ScoresRequest | None:
-    return next((one for one in work.outputs if isinstance(one, ScoresRequest)), None)
-
-
-def _embeddings(work: InferenceWork) -> EmbeddingsRequest | None:
-    return next((one for one in work.outputs if isinstance(one, EmbeddingsRequest)), None)
-
-
-def _detections(work: InferenceWork) -> DetectionsRequest | None:
-    return next((one for one in work.outputs if isinstance(one, DetectionsRequest)), None)
 
 
 def _refused(code: str, detail: str) -> errors.EngineError:
@@ -94,7 +83,7 @@ def _refuse_a_recipe_for_another_model(card: ModelCard | HeadCard, recipe: Recip
 def _refuse_embeddings_the_card_forbids(
     work: InferenceWork, card: ModelCard | HeadCard
 ) -> None:
-    if _embeddings(work) is None or not isinstance(card, ModelCard):
+    if embeddings_request(work) is None or not isinstance(card, ModelCard):
         return
     if not card.can_emit_embeddings:
         raise _refused(
@@ -105,7 +94,7 @@ def _refuse_embeddings_the_card_forbids(
 
 
 def _refuse_unlabelled_scores(work: InferenceWork) -> None:
-    if _scores(work) is None or REGISTRY_ROLE in work.model.files:
+    if scores_request(work) is None or REGISTRY_ROLE in work.model.files:
         return
     raise _refused(
         errors.REGISTRY_REQUIRED,
@@ -225,10 +214,10 @@ def _refuse_a_k_the_instance_does_not_apply(
 
 
 def _declared_floors(work: InferenceWork) -> Iterator[tuple[str, float | None]]:
-    scores = _scores(work)
+    scores = scores_request(work)
     if scores is not None:
         yield "the scores request", scores.min_score
-    detections = _detections(work)
+    detections = detections_request(work)
     if detections is not None:
         yield "the detection policy", detections.policy.min_score
 
@@ -322,7 +311,7 @@ def _refuse_an_embedding_precision_the_instance_will_not_emit(
 def _refuse_embeddings_the_instance_does_not_emit(
     work: InferenceWork, capabilities: ModelCapabilities
 ) -> None:
-    if _embeddings(work) is not None and not capabilities.emits_embeddings:
+    if embeddings_request(work) is not None and not capabilities.emits_embeddings:
         raise _refused(
             errors.EMBEDDINGS_NOT_EMITTED,
             "embeddings were requested but this instance declares "
@@ -335,7 +324,7 @@ def _refuse_a_storage_width_the_recipe_does_not_declare(
 ) -> None:
     # The recipe's dtype is inside the recipe fingerprint, so honoring the request
     # instead would let two works sharing one fingerprint produce different bytes.
-    embeddings = _embeddings(work)
+    embeddings = embeddings_request(work)
     if embeddings is None or embeddings.storage_dtype in (None, recipe.dtype):
         return
     raise _refused(

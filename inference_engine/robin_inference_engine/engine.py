@@ -13,25 +13,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import get_args
 
-import pyarrow as pa
-
 from robin_contracts.cards import model_ref
 from robin_contracts.inputs import AudioClip
-from robin_contracts.output_contracts import (
-    DetectionsContractId,
-    DetectionsRequest,
-    EmbeddingsContractId,
-    EmbeddingsRequest,
-    ResultContractId,
-    ScoresContractId,
-    ScoresRequest,
-)
+from robin_contracts.output_contracts import ResultContractId
 from robin_contracts.ports import ArtifactWriter, FileProvider
 from robin_contracts.protocols import Log, Model, ModelContext, noop
 from robin_contracts.records import WindowOutput
 from robin_contracts.registry import TaxonRegistry
 from robin_contracts.results import (
-    ArtifactContractId,
     ArtifactRecord,
     FailureReport,
     InferenceFailure,
@@ -49,26 +38,16 @@ from robin_contracts.work import (
     work_digest,
 )
 from robin_inference_engine import errors
-from robin_inference_engine.accept_window import AcceptanceBoundary, AcceptedWindow
-from robin_inference_engine.artifacts.embeddings import EmbeddingsWriter
-from robin_inference_engine.artifacts.metadata import (
-    detection_metadata,
-    embedding_metadata,
-    required_metadata,
-    score_metadata,
-)
-from robin_inference_engine.artifacts.scores import ScoresWriter
+from robin_inference_engine.accept_window import AcceptanceBoundary
 from robin_inference_engine.artifacts.staging import StagedArtifact, checksum_file
 from robin_inference_engine.construct_model import construct_model
 from robin_inference_engine.coverage import CoverageBuilder, check_completion_evidence
-from robin_inference_engine.detections import registry_table, write_detections
 from robin_inference_engine.load_registry import load_registry
+from robin_inference_engine.recording_outputs import RecordingOutputs
+from robin_inference_engine.requested_outputs import embeddings_request, scores_request
 from robin_inference_engine.validate_request import refuse_instance, refuse_request
 
 RESULT_CONTRACT_ID: ResultContractId = get_args(ResultContractId)[0]
-SCORES_CONTRACT_ID: ScoresContractId = get_args(ScoresContractId)[0]
-EMBEDDINGS_CONTRACT_ID: EmbeddingsContractId = get_args(EmbeddingsContractId)[0]
-DETECTIONS_CONTRACT_ID: DetectionsContractId = get_args(DetectionsContractId)[0]
 
 # A detail carries a message from code the engine does not own, which can be any size.
 DETAIL_LIMIT = 2000
@@ -157,7 +136,7 @@ def _run_model(run: _Run, *, fetched: list[Path], root: Path) -> InferenceResult
         files=files,
         settings=work.settings,
         scratch_dir=scratch_dir,
-        emit_embeddings=_embeddings(work) is not None,
+        emit_embeddings=embeddings_request(work) is not None,
         log=run.log,
     )
     model = construct_model(ref=model_ref(work.model.card), context=context)
@@ -173,14 +152,14 @@ def _infer(
     run: _Run, *, model: Model, registry: TaxonRegistry | None, staging: Path
 ) -> InferenceSuccess:
     work = run.work
-    outputs = _RecordingOutputs(work, model=model, registry=registry, staging=staging)
+    outputs = RecordingOutputs(work, model=model, registry=registry, staging=staging)
     boundary = AcceptanceBoundary(
         geometry=model.recipe.audio.geometry,
         capabilities=model.capabilities,
         recordings=work.recordings,
         registry=registry,
-        scores=_scores(work),
-        expect_embeddings=_embeddings(work) is not None,
+        scores=scores_request(work),
+        expect_embeddings=embeddings_request(work) is not None,
     )
     coverage = CoverageBuilder(work.recordings)
     staged: list[StagedArtifact] = []
@@ -204,7 +183,7 @@ def _success(
     run: _Run,
     *,
     model: Model,
-    outputs: "_RecordingOutputs",
+    outputs: RecordingOutputs,
     records: tuple[ArtifactRecord, ...],
     coverage: CoverageBuilder,
 ) -> InferenceSuccess:
@@ -219,7 +198,7 @@ def _success(
         registry_fingerprint=outputs.registry_fingerprint,
         window_geometry=model.recipe.audio.geometry,
         resolved_detection_policy=detections.policy if detections is not None else None,
-        resolved_scores_request=_scores(run.work),
+        resolved_scores_request=scores_request(run.work),
         artifacts=records,
         coverage=coverage.build(),
     )
@@ -235,7 +214,7 @@ def _run_recording(
     model: Model,
     boundary: AcceptanceBoundary,
     coverage: CoverageBuilder,
-    outputs: "_RecordingOutputs",
+    outputs: RecordingOutputs,
 ) -> tuple[StagedArtifact, ...]:
     """Run one recording through the model, then always clean up after it.
 
@@ -323,187 +302,6 @@ def _zero_window_reason(
     if duration is not None and window_count(duration, geometry) == 0:
         return "shorter_than_window"
     return None
-
-
-def _scores(work: InferenceWork) -> ScoresRequest | None:
-    return next((one for one in work.outputs if isinstance(one, ScoresRequest)), None)
-
-
-def _embeddings(work: InferenceWork) -> EmbeddingsRequest | None:
-    return next((one for one in work.outputs if isinstance(one, EmbeddingsRequest)), None)
-
-
-def _detections(work: InferenceWork) -> DetectionsRequest | None:
-    return next((one for one in work.outputs if isinstance(one, DetectionsRequest)), None)
-
-
-# ---------------------------------------------------------------------------
-# Each recording's files: the window artifacts, then the detections selected from them.
-# ---------------------------------------------------------------------------
-
-
-class _RecordingOutputs:
-    """Opens each recording's window writers and stages its detections, with the headers all its
-    files share. Built once per work.
-    """
-
-    def __init__(
-        self,
-        work: InferenceWork,
-        *,
-        model: Model,
-        registry: TaxonRegistry | None,
-        staging: Path,
-    ) -> None:
-        self._work = work
-        self._model = model
-        self._staging = staging
-        self._scores = _scores(work)
-        self._embeddings = _embeddings(work)
-        self.registry_uri = work.model.files[REGISTRY_ROLE].uri if registry is not None else None
-        self.registry_fingerprint = registry.fingerprint if registry is not None else None
-        self.detections = _detections(work)
-        self._registry_table: pa.Table | None = None
-        if self.detections is not None:
-            if registry is None or self._scores is None:
-                raise RuntimeError(
-                    "detections were requested without a registry or the scores they select from"
-                )
-            self._registry_table = registry_table(registry)
-
-    def open_window_writers(self, position: int, recording: RecordingRef) -> "_WindowWriters":
-        """The recording's window writers, in a staging folder of its own."""
-        folder = self._staging / str(position)
-        folder.mkdir()
-        writers = _WindowWriters()
-        try:
-            if self._scores is not None:
-                writers.add(self._scores_writer(folder, recording))
-            if self._embeddings is not None:
-                writers.add(self._embeddings_writer(folder, recording))
-        except BaseException:
-            writers.release()
-            raise
-        return writers
-
-    def stage_detections(self, staged: tuple[StagedArtifact, ...]) -> StagedArtifact | None:
-        """The detections file selected from a recording's staged scores file.
-
-        Returns None when detections were not requested, the recording has no scores
-        file, or the policy selects nothing.
-        """
-        scores = next((one for one in staged if one.kind == "scores"), None)
-        if self.detections is None or self._registry_table is None or scores is None:
-            return None
-        folder = scores.path.parent
-        return write_detections(
-            scores,
-            folder / "detections.parquet",
-            work=self._work,
-            recipe=self._model.recipe,
-            policy=self.detections.policy,
-            registry=self._registry_table,
-            metadata=self._detections_header(scores),
-            temporary=folder,
-        )
-
-    def _scores_writer(self, folder: Path, recording: RecordingRef) -> ScoresWriter:
-        return ScoresWriter(
-            folder / "scores.arrow",
-            recording=recording,
-            metadata=self._header(SCORES_CONTRACT_ID, recording) | self._score_keys(),
-        )
-
-    def _embeddings_writer(self, folder: Path, recording: RecordingRef) -> EmbeddingsWriter:
-        capabilities = self._model.capabilities
-        # Stored at the recipe's width: it is inside the recipe fingerprint, and a
-        # request naming a different one was refused before inference.
-        storage_dtype = self._model.recipe.dtype
-        return EmbeddingsWriter(
-            folder / "embeddings.arrow",
-            recording=recording,
-            dim=capabilities.embedding_dim,
-            storage_dtype=storage_dtype,
-            metadata=self._header(EMBEDDINGS_CONTRACT_ID, recording)
-            | embedding_metadata(
-                self._work,
-                dim=capabilities.embedding_dim,
-                source_dtype=capabilities.embedding_dtype,
-                storage_dtype=storage_dtype,
-            ),
-        )
-
-    def _detections_header(self, scores: StagedArtifact) -> dict[bytes, bytes]:
-        if self.detections is None:
-            raise RuntimeError("no detections were requested, so there is no header for them")
-        return (
-            self._header(DETECTIONS_CONTRACT_ID, scores.recording)
-            # These describe the scores the detections were ranked among, not the selection.
-            | self._score_keys()
-            | detection_metadata(
-                self.detections.policy,
-                source_contract_id=scores.contract_id,
-                source_checksum=scores.checksum,
-            )
-        )
-
-    def _header(
-        self, contract_id: ArtifactContractId, recording: RecordingRef
-    ) -> dict[bytes, bytes]:
-        return required_metadata(
-            contract_id=contract_id,
-            work=self._work,
-            recording=recording,
-            recipe=self._model.recipe,
-            registry_uri=self.registry_uri,
-            registry_fingerprint=self.registry_fingerprint,
-        )
-
-    def _score_keys(self) -> dict[bytes, bytes]:
-        if self._scores is None:
-            raise RuntimeError("no scores were requested, so there are no score keys")
-        return score_metadata(self._scores, score_domain=self._model.capabilities.score_domain)
-
-
-# ---------------------------------------------------------------------------
-# The two window artifacts, written as windows are accepted.
-# ---------------------------------------------------------------------------
-
-
-class _WindowWriters:
-    """One recording's open writers, one per requested window kind."""
-
-    def __init__(self) -> None:
-        self._writers: list[ScoresWriter | EmbeddingsWriter] = []
-
-    def add(self, writer: ScoresWriter | EmbeddingsWriter) -> None:
-        self._writers.append(writer)
-
-    def write(self, window: AcceptedWindow) -> None:
-        for writer in self._writers:
-            writer.write(window)
-
-    def finish(self) -> tuple[StagedArtifact, ...]:
-        """Finish every file, and keep only those holding rows.
-
-        A recording with no rows of a kind has no file, so an empty one is deleted here
-        and never reaches the writer port.
-        """
-        staged = tuple(writer.close() for writer in self._writers)
-        for empty in (one for one in staged if not one.rows):
-            empty.path.unlink()
-        return tuple(one for one in staged if one.rows)
-
-    def release(self) -> None:
-        """Close every file handle, finished or not."""
-        for writer in self._writers:
-            writer.__exit__(None, None, None)
-
-    def __enter__(self) -> "_WindowWriters":
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self.release()
 
 
 # ---------------------------------------------------------------------------
