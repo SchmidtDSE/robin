@@ -52,14 +52,14 @@ from robin_inference_engine.artifacts.staging import checksum_file
 from robin_inference_engine.coverage import check_completion_evidence
 from robin_inference_engine.engine import run_work
 from robin_inference_engine.load_registry import load_registry
-from robin_inference_engine.ports import ArtifactWriter, FileAcquisition
+from robin_inference_engine.ports import ArtifactWriter, FileProvider
 
 # ---------------------------------------------------------------------------
 # The ports: what a caller supplies, and that the doubles supply it.
 # ---------------------------------------------------------------------------
 
 PORTS = (
-    (FileAcquisition, {"fetch", "release"}, LocalFiles),
+    (FileProvider, {"fetch", "release"}, LocalFiles),
     (ArtifactWriter, {"create"}, CopyingWriter),
 )
 

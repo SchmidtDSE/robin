@@ -6,7 +6,7 @@ from typing import Protocol
 from robin_contracts.results import ArtifactContractId, ArtifactKind, ArtifactRecord
 
 
-class FileAcquisition(Protocol):
+class FileProvider(Protocol):
     """Makes the bytes at a uri available as a local file, and releases it after.
 
     The engine checks each model file `fetch` returns against its pinned digest. Audio

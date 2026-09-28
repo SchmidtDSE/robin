@@ -55,7 +55,7 @@ from robin_inference_engine.artifacts.staging import StagedArtifact, checksum_fi
 from robin_inference_engine.construct_model import construct_model
 from robin_inference_engine.coverage import CoverageBuilder, check_completion_evidence
 from robin_inference_engine.load_registry import load_registry
-from robin_inference_engine.ports import ArtifactWriter, FileAcquisition
+from robin_inference_engine.ports import ArtifactWriter, FileProvider
 from robin_inference_engine.validate_request import refuse_instance, refuse_request
 
 RESULT_CONTRACT_ID: ResultContractId = get_args(ResultContractId)[0]
@@ -69,8 +69,8 @@ DETAIL_LIMIT = 2000
 def run_work(
     work: InferenceWork,
     *,
-    model_files: FileAcquisition,
-    audio: FileAcquisition,
+    model_files: FileProvider,
+    audio: FileProvider,
     artifacts: ArtifactWriter,
     log: Log = noop,
 ) -> InferenceResult:
@@ -104,8 +104,8 @@ def _run(
     work: InferenceWork,
     digest: str,
     *,
-    model_files: FileAcquisition,
-    audio: FileAcquisition,
+    model_files: FileProvider,
+    audio: FileProvider,
     artifacts: ArtifactWriter,
     log: Log,
 ) -> InferenceResult:
@@ -141,8 +141,8 @@ def _run_model(
     *,
     fetched: list[Path],
     root: Path,
-    model_files: FileAcquisition,
-    audio: FileAcquisition,
+    model_files: FileProvider,
+    audio: FileProvider,
     artifacts: ArtifactWriter,
     log: Log,
 ) -> InferenceResult:
@@ -191,7 +191,7 @@ def _infer(
     *,
     model: Model,
     registry: TaxonRegistry | None,
-    audio: FileAcquisition,
+    audio: FileProvider,
     artifacts: ArtifactWriter,
     staging: Path,
     log: Log,
@@ -256,7 +256,7 @@ def _run_recording(
     recording: RecordingRef,
     *,
     model: Model,
-    audio: FileAcquisition,
+    audio: FileProvider,
     boundary: AcceptanceBoundary,
     coverage: CoverageBuilder,
     open_writers: Callable[[int, RecordingRef], "_WindowWriters"],
@@ -297,7 +297,7 @@ def _run_recording(
 
 def _recording_cleanup(
     model: Model,
-    audio: FileAcquisition,
+    audio: FileProvider,
     recording: RecordingRef,
     *,
     path: Path | None,
@@ -472,7 +472,7 @@ def _publish(artifacts: ArtifactWriter, staged: StagedArtifact) -> ArtifactRecor
         ) from exc
 
 
-def _fetch_audio(audio: FileAcquisition, recording: RecordingRef) -> Path:
+def _fetch_audio(audio: FileProvider, recording: RecordingRef) -> Path:
     try:
         return audio.fetch(recording.audio_uri)
     except Exception as exc:
@@ -542,7 +542,7 @@ def _refuse_embedding_input(work: InferenceWork) -> None:
 
 
 def _fetch_model_files(
-    work: InferenceWork, model_files: FileAcquisition, fetched: list[Path]
+    work: InferenceWork, model_files: FileProvider, fetched: list[Path]
 ) -> dict[str, Path]:
     """One verified local path per pinned role, fetched in sorted role order.
 
@@ -619,7 +619,7 @@ def _load_registry(files: dict[str, Path]) -> TaxonRegistry | None:
 # ---------------------------------------------------------------------------
 
 
-def _releasing_model_file(model_files: FileAcquisition, path: Path) -> Callable[[], None]:
+def _releasing_model_file(model_files: FileProvider, path: Path) -> Callable[[], None]:
     return _calling(
         lambda: model_files.release(path),
         f"releasing the model file {path}",
