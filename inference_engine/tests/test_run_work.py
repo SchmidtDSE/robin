@@ -3,6 +3,7 @@
 import hashlib
 import inspect
 import json
+import math
 import tempfile
 from pathlib import Path
 
@@ -22,7 +23,14 @@ from doubles import (
     installed_factory,
 )
 from robin_contracts.canonical import canonical_json_bytes
-from robin_contracts.cards import HeadCard, ModelCard, ModelRef, model_ref
+from robin_contracts.cards import (
+    AudioGeometry,
+    HeadCard,
+    InferenceParam,
+    ModelCard,
+    RunnerResampled,
+    model_ref,
+)
 from robin_contracts.embedding_transforms import Identity, L2Norm
 from robin_contracts.layout import artifact_path
 from robin_contracts.output_contracts import (
@@ -32,7 +40,7 @@ from robin_contracts.output_contracts import (
     ThresholdPolicy,
 )
 from robin_contracts.ports import ArtifactWriter, FileProvider
-from robin_contracts.protocols import ModelCapabilities, ModelContext
+from robin_contracts.protocols import ModelContext
 from robin_contracts.records import ClassScore, WindowOutput
 from robin_contracts.results import (
     ArtifactRecord,
@@ -40,7 +48,7 @@ from robin_contracts.results import (
     InferenceFailure,
     InferenceSuccess,
 )
-from robin_contracts.specs import AudioSpec, Recipe, RunnerResampled
+from robin_contracts.specs import recipe
 from robin_contracts.work import (
     REGISTRY_ROLE,
     EmbeddingArtifactInput,
@@ -83,47 +91,35 @@ def test_each_double_has_the_signature_its_port_declares(port, members, double):
 
 DIM = 4
 
-CARD = ModelCard(
-    model_name="test-model",
-    model_version="1",
-    runtime="none",
-    segment_duration=3.0,
-    sample_rate=16000,
-    min_detection_threshold=0.0,
-    can_emit_embeddings=True,
-    embedding_dim=DIM,
-)
-REF = model_ref(CARD)
-
-
-def build_recipe(*, model: ModelRef = REF, **audio_overrides) -> Recipe:
-    audio = {
-        "sample_rate": 16000,
-        "window": 3.0,
-        "hop": 3.0,
-        "downmix": "mean",
-        "resampler": RunnerResampled(algorithm="soxr_hq"),
-        "pad": "centre_crop_end_pad",
-    }
-    return Recipe(
-        model=model,
-        backend="none",
-        audio=AudioSpec(**(audio | audio_overrides)),
-        embedding_transform=Identity(),
-        dtype="float32",
-    )
-
-
-def build_capabilities(**overrides) -> ModelCapabilities:
+def build_card(*, pad: str = "centre_crop_end_pad", **overrides) -> ModelCard:
     fields = {
-        "emits_scores": True,
-        "emits_embeddings": True,
+        "model_name": "test-model",
+        "model_version": "1",
+        "runtime": "none",
+        "window_duration": 3.0,
+        "window_overlap": 0.0,
+        "sample_rate": 16000,
+        "min_detection_threshold": 0.0,
         "score_domain": "probability",
-        "supported_retention": frozenset({"full"}),
+        "audio": AudioGeometry(
+            downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad=pad
+        ),
+        "backend": "none",
+        "embedding_transform": Identity(),
+        "dtype": "float32",
+        # The setting every work WorkBuilder builds carries.
+        "inference_params": (InferenceParam(name="gain", type="float"),),
+        "can_emit_embeddings": True,
         "embedding_dim": DIM,
         "embedding_dtype": "float32",
     }
-    return ModelCapabilities(**(fields | overrides))
+    return ModelCard(**(fields | overrides))
+
+
+# A model that emits every label for every window.
+CARD = build_card()
+REF = model_ref(CARD)
+DROPPING_CARD = build_card(pad="drop")
 
 
 def scores_request() -> ScoresRequest:
@@ -157,14 +153,8 @@ class Rig:
             recordings = tuple(self.build.recording(str(n)) for n in range(recordings))
         return self.build.work(recordings, **({"outputs": (scores_request(),)} | overrides))
 
-    def model(self, script=(), *, recipe=None, capabilities=None, **kwargs) -> ScriptedModel:
-        return ScriptedModel(
-            recipe=recipe or build_recipe(model=model_ref(self.build.card)),
-            capabilities=capabilities or build_capabilities(),
-            script=script,
-            calls=self.calls,
-            **kwargs,
-        )
+    def model(self, script=(), **kwargs) -> ScriptedModel:
+        return ScriptedModel(script=script, calls=self.calls, **kwargs)
 
     def files(self, name: str, paths: dict[str, Path], **kwargs) -> LocalFiles:
         return LocalFiles(name, paths, self.calls, **kwargs)
@@ -433,45 +423,58 @@ def test_a_factory_that_raises_is_refused_and_nothing_is_cleaned_up(rig):
 
 
 # ---------------------------------------------------------------------------
-# Refusals once an instance exists: it is cleaned up before its files are released.
+# Refusals the card decides, before any model instance exists.
 # ---------------------------------------------------------------------------
 
 
-def construction_then_clean_up(rig: Rig) -> list[tuple[object, ...]]:
-    fetches = [
-        ("model_files", "fetch", rig.model_file_uri(role)) for role in sorted(rig.build.files)
-    ]
-    releases = [("model_files", "release", path) for path in rig.model_files.returned]
-    return fetches + [("clean_up",)] + releases
-
-
-def test_an_instance_contradicting_the_request_is_refused_and_cleaned_up(rig):
+def test_scores_from_a_card_that_emits_none_are_refused_before_construction(tmp_path):
+    rig = Rig(tmp_path, card=build_card(score_domain=None))
     work = rig.work()
-    silent = build_capabilities(
-        emits_scores=False, score_domain=None, supported_retention=frozenset()
-    )
 
-    result = rig.run(work, rig.model(capabilities=silent))
+    result = rig.run(work)
 
     failure_of(result, work, code=errors.SCORES_NOT_EMITTED, stage=errors.VALIDATE_REQUEST)
-    assert rig.calls == construction_then_clean_up(rig)
-    assert len(rig.contexts) == 1
+    assert_nothing_constructed(rig)
 
 
-def test_an_instance_whose_recipe_names_another_model_is_refused_and_cleaned_up(rig):
+def test_a_setting_the_card_does_not_declare_is_refused_before_construction(rig):
+    work = rig.work(settings={"gain": 1.0, "top_k": 5})
+
+    result = rig.run(work)
+
+    failure = failure_of(
+        result, work, code=errors.SETTING_UNDECLARED, stage=errors.VALIDATE_REQUEST
+    )
+    assert "top_k" in failure.detail
+    assert_nothing_constructed(rig)
+
+
+def test_an_explicit_storage_width_the_card_does_not_declare_is_refused_before_construction(rig):
+    request = EmbeddingsRequest(contract_id="robin.embeddings.arrow/1", storage_dtype="float16")
+    work = rig.work(outputs=(request,))
+
+    result = rig.run(work)
+
+    failure_of(result, work, code=errors.EMBEDDING_DTYPE_DISAGREES, stage=errors.VALIDATE_REQUEST)
+    assert_nothing_constructed(rig)
+
+
+def test_a_head_work_is_refused_before_construction(tmp_path):
+    head = HeadCard(
+        model_name="test-head",
+        model_version="1",
+        backbone=REF,
+        classes=("owl", "rain"),
+        required_embedding_transform=L2Norm(),
+    )
+    rig = Rig(tmp_path, card=head)
     work = rig.work()
-    stale = CARD.model_copy(update={"segment_duration": 5.0})
 
-    result = rig.run(work, rig.model(recipe=build_recipe(model=model_ref(stale))))
+    result = rig.run(work)
 
-    failure_of(result, work, code=errors.RECIPE_MODEL_DISAGREES, stage=errors.VALIDATE_REQUEST)
-    assert rig.calls == construction_then_clean_up(rig)
-    assert len(rig.contexts) == 1
+    failure_of(result, work, code=errors.HEAD_NOT_SUPPORTED, stage=errors.VALIDATE_REQUEST)
+    assert_nothing_constructed(rig)
 
-
-# ---------------------------------------------------------------------------
-# Windows, and what a completed result must say about them.
-# ---------------------------------------------------------------------------
 
 LABELS = ("owl", "rain")
 
@@ -577,8 +580,8 @@ def test_a_scores_only_work_writes_every_score(rig):
     assert result.registry_uri == rig.build.files[REGISTRY_ROLE].uri
     assert result.registry_fingerprint == rig.build.files[REGISTRY_ROLE].digest
     assert result.model == work.model
-    assert result.recipe == build_recipe()
-    assert result.window_geometry == build_recipe().audio.geometry
+    assert result.recipe == recipe(CARD)
+    assert result.window_geometry == recipe(CARD).audio.geometry
     rows = rows_of(rig, artifact(result, "scores"))
     assert [(row["window_start_s"], row["label"]) for row in rows[:2]] == [
         (0.0, "owl"),
@@ -656,7 +659,8 @@ def test_recordings_sharing_a_value_in_two_namespaces_stay_apart(rig):
 
 
 def test_the_model_is_built_from_the_verified_files_and_the_work(rig):
-    work = rig.work(outputs=(scores_request(), embeddings_request()))
+    resources = {"batch_size": 8, "device": "cpu"}
+    work = rig.work(outputs=(scores_request(), embeddings_request()), resources=resources)
     lines: list[str] = []
 
     rig.run(work, rig.model(script(1, embedding=True)), log=lines.append)
@@ -666,10 +670,125 @@ def test_the_model_is_built_from_the_verified_files_and_the_work(rig):
     assert context.registry is not None
     assert context.registry.fingerprint == rig.build.files[REGISTRY_ROLE].digest
     assert dict(context.files) == {role: rig.build.model_path(role) for role in rig.build.files}
-    assert context.settings == work.settings
+    assert context.settings == work.settings == {"gain": 1.0}
+    assert context.resources == resources
     assert context.emit_embeddings is True
     assert context.log == lines.append
     assert not context.scratch_dir.exists()
+
+
+# ---------------------------------------------------------------------------
+# What the request keeps, and what the card says the model emits.
+# ---------------------------------------------------------------------------
+
+
+def test_a_top_k_request_publishes_the_first_k_of_a_full_stream_per_window(taxa_rig):
+    rig = taxa_rig
+    request = ScoresRequest(
+        contract_id="robin.scores.arrow/1", retention="top_k", min_score=0.0, top_k=2
+    )
+    work = rig.work(outputs=(request,))
+    # The model emits every label in output order; owl and spotted tie in the first.
+    model = rig.model([[taxa_window(0.0, 0.5, 0.9, 0.5), taxa_window(3.0, 0.1, 0.2, 0.3)]])
+
+    result = success_of(rig, rig.run(work, model), work)
+
+    record = artifact(result, "scores")
+    rows = rows_of(rig, record)
+    assert [(row["window_start_s"], row["label"], row["score"]) for row in rows] == [
+        (0.0, "rain", pytest.approx(0.9)),
+        (0.0, "owl", pytest.approx(0.5)),
+        (3.0, "spotted", pytest.approx(0.3)),
+        (3.0, "rain", pytest.approx(0.2)),
+    ]
+    assert result.coverage[0].score_rows == 4
+    with read_scores(published(rig, record), expected_checksum=record.checksum) as stream:
+        header = stream.metadata
+    assert header["robin.score_retention"] == "top_k"
+    assert header["robin.score_top_k"] == "2"
+    assert header["robin.score_floor"] == "0.0"
+
+
+def test_a_thresholded_request_above_the_models_floor_publishes_only_what_reaches_it(rig):
+    request = ScoresRequest(
+        contract_id="robin.scores.arrow/1", retention="thresholded", min_score=0.5
+    )
+    work = rig.work(outputs=(request,))
+    scores = (ClassScore("owl", 0.4), ClassScore("rain", 0.5))
+
+    result = success_of(
+        rig, rig.run(work, rig.model([[WindowOutput(start=0.0, end=3.0, scores=scores)]])), work
+    )
+
+    rows = rows_of(rig, artifact(result, "scores"))
+    assert [(row["label"], row["score"]) for row in rows] == [("rain", 0.5)]
+
+
+def test_a_full_stream_missing_a_label_fails_the_work_under_a_reduced_request(rig):
+    request = ScoresRequest(
+        contract_id="robin.scores.arrow/1", retention="top_k", min_score=0.0, top_k=1
+    )
+    work = rig.work(outputs=(request,))
+    short = WindowOutput(start=0.0, end=3.0, scores=(ClassScore("owl", 0.9),))
+
+    result = rig.run(work, rig.model([[short]]))
+
+    failure_of(result, work, code=errors.INCOMPLETE_FULL_SCORES, stage=errors.ACCEPT_WINDOW)
+    assert_failed_cleanly(rig, result)
+
+
+def test_an_embeddings_only_work_without_a_registry_succeeds_and_drops_every_score(tmp_path):
+    rig = Rig(tmp_path, registry_csv=None)
+    work = rig.work(outputs=(embeddings_request(),))
+    # Scores no one asked for are dropped before they are checked, however malformed.
+    junk = (ClassScore("hawk", math.nan), ClassScore("hawk", 7.0))
+    embedding = np.ones(DIM, dtype=np.float32)
+    windows = [
+        WindowOutput(start=3.0 * n, end=3.0 * n + 3.0, scores=junk, embedding=embedding)
+        for n in range(2)
+    ]
+
+    result = success_of(rig, rig.run(work, rig.model([windows])), work)
+
+    assert result.registry_fingerprint is None
+    assert [one.kind for one in result.artifacts] == ["embeddings"]
+    assert (result.coverage[0].windows_completed, result.coverage[0].score_rows) == (2, 0)
+
+
+@pytest.mark.parametrize(
+    ("source", "storage"), [("float32", "float16"), ("float16", "float32")]
+)
+def test_embeddings_are_accepted_at_the_emitted_precision_and_stored_at_the_recipes(
+    tmp_path, source, storage
+):
+    rig = Rig(tmp_path, card=build_card(embedding_dtype=source, dtype=storage))
+    work = rig.work(outputs=(embeddings_request(),))
+    values = np.array([0.1, 0.2, 0.3, 0.4], dtype=source)
+    model = rig.model([[WindowOutput(start=0.0, end=3.0, embedding=values)]])
+
+    result = success_of(rig, rig.run(work, model), work)
+
+    record = artifact(result, "embeddings")
+    with read_embeddings(published(rig, record), expected_checksum=record.checksum) as stream:
+        header = stream.metadata
+        (batch,) = list(stream.batches)
+    assert header["robin.embedding_source_dtype"] == source
+    assert header["robin.embedding_storage_dtype"] == storage
+    stored = batch.column("embedding")
+    assert stored.type.value_type == pa.from_numpy_dtype(np.dtype(storage))
+    assert np.array_equal(
+        np.asarray(stored[0].values.to_numpy(zero_copy_only=False)), values.astype(storage)
+    )
+
+
+def test_an_embedding_at_the_storage_precision_rather_than_the_emitted_one_fails(tmp_path):
+    rig = Rig(tmp_path, card=build_card(embedding_dtype="float32", dtype="float16"))
+    work = rig.work(outputs=(embeddings_request(),))
+    stored_width = np.ones(DIM, dtype=np.float16)
+
+    result = rig.run(work, rig.model([[WindowOutput(start=0.0, end=3.0, embedding=stored_width)]]))
+
+    failure_of(result, work, code=errors.MALFORMED_EMBEDDING, stage=errors.ACCEPT_WINDOW)
 
 
 # ---------------------------------------------------------------------------
@@ -728,13 +847,10 @@ def test_each_recording_gets_its_own_file_of_each_kind(rig):
             )
 
 
-def test_a_recording_with_no_score_rows_still_gets_its_embeddings_file(rig):
-    request, capabilities = thresholded_rig_parts()
+def test_a_recording_with_no_score_rows_still_gets_its_embeddings_file(tmp_path):
+    rig, request = thresholded_rig(tmp_path)
     work = rig.work(recordings=2, outputs=(request, embeddings_request()))
-    model = rig.model(
-        [[window_at(0.0), window_at(3.0)], [window_at(0.0, score=None)]],
-        capabilities=capabilities,
-    )
+    model = rig.model([[window_at(0.0), window_at(3.0)], [window_at(0.0, score=None)]])
 
     result = success_of(rig, rig.run(work, model), work)
 
@@ -885,12 +1001,12 @@ def test_a_detections_header_names_the_scores_file_it_was_selected_from(taxa_rig
     assert stored["robin.registry_fingerprint"] == result.registry_fingerprint
 
 
-def test_a_recording_with_no_windows_has_no_detections(taxa_rig):
-    rig = taxa_rig
+def test_a_recording_with_no_windows_has_no_detections(tmp_path):
+    rig = Rig(tmp_path, card=DROPPING_CARD, registry_csv=TAXA_CSV)
     recording = rig.build.recording("0", duration_seconds=2.0)
     work = rig.work(recordings=(recording,), outputs=(scores_request(), detections_request()))
 
-    result = success_of(rig, rig.run(work, rig.model(recipe=build_recipe(pad="drop"))), work)
+    result = success_of(rig, rig.run(work), work)
 
     assert result.artifacts == ()
     assert result.coverage[0].detection_rows == 0
@@ -991,24 +1107,20 @@ def test_scores_embeddings_and_detections_are_published_together(taxa_rig):
 # ---------------------------------------------------------------------------
 
 
-def thresholded_rig_parts(floor: float = 0.5):
+def thresholded_rig(tmp_path: Path, floor: float = 0.5) -> tuple[Rig, ScoresRequest]:
+    """A rig whose model emits only the scores at or above `floor`, and a request for them."""
     request = ScoresRequest(
         contract_id="robin.scores.arrow/1", retention="thresholded", min_score=floor
     )
-    capabilities = build_capabilities(
-        supported_retention=frozenset({"thresholded"}), native_score_floor=floor
-    )
-    return request, capabilities
+    return Rig(tmp_path, card=build_card(min_detection_threshold=floor)), request
 
 
-def test_a_work_where_no_recording_has_score_rows_has_no_scores_records(rig):
+def test_a_work_where_no_recording_has_score_rows_has_no_scores_records(tmp_path):
     # Also shows that an accepted window carrying no scores counts as completed.
-    request, capabilities = thresholded_rig_parts()
+    rig, request = thresholded_rig(tmp_path)
     work = rig.work(recordings=2, outputs=(request,))
 
-    result = success_of(
-        rig, rig.run(work, rig.model(script(3, 2, scores=False), capabilities=capabilities)), work
-    )
+    result = success_of(rig, rig.run(work, rig.model(script(3, 2, scores=False))), work)
 
     assert result.artifacts == ()
     assert result.resolved_scores_request == request
@@ -1019,11 +1131,12 @@ def test_a_work_where_no_recording_has_score_rows_has_no_scores_records(rig):
     assert published_files(rig) == set()
 
 
-def test_a_recording_too_short_for_a_dropping_geometry_completes_with_its_reason(rig):
+def test_a_recording_too_short_for_a_dropping_geometry_completes_with_its_reason(tmp_path):
+    rig = Rig(tmp_path, card=DROPPING_CARD)
     recording = rig.build.recording("0", duration_seconds=2.0)
     work = rig.work(recordings=(recording,))
 
-    result = success_of(rig, rig.run(work, rig.model(recipe=build_recipe(pad="drop"))), work)
+    result = success_of(rig, rig.run(work), work)
 
     (row,) = result.coverage
     assert (row.windows_completed, row.zero_window_reason) == (0, "shorter_than_window")
@@ -1031,10 +1144,11 @@ def test_a_recording_too_short_for_a_dropping_geometry_completes_with_its_reason
     assert published_files(rig) == set()
 
 
-def test_zero_windows_from_a_recording_of_unknown_duration_are_unexplained(rig):
+def test_zero_windows_from_a_recording_of_unknown_duration_are_unexplained(tmp_path):
+    rig = Rig(tmp_path, card=DROPPING_CARD)
     work = rig.work()
 
-    result = rig.run(work, rig.model(recipe=build_recipe(pad="drop")))
+    result = rig.run(work)
 
     failure = failure_of(result, work, code=errors.UNEXPLAINED_ZERO_WINDOWS, stage=errors.INFER)
     assert (failure.namespace, failure.value) == ("test", "0")
@@ -1044,7 +1158,7 @@ def test_zero_windows_under_a_geometry_that_floors_at_one_are_unexplained(rig):
     recording = rig.build.recording("0", duration_seconds=2.0)
     work = rig.work(recordings=(recording,))
 
-    result = rig.run(work, rig.model(recipe=build_recipe(pad="centre_crop_end_pad")))
+    result = rig.run(work)
 
     failure_of(result, work, code=errors.UNEXPLAINED_ZERO_WINDOWS, stage=errors.INFER)
 
@@ -1088,12 +1202,12 @@ def test_a_window_the_boundary_refuses_fails_the_work_where_it_happened(rig):
     assert_failed_cleanly(rig, result)
 
 
-def test_a_vector_too_large_for_its_storage_width_fails_the_work(rig):
+def test_a_vector_too_large_for_its_storage_width_fails_the_work(tmp_path):
+    rig = Rig(tmp_path, card=build_card(dtype="float16"))
     work = rig.work(outputs=(embeddings_request(),))
-    recipe = build_recipe().model_copy(update={"dtype": "float16"})
     huge = WindowOutput(start=0.0, end=3.0, embedding=np.full(DIM, 1e6, dtype=np.float32))
 
-    result = rig.run(work, rig.model([[huge]], recipe=recipe))
+    result = rig.run(work, rig.model([[huge]]))
 
     failure = failure_of(
         result,
@@ -1288,12 +1402,8 @@ LEFT_BEHIND_CASES = {
         {"artifacts": CopyingWriter(rig.destination, rig.calls, fail_on=2)},
     ),
     "audio_unavailable": lambda rig: (rig.model(script(1)), {"audio": rig.files("audio", {})}),
-    "refused_instance": lambda rig: (
-        rig.model(
-            capabilities=build_capabilities(
-                emits_scores=False, score_domain=None, supported_retention=frozenset()
-            )
-        ),
+    "refused_window": lambda rig: (
+        rig.model([[WindowOutput(start=0.0, end=3.0, scores=(ClassScore("hawk", 0.5),))]]),
         {},
     ),
     "refused_before_construction": lambda rig: (

@@ -11,7 +11,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from robin_contracts.canonical import sha256_v1
-from robin_contracts.cards import ModelCard, model_ref
+from robin_contracts.cards import AudioGeometry, ModelCard, RunnerResampled, model_ref
 from robin_contracts.embedding_transforms import Identity
 from robin_contracts.output_contracts import (
     DetectionsRequest,
@@ -21,7 +21,7 @@ from robin_contracts.output_contracts import (
 )
 from robin_contracts.records import ClassScore
 from robin_contracts.registry import RegistryEntry, TaxonRegistry
-from robin_contracts.specs import AudioSpec, Recipe, RunnerResampled
+from robin_contracts.specs import AudioSpec, Recipe
 from robin_contracts.work import (
     REGISTRY_ROLE,
     AudioInput,
@@ -283,17 +283,25 @@ CARD = ModelCard(
     model_name="test-model",
     model_version="1",
     runtime="none",
-    segment_duration=3.0,
+    window_duration=3.0,
     sample_rate=16000,
     min_detection_threshold=0.0,
+    window_overlap=0.0,
+    score_domain="probability",
+    audio=AudioGeometry(
+        downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad="drop"
+    ),
+    backend="none",
+    embedding_transform=Identity(),
+    dtype="float32",
 )
 RECIPE = Recipe(
     model=model_ref(CARD),
     backend="none",
     audio=AudioSpec(
         sample_rate=16000,
-        window=3.0,
-        hop=3.0,
+        window_duration=3.0,
+        window_overlap=0.0,
         downmix="mean",
         resampler=RunnerResampled(algorithm="soxr_hq"),
         pad="drop",

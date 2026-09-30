@@ -18,10 +18,9 @@ from pathlib import Path
 from robin_contracts.cards import HeadCard, ModelCard
 from robin_contracts.inputs import Input
 from robin_contracts.layout import artifact_path
-from robin_contracts.protocols import ModelCapabilities, ModelContext
+from robin_contracts.protocols import ModelContext
 from robin_contracts.records import WindowOutput
 from robin_contracts.results import ArtifactContractId, ArtifactKind, ArtifactRecord
-from robin_contracts.specs import Recipe
 from robin_contracts.work import (
     REGISTRY_ROLE,
     AudioInput,
@@ -55,16 +54,12 @@ class ScriptedModel:
     def __init__(
         self,
         *,
-        recipe: Recipe,
-        capabilities: ModelCapabilities,
         script: Sequence[Sequence[WindowOutput | Exception]],
         calls: CallLog,
         reuse_buffer: bool = False,
         fail_after_recording: Exception | None = None,
         fail_clean_up: Exception | None = None,
     ) -> None:
-        self.recipe = recipe
-        self.capabilities = capabilities
         self._script = script
         self._calls = calls
         self._runs = 0

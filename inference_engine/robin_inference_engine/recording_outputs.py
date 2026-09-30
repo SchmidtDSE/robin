@@ -10,9 +10,9 @@ from robin_contracts.output_contracts import (
     EmbeddingsContractId,
     ScoresContractId,
 )
-from robin_contracts.protocols import Model
 from robin_contracts.registry import TaxonRegistry
 from robin_contracts.results import ArtifactContractId
+from robin_contracts.specs import Recipe
 from robin_contracts.work import REGISTRY_ROLE, InferenceWork, RecordingRef
 from robin_inference_engine.accept_window import AcceptedWindow
 from robin_inference_engine.artifacts.embeddings import EmbeddingsWriter
@@ -38,19 +38,20 @@ DETECTIONS_CONTRACT_ID: DetectionsContractId = get_args(DetectionsContractId)[0]
 
 class RecordingOutputs:
     """Opens each recording's window writers and stages its detections, with the headers all its
-    files share. Built once per work.
+    files share. Built once per work, whose card must be a backbone's.
     """
 
     def __init__(
         self,
         work: InferenceWork,
         *,
-        model: Model,
+        recipe: Recipe,
         registry: TaxonRegistry | None,
         staging: Path,
     ) -> None:
         self._work = work
-        self._model = model
+        self._card = work.model.card
+        self._recipe = recipe
         self._staging = staging
         self._scores = scores_request(work)
         self._embeddings = embeddings_request(work)
@@ -94,7 +95,7 @@ class RecordingOutputs:
             scores,
             folder / "detections.parquet",
             work=self._work,
-            recipe=self._model.recipe,
+            recipe=self._recipe,
             policy=self.detections.policy,
             registry=self._registry_table,
             metadata=self._detections_header(scores),
@@ -109,20 +110,20 @@ class RecordingOutputs:
         )
 
     def _embeddings_writer(self, folder: Path, recording: RecordingRef) -> EmbeddingsWriter:
-        capabilities = self._model.capabilities
-        # Stored at the recipe's width: it is inside the recipe fingerprint, and a
-        # request naming a different one was refused before inference.
-        storage_dtype = self._model.recipe.dtype
+        # Emitted at the card's embedding_dtype and stored at the recipe's width, which
+        # is inside the recipe fingerprint; a request naming a different storage width
+        # was refused before inference.
+        storage_dtype = self._recipe.dtype
         return EmbeddingsWriter(
             folder / "embeddings.arrow",
             recording=recording,
-            dim=capabilities.embedding_dim,
+            dim=self._card.embedding_dim,
             storage_dtype=storage_dtype,
             metadata=self._header(EMBEDDINGS_CONTRACT_ID, recording)
             | embedding_metadata(
                 self._work,
-                dim=capabilities.embedding_dim,
-                source_dtype=capabilities.embedding_dtype,
+                dim=self._card.embedding_dim,
+                source_dtype=self._card.embedding_dtype,
                 storage_dtype=storage_dtype,
             ),
         )
@@ -148,7 +149,7 @@ class RecordingOutputs:
             contract_id=contract_id,
             work=self._work,
             recording=recording,
-            recipe=self._model.recipe,
+            recipe=self._recipe,
             registry_uri=self.registry_uri,
             registry_fingerprint=self.registry_fingerprint,
         )
@@ -156,7 +157,7 @@ class RecordingOutputs:
     def _score_keys(self) -> dict[bytes, bytes]:
         if self._scores is None:
             raise RuntimeError("no scores were requested, so there are no score keys")
-        return score_metadata(self._scores, score_domain=self._model.capabilities.score_domain)
+        return score_metadata(self._scores, score_domain=self._card.score_domain)
 
 
 # ---------------------------------------------------------------------------

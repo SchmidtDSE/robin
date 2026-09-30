@@ -38,7 +38,7 @@ jobs:
       matrix:
         os: [ubuntu-latest]
         python: ["3.11", "3.12", "3.13"]
-        shape: [contracts, inference-engine, run-manager, worker, adapters, meta-all]
+        shape: [contracts, inference-engine, run-manager, worker, adapters, meta-all, models, meta-owl]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -51,6 +51,12 @@ jobs:
       # Resolve compiled dependencies for this runner's platform and Python.
       - run: >-
           python -m pip download --only-binary=:all: --dest .wheelcheck/dist .wheelcheck/dist/robin_*.whl
+      # The owl extra's runtime, which the download above leaves out.
+      - if: matrix.shape == 'meta-owl'
+        run: >-
+          python -m pip download --only-binary=:all: --dest .wheelcheck/dist --find-links .wheelcheck/dist
+          ".wheelcheck/dist/robin_bioacoustics-0.0.0-py3-none-any.whl[owl]"
+          ".wheelcheck/dist/robin_models-0.0.0-py3-none-any.whl[owl]"
       - run: python tests/install/check_install_shape.py ${{ matrix.shape }} --wheels-dir .wheelcheck/dist --venv .venv-shape
 
   install-shape-main:
@@ -69,31 +75,43 @@ jobs:
           - { os: ubuntu-latest,    python: "3.11", shape: worker }
           - { os: ubuntu-latest,    python: "3.11", shape: adapters }
           - { os: ubuntu-latest,    python: "3.11", shape: meta-all }
+          - { os: ubuntu-latest,    python: "3.11", shape: models }
+          - { os: ubuntu-latest,    python: "3.11", shape: meta-owl }
           - { os: ubuntu-latest,    python: "3.12", shape: contracts }
           - { os: ubuntu-latest,    python: "3.12", shape: inference-engine }
           - { os: ubuntu-latest,    python: "3.12", shape: run-manager }
           - { os: ubuntu-latest,    python: "3.12", shape: worker }
           - { os: ubuntu-latest,    python: "3.12", shape: adapters }
           - { os: ubuntu-latest,    python: "3.12", shape: meta-all }
+          - { os: ubuntu-latest,    python: "3.12", shape: models }
+          - { os: ubuntu-latest,    python: "3.12", shape: meta-owl }
           - { os: ubuntu-latest,    python: "3.13", shape: contracts }
           - { os: ubuntu-latest,    python: "3.13", shape: inference-engine }
           - { os: ubuntu-latest,    python: "3.13", shape: run-manager }
           - { os: ubuntu-latest,    python: "3.13", shape: worker }
           - { os: ubuntu-latest,    python: "3.13", shape: adapters }
           - { os: ubuntu-latest,    python: "3.13", shape: meta-all }
-          # macOS arm64 — contracts / inference-engine / run-manager / meta-all.
+          - { os: ubuntu-latest,    python: "3.13", shape: models }
+          - { os: ubuntu-latest,    python: "3.13", shape: meta-owl }
+          # macOS arm64 — contracts / inference-engine / run-manager / meta-all / models / meta-owl.
           - { os: macos-14,         python: "3.11", shape: contracts }
           - { os: macos-14,         python: "3.11", shape: inference-engine }
           - { os: macos-14,         python: "3.11", shape: run-manager }
           - { os: macos-14,         python: "3.11", shape: meta-all }
+          - { os: macos-14,         python: "3.11", shape: models }
+          - { os: macos-14,         python: "3.11", shape: meta-owl }
           - { os: macos-14,         python: "3.12", shape: contracts }
           - { os: macos-14,         python: "3.12", shape: inference-engine }
           - { os: macos-14,         python: "3.12", shape: run-manager }
           - { os: macos-14,         python: "3.12", shape: meta-all }
+          - { os: macos-14,         python: "3.12", shape: models }
+          - { os: macos-14,         python: "3.12", shape: meta-owl }
           - { os: macos-14,         python: "3.13", shape: contracts }
           - { os: macos-14,         python: "3.13", shape: inference-engine }
           - { os: macos-14,         python: "3.13", shape: run-manager }
           - { os: macos-14,         python: "3.13", shape: meta-all }
+          - { os: macos-14,         python: "3.13", shape: models }
+          - { os: macos-14,         python: "3.13", shape: meta-owl }
           # Linux arm64 — contracts / inference-engine only.
           - { os: ubuntu-24.04-arm, python: "3.11", shape: contracts }
           - { os: ubuntu-24.04-arm, python: "3.11", shape: inference-engine }
@@ -113,4 +131,10 @@ jobs:
       # Resolve compiled dependencies for this runner's platform and Python.
       - run: >-
           python -m pip download --only-binary=:all: --dest .wheelcheck/dist .wheelcheck/dist/robin_*.whl
+      # The owl extra's runtime, which the download above leaves out.
+      - if: matrix.shape == 'meta-owl'
+        run: >-
+          python -m pip download --only-binary=:all: --dest .wheelcheck/dist --find-links .wheelcheck/dist
+          ".wheelcheck/dist/robin_bioacoustics-0.0.0-py3-none-any.whl[owl]"
+          ".wheelcheck/dist/robin_models-0.0.0-py3-none-any.whl[owl]"
       - run: python tests/install/check_install_shape.py ${{ matrix.shape }} --wheels-dir .wheelcheck/dist --venv .venv-shape

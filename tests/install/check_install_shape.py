@@ -48,10 +48,15 @@ _ROBIN_COMPONENTS = (
     "robin_run_manager",
     "robin_worker",
     "robin_adapters",
+    "robin_models",
 )
 
 _HEAVY_RUNTIMES = (
     "tensorflow",
+    "tf_keras",
+    "sox_tensorflow",
+    "soundfile",
+    "PIL",
     "torch",
     "birdnet",
     "psycopg",
@@ -102,7 +107,13 @@ _register(
 _register(
     "worker",
     install=("robin-worker",),
-    required=_ROBIN_COMPONENTS,
+    required=(
+        "robin_contracts",
+        "robin_inference_engine",
+        "robin_run_manager",
+        "robin_worker",
+        "robin_adapters",
+    ),
     runtimes=("pyarrow", "duckdb"),
 )
 _register(
@@ -118,8 +129,39 @@ _register(
 _register(
     "meta-all",
     install=("robin-bioacoustics[all]",),
-    required=_ROBIN_COMPONENTS,
+    required=(
+        "robin_contracts",
+        "robin_inference_engine",
+        "robin_run_manager",
+        "robin_worker",
+        "robin_adapters",
+    ),
     runtimes=("pyarrow", "duckdb"),
+)
+_register(
+    "models",
+    install=("robin-models",),
+    required=("robin_models", "robin_models.owl", "robin_contracts"),
+)
+_register(
+    "meta-owl",
+    install=("robin-bioacoustics[owl]",),
+    required=(
+        "robin_inference_engine",
+        "robin_contracts",
+        "robin_models",
+        "robin_models.owl",
+        "robin_models.owl.adapter",
+    ),
+    runtimes=(
+        "tensorflow",
+        "tf_keras",
+        "sox_tensorflow",
+        "soundfile",
+        "PIL",
+        "pyarrow",
+        "duckdb",
+    ),
 )
 
 

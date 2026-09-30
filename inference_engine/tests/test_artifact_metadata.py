@@ -5,10 +5,18 @@ import json
 
 import pytest
 
-from robin_contracts.cards import HeadCard, ModelCard, ModelRef, card_digest, model_ref
-from robin_contracts.embedding_transforms import L2Norm
+from robin_contracts.cards import (
+    AudioGeometry,
+    HeadCard,
+    ModelCard,
+    ModelRef,
+    RunnerResampled,
+    card_digest,
+    model_ref,
+)
+from robin_contracts.embedding_transforms import Identity, L2Norm
 from robin_contracts.output_contracts import ScoresRequest, ThresholdPolicy, TopKPolicy
-from robin_contracts.specs import AudioSpec, Recipe, RunnerResampled
+from robin_contracts.specs import AudioSpec, Recipe
 from robin_contracts.work import (
     REGISTRY_ROLE,
     AudioInput,
@@ -40,9 +48,17 @@ CARD = ModelCard(
     model_name="owl",
     model_version="1",
     runtime="tensorflow",
-    segment_duration=12.0,
+    window_duration=12.0,
     sample_rate=32000,
     min_detection_threshold=0.0,
+    window_overlap=0.0,
+    score_domain="probability",
+    audio=AudioGeometry(
+        downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad="drop"
+    ),
+    backend="tensorflow",
+    embedding_transform=Identity(),
+    dtype="float32",
 )
 WEIGHTS = PinnedFile(uri="s3://b/owl.h5", digest=FILE_DIGEST, size_bytes=8)
 REGISTRY_FILE = PinnedFile(uri="s3://b/registry.csv", digest=REGISTRY_FINGERPRINT, size_bytes=16)
@@ -62,8 +78,8 @@ def build_recipe(**overrides) -> Recipe:
         "backend": "tensorflow",
         "audio": AudioSpec(
             sample_rate=32000,
-            window=12.0,
-            hop=6.0,
+            window_duration=12.0,
+            window_overlap=6.0,
             downmix="mean",
             resampler=RunnerResampled(algorithm="soxr_hq"),
             pad="centre_crop_end_pad",
@@ -146,8 +162,8 @@ def test_the_shipped_recipe_carries_the_windowing_a_reader_needs():
     audio = json.loads(decode_metadata(build_metadata(recipe=recipe))["robin.recipe"])["audio"]
 
     assert audio["sample_rate"] == recipe.audio.sample_rate
-    assert audio["window"] == recipe.audio.window
-    assert audio["hop"] == recipe.audio.hop
+    assert audio["window_duration"] == recipe.audio.window_duration
+    assert audio["window_overlap"] == recipe.audio.window_overlap
     assert audio["pad"] == recipe.audio.pad
 
 

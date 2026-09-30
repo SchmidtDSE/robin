@@ -5,11 +5,11 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
-from robin_contracts.cards import ModelCard, model_ref
-from robin_contracts.embedding_transforms import L2Norm
+from robin_contracts.cards import AudioGeometry, ModelCard, RunnerResampled, model_ref
+from robin_contracts.embedding_transforms import Identity, L2Norm
 from robin_contracts.output_contracts import ScoresRequest
 from robin_contracts.records import ClassScore
-from robin_contracts.specs import AudioSpec, Recipe, RunnerResampled
+from robin_contracts.specs import AudioSpec, Recipe
 from robin_contracts.work import (
     REGISTRY_ROLE,
     AudioInput,
@@ -44,9 +44,17 @@ CARD = ModelCard(
     model_name="owl",
     model_version="1",
     runtime="tensorflow",
-    segment_duration=12.0,
+    window_duration=12.0,
     sample_rate=32000,
     min_detection_threshold=0.0,
+    window_overlap=0.0,
+    score_domain="probability",
+    audio=AudioGeometry(
+        downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad="drop"
+    ),
+    backend="tensorflow",
+    embedding_transform=Identity(),
+    dtype="float32",
 )
 
 def a_recording(namespace: str, value: str) -> RecordingRef:
@@ -73,8 +81,8 @@ def build_recipe() -> Recipe:
         backend="tensorflow",
         audio=AudioSpec(
             sample_rate=32000,
-            window=12.0,
-            hop=6.0,
+            window_duration=12.0,
+            window_overlap=6.0,
             downmix="mean",
             resampler=RunnerResampled(algorithm="soxr_hq"),
             pad="centre_crop_end_pad",

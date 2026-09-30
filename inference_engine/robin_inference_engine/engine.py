@@ -8,7 +8,7 @@ is a defect in the engine and is not caught.
 
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import get_args
@@ -28,7 +28,7 @@ from robin_contracts.results import (
     InferenceSuccess,
     ZeroWindowReason,
 )
-from robin_contracts.specs import WindowGeometry, window_count
+from robin_contracts.specs import Recipe, WindowGeometry, recipe, window_count
 from robin_contracts.work import (
     REGISTRY_ROLE,
     AudioInput,
@@ -45,7 +45,8 @@ from robin_inference_engine.coverage import CoverageBuilder, check_completion_ev
 from robin_inference_engine.load_registry import load_registry
 from robin_inference_engine.recording_outputs import RecordingOutputs
 from robin_inference_engine.requested_outputs import embeddings_request, scores_request
-from robin_inference_engine.validate_request import refuse_instance, refuse_request
+from robin_inference_engine.retention import retain_scores
+from robin_inference_engine.validate_request import refuse_request
 
 RESULT_CONTRACT_ID: ResultContractId = get_args(ResultContractId)[0]
 
@@ -127,6 +128,8 @@ def _run_model(run: _Run, *, fetched: list[Path], root: Path) -> InferenceResult
     files = _fetch_model_files(work, run.model_files, fetched)
     registry = _load_registry(files)
     refuse_request(work, registry=registry)
+    # After the refusals, which leave only a backbone card, the one kind with a recipe.
+    stated = recipe(work.model.card)
 
     scratch_dir = root / "scratch"
     scratch_dir.mkdir()
@@ -135,6 +138,7 @@ def _run_model(run: _Run, *, fetched: list[Path], root: Path) -> InferenceResult
         registry=registry,
         files=files,
         settings=work.settings,
+        resources=work.resources,
         scratch_dir=scratch_dir,
         emit_embeddings=embeddings_request(work) is not None,
         log=run.log,
@@ -142,20 +146,24 @@ def _run_model(run: _Run, *, fetched: list[Path], root: Path) -> InferenceResult
     model = construct_model(ref=model_ref(work.model.card), context=context)
     clean_up = _cleanup_step(model.clean_up, "clean_up", errors.MODEL_RUN_FAILED, errors.INFER)
     with _cleanup_on_exit(lambda: [clean_up], log=run.log):
-        refuse_instance(work, capabilities=model.capabilities, recipe=model.recipe)
         staging = root / "staging"
         staging.mkdir()
-        return _infer(run, model=model, registry=registry, staging=staging)
+        return _infer(run, model=model, recipe=stated, registry=registry, staging=staging)
 
 
 def _infer(
-    run: _Run, *, model: Model, registry: TaxonRegistry | None, staging: Path
+    run: _Run,
+    *,
+    model: Model,
+    recipe: Recipe,
+    registry: TaxonRegistry | None,
+    staging: Path,
 ) -> InferenceSuccess:
     work = run.work
-    outputs = RecordingOutputs(work, model=model, registry=registry, staging=staging)
+    outputs = RecordingOutputs(work, recipe=recipe, registry=registry, staging=staging)
     boundary = AcceptanceBoundary(
-        geometry=model.recipe.audio.geometry,
-        capabilities=model.capabilities,
+        geometry=recipe.audio.geometry,
+        card=work.model.card,
         recordings=work.recordings,
         registry=registry,
         scores=scores_request(work),
@@ -169,6 +177,7 @@ def _infer(
             position,
             recording,
             model=model,
+            geometry=recipe.audio.geometry,
             boundary=boundary,
             coverage=coverage,
             outputs=outputs,
@@ -176,13 +185,13 @@ def _infer(
     # Publishing waits for the last recording, so a work that fails while running
     # publishes nothing.
     records = tuple(_publish(run.artifacts, one) for one in staged)
-    return _success(run, model=model, outputs=outputs, records=records, coverage=coverage)
+    return _success(run, recipe=recipe, outputs=outputs, records=records, coverage=coverage)
 
 
 def _success(
     run: _Run,
     *,
-    model: Model,
+    recipe: Recipe,
     outputs: RecordingOutputs,
     records: tuple[ArtifactRecord, ...],
     coverage: CoverageBuilder,
@@ -192,11 +201,11 @@ def _success(
     success = InferenceSuccess(
         schema_version=RESULT_CONTRACT_ID,
         work_digest=run.digest,
-        recipe=model.recipe,
+        recipe=recipe,
         model=run.work.model,
         registry_uri=outputs.registry_uri,
         registry_fingerprint=outputs.registry_fingerprint,
-        window_geometry=model.recipe.audio.geometry,
+        window_geometry=recipe.audio.geometry,
         resolved_detection_policy=detections.policy if detections is not None else None,
         resolved_scores_request=scores_request(run.work),
         artifacts=records,
@@ -212,14 +221,17 @@ def _run_recording(
     recording: RecordingRef,
     *,
     model: Model,
+    geometry: WindowGeometry,
     boundary: AcceptanceBoundary,
     coverage: CoverageBuilder,
     outputs: RecordingOutputs,
 ) -> tuple[StagedArtifact, ...]:
     """Run one recording through the model, then always clean up after it.
 
-    Returns the recording's staged files that hold rows.
+    Each accepted window keeps only the scores the request asks for before it is
+    written. Returns the recording's staged files that hold rows.
     """
+    requested = scores_request(run.work)
     boundary.begin_recording(position)
     coverage.begin_recording(position)
     path: Path | None = None
@@ -234,6 +246,8 @@ def _run_recording(
             accepted = 0
             for window in _each(windows, recording):
                 kept = boundary.accept(window)
+                if requested is not None:
+                    kept = replace(kept, scores=retain_scores(kept.scores, requested))
                 coverage.record(kept)
                 writers.write(kept)
                 accepted += 1
@@ -244,7 +258,7 @@ def _run_recording(
         coverage.end_recording(
             zero_window_reason=None
             if accepted
-            else _zero_window_reason(recording, model.recipe.audio.geometry),
+            else _zero_window_reason(recording, geometry),
             detection_rows=detected.rows if detected is not None else 0,
         )
         run.log(f"recording {errors.named(recording)}: {accepted} windows accepted")

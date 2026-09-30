@@ -1,0 +1,32 @@
+# OWL: PNW-Cnet v4, a convolutional network that classifies spectrograms of forest audio
+# into 51 classes: species, a few genera, and non-biological sounds.
+model_name: owl
+model_version: v4
+# The weights are a Keras 2 .h5 file, so TensorFlow must run with legacy Keras.
+runtime: tf-legacy-keras
+
+# The network sees one 12-second window at a time, rendered at 8 kHz as a 257 x 1000
+# grayscale spectrogram. Windows do not overlap: each starts where the last one ended.
+window_duration: 12.0
+window_overlap: 0.0
+sample_rate: 8000
+spectrogram_shape: [257, 1000]
+
+# Outputs are probabilities, and the network scores all 51 classes for every window.
+# A floor of 0.0 excludes none of them.
+min_detection_threshold: 0.0
+score_domain: probability
+
+# The first channel is read, and resampled to 8 kHz by the runner with soxr at its
+# high-quality setting. A last window shorter than 12 seconds is stretched to the full
+# image width.
+audio:
+  downmix: first
+  resampler: {by: runner, algorithm: soxr_hq}
+  pad: time_scaled
+backend: h5-fp32
+
+# OWL emits no embeddings. These say how a model's embeddings would be treated if it did.
+embedding_transform: {kind: identity}
+dtype: float32
+can_emit_embeddings: false

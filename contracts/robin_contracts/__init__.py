@@ -5,7 +5,17 @@ from robin_contracts.canonical import (
     canonical_json_bytes,
     sha256_v1,
 )
-from robin_contracts.cards import HeadCard, ModelCard, ModelRef, read_card, write_card
+from robin_contracts.cards import (
+    BackendResampled,
+    HeadCard,
+    ModelCard,
+    ModelRef,
+    PadPolicy,
+    Resampling,
+    RunnerResampled,
+    read_card,
+    write_card,
+)
 from robin_contracts.embedding_transforms import (
     EmbeddingTransform,
     Identity,
@@ -26,7 +36,6 @@ from robin_contracts.protocols import (
     JsonScalar,
     Log,
     Model,
-    ModelCapabilities,
     ModelContext,
     ScoreRetention,
     noop,
@@ -44,13 +53,11 @@ from robin_contracts.results import (
 )
 from robin_contracts.specs import (
     AudioSpec,
-    BackendResampled,
-    PadPolicy,
     Recipe,
     RecipeFingerprint,
-    Resampling,
-    RunnerResampled,
     WindowGeometry,
+    recipe,
+    window_bounds,
     window_count,
 )
 from robin_contracts.work import (
@@ -91,7 +98,6 @@ __all__ = [
     "L2Norm",
     "Log",
     "Model",
-    "ModelCapabilities",
     "ModelCard",
     "ModelContext",
     "ModelRef",
@@ -119,8 +125,10 @@ __all__ = [
     "noop",
     "partition",
     "read_card",
+    "recipe",
     "recording_work_digest",
     "sha256_v1",
+    "window_bounds",
     "window_count",
     "work_digest",
     "write_card",

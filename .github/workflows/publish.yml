@@ -25,7 +25,7 @@ jobs:
             const sha = context.payload.workflow_run.head_sha;
             const tags = await github.paginate(github.rest.repos.listTags, { owner: context.repo.owner, repo: context.repo.repo });
             const names = tags.filter(t => t.commit.sha === sha).map(t => t.name);
-            const runtimeDirs = ["inference_engine", "run_manager", "worker", "adapters", "robin"];
+            const runtimeDirs = ["inference_engine", "run_manager", "worker", "adapters", "models", "robin"];
             let entries = [];
             const contractsTag = names.find(n => n.startsWith("robin-contracts-v"));
             if (contractsTag) entries.push({ package: "contracts", tag: contractsTag });

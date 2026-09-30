@@ -88,8 +88,8 @@ def build_detections_sql(
     columns = ", ".join(
         f'"{name}"' for name in DETECTIONS_SCHEMA.names if name != DETECTION_ID
     )
-    # A file holds one recording, so each window start is one window. Text compares by
-    # code point under DuckDB's default collation, which makes the label a total tiebreak.
+    # Ranks restart in each window. The file holds one recording, so grouping rows by start
+    # time groups them by window. Equal scores rank by label, so ranks never depend on row order.
     sql = f"""
         WITH kept AS (
             SELECT window_start_s, window_end_s, label, score

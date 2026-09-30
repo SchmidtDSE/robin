@@ -17,7 +17,6 @@ UNKNOWN_LABEL = "unknown_label"
 DUPLICATE_LABEL = "duplicate_label"
 SCORE_BELOW_FLOOR = "score_below_floor"
 INCOMPLETE_FULL_SCORES = "incomplete_full_scores"
-SCORES_EXCEED_TOP_K = "scores_exceed_top_k"
 UNEXPECTED_EMBEDDING = "unexpected_embedding"
 MALFORMED_EMBEDDING = "malformed_embedding"
 EMBEDDING_NOT_FINITE = "embedding_not_finite"
@@ -33,7 +32,6 @@ ACCEPT_WINDOW_FAILURES = (
     DUPLICATE_LABEL,
     SCORE_BELOW_FLOOR,
     INCOMPLETE_FULL_SCORES,
-    SCORES_EXCEED_TOP_K,
     UNEXPECTED_EMBEDDING,
     MALFORMED_EMBEDDING,
     EMBEDDING_NOT_FINITE,
@@ -49,37 +47,31 @@ VALIDATE_REQUEST = "validate_request"
 
 SCORES_NOT_EMITTED = "scores_not_emitted"
 EMBEDDINGS_NOT_EMITTED = "embeddings_not_emitted"
-RETENTION_UNSUPPORTED = "retention_unsupported"
 FULL_RETENTION_REDUCED = "full_retention_reduced"
-SCORE_FLOOR_DISAGREES = "score_floor_disagrees"
-TOP_K_DISAGREES = "top_k_disagrees"
+SCORE_FLOOR_BELOW_MODEL_FLOOR = "score_floor_below_model_floor"
 MIN_SCORE_OUT_OF_DOMAIN = "min_score_out_of_domain"
-EMBEDDING_EMISSION_DISAGREES = "embedding_emission_disagrees"
-EMBEDDING_DIM_DISAGREES = "embedding_dim_disagrees"
 EMBEDDING_DTYPE_DISAGREES = "embedding_dtype_disagrees"
-EMBEDDING_SOURCE_DTYPE_INVALID = "embedding_source_dtype_invalid"
-RECIPE_MODEL_DISAGREES = "recipe_model_disagrees"
 REGISTRY_REQUIRED = "registry_required"
 REGISTRY_FINGERPRINT_MISMATCH = "registry_fingerprint_mismatch"
 HEAD_CLASS_NOT_IN_REGISTRY = "head_class_not_in_registry"
+HEAD_NOT_SUPPORTED = "head_not_supported"
+SETTING_UNDECLARED = "setting_undeclared"
+SETTING_TYPE_MISMATCH = "setting_type_mismatch"
 EMBEDDING_INPUT_NOT_AVAILABLE = "embedding_input_not_available"
 
 VALIDATE_REQUEST_FAILURES = (
     SCORES_NOT_EMITTED,
     EMBEDDINGS_NOT_EMITTED,
-    RETENTION_UNSUPPORTED,
     FULL_RETENTION_REDUCED,
-    SCORE_FLOOR_DISAGREES,
-    TOP_K_DISAGREES,
+    SCORE_FLOOR_BELOW_MODEL_FLOOR,
     MIN_SCORE_OUT_OF_DOMAIN,
-    EMBEDDING_EMISSION_DISAGREES,
-    EMBEDDING_DIM_DISAGREES,
     EMBEDDING_DTYPE_DISAGREES,
-    EMBEDDING_SOURCE_DTYPE_INVALID,
-    RECIPE_MODEL_DISAGREES,
     REGISTRY_REQUIRED,
     REGISTRY_FINGERPRINT_MISMATCH,
     HEAD_CLASS_NOT_IN_REGISTRY,
+    HEAD_NOT_SUPPORTED,
+    SETTING_UNDECLARED,
+    SETTING_TYPE_MISMATCH,
     EMBEDDING_INPUT_NOT_AVAILABLE,
 )
 

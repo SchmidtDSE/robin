@@ -1,21 +1,45 @@
 import json
+import typing
 from pathlib import Path
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from robin_contracts.canonical import canonical_json_bytes, sha256_v1
 from robin_contracts.cards import (
+    BackendResampled,
+    EmbeddingDtype,
     HeadCard,
     ModelCard,
     ModelRef,
+    RunnerResampled,
     card_digest,
     read_card,
     write_card,
 )
-from robin_contracts.embedding_transforms import L2Norm
+from robin_contracts.embedding_transforms import Identity, L2Norm
 
 CARD_DIGEST = "sha256:v1:" + "a" * 64
+
+MODEL_CARD_FIELDS = {
+    "model_name": "perch",
+    "model_version": "v8",
+    "runtime": "tf-saved-model",
+    "window_duration": 5.0,
+    "window_overlap": 0.0,
+    "sample_rate": 32000,
+    "min_detection_threshold": 0.01,
+    "score_domain": "probability",
+    "audio": {
+        "downmix": "mean",
+        "resampler": {"by": "runner", "algorithm": "soxr_hq"},
+        "pad": "centre_crop_end_pad",
+    },
+    "backend": "tf-saved-model",
+    "embedding_transform": {"kind": "identity"},
+    "dtype": "float32",
+}
 
 
 def _head_card() -> HeadCard:
@@ -28,15 +52,12 @@ def _head_card() -> HeadCard:
     )
 
 
-def _model_card() -> ModelCard:
-    return ModelCard(
-        model_name="perch",
-        model_version="v8",
-        runtime="tf-saved-model",
-        segment_duration=5.0,
-        sample_rate=32000,
-        min_detection_threshold=0.01,
-    )
+def _model_card(**overrides) -> ModelCard:
+    return ModelCard.model_validate(MODEL_CARD_FIELDS | overrides)
+
+
+def _yaml(fields: dict) -> str:
+    return yaml.safe_dump(fields, sort_keys=False)
 
 
 def test_model_ref_has_a_stable_human_identifier():
@@ -80,15 +101,165 @@ def test_head_card_serializes_its_required_transform():
 
 def test_model_card_rejects_unknown_fields():
     with pytest.raises(ValidationError):
-        ModelCard.model_validate({
-            "model_name": "perch",
-            "model_version": "v8",
-            "runtime": "tf-saved-model",
-            "segment_duration": 5.0,
-            "sample_rate": 32000,
-            "min_detection_threshold": 0.01,
-            "unknown": True,
-        })
+        ModelCard.model_validate(MODEL_CARD_FIELDS | {"unknown": True})
+
+
+# --- What a model emits -------------------------------------------------------
+
+
+@pytest.mark.parametrize("domain", ["probability", None])
+def test_a_card_states_its_score_domain_or_that_it_emits_no_scores(domain):
+    assert _model_card(score_domain=domain).score_domain == domain
+
+
+def test_a_card_must_state_its_score_domain():
+    fields = {key: value for key, value in MODEL_CARD_FIELDS.items() if key != "score_domain"}
+
+    with pytest.raises(ValidationError) as exc:
+        ModelCard.model_validate(fields)
+
+    assert exc.value.errors()[0]["loc"] == ("score_domain",)
+
+
+def test_a_score_domain_the_engine_does_not_know_is_refused():
+    with pytest.raises(ValidationError) as exc:
+        _model_card(score_domain="logit")
+
+    assert exc.value.errors()[0]["loc"] == ("score_domain",)
+
+
+def test_embedding_dtype_declares_exactly_the_two_widths():
+    assert typing.get_args(EmbeddingDtype) == ("float16", "float32")
+
+
+def test_a_card_that_emits_embeddings_states_their_width_and_precision():
+    card = _model_card(can_emit_embeddings=True, embedding_dim=1280, embedding_dtype="float16")
+
+    assert (card.embedding_dim, card.embedding_dtype) == (1280, "float16")
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [{"embedding_dim": 1280}, {"embedding_dtype": "float32"}],
+    ids=["no_dtype", "no_dim"],
+)
+def test_a_card_that_emits_embeddings_without_their_width_or_precision_is_refused(missing):
+    with pytest.raises(ValidationError, match="can_emit_embeddings"):
+        _model_card(can_emit_embeddings=True, **missing)
+
+
+def test_an_embedding_precision_the_engine_does_not_store_is_refused():
+    with pytest.raises(ValidationError) as exc:
+        _model_card(can_emit_embeddings=True, embedding_dim=1280, embedding_dtype="float64")
+
+    assert exc.value.errors()[0]["loc"] == ("embedding_dtype",)
+
+
+@pytest.mark.parametrize(
+    "stray",
+    [{"embedding_dim": 1280}, {"embedding_dtype": "float32"}],
+    ids=["dim", "dtype"],
+)
+def test_a_card_that_emits_no_embeddings_refuses_their_width_or_precision(stray):
+    with pytest.raises(ValidationError, match="can_emit_embeddings false"):
+        _model_card(**stray)
+
+
+def test_a_card_that_emits_no_embeddings_needs_no_embedding_precision():
+    assert _model_card().embedding_dtype is None
+
+
+@pytest.mark.parametrize(("source", "storage"), [("float32", "float16"), ("float16", "float32")])
+def test_a_cards_emitted_precision_may_differ_from_its_storage_precision(source, storage):
+    card = _model_card(
+        can_emit_embeddings=True, embedding_dim=4, embedding_dtype=source, dtype=storage
+    )
+
+    assert (card.embedding_dtype, card.dtype) == (source, storage)
+
+
+# --- The recipe facts ---------------------------------------------------------
+
+
+def test_a_cards_audio_handling_reads_as_the_recipe_types():
+    audio = _model_card().audio
+
+    assert audio.downmix == "mean"
+    assert audio.resampler == RunnerResampled(algorithm="soxr_hq")
+    assert audio.pad == "centre_crop_end_pad"
+
+
+def test_a_card_can_state_that_its_library_resamples():
+    resampler = {"by": "backend", "library": "birdnet", "version": "2.4"}
+    card = _model_card(audio=MODEL_CARD_FIELDS["audio"] | {"resampler": resampler})
+
+    assert card.audio.resampler == BackendResampled(library="birdnet", version="2.4")
+
+
+def test_a_cards_embedding_transform_reads_as_a_transform():
+    assert _model_card().embedding_transform == Identity()
+
+
+@pytest.mark.parametrize(
+    "field", ["window_overlap", "dtype", "embedding_transform", "audio", "backend"]
+)
+def test_a_card_file_missing_a_recipe_fact_is_refused_when_read(tmp_path, field):
+    fields = {key: value for key, value in MODEL_CARD_FIELDS.items() if key != field}
+    path = _write_text(tmp_path, _yaml(fields))
+
+    with pytest.raises(ValueError, match=field) as exc:
+        read_card(path)
+
+    assert str(path) in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("downmix", "average"), ("pad", "zero_pad"), ("resampler", "soxr_hq")],
+)
+def test_a_card_file_with_audio_handling_no_recipe_names_is_refused_when_read(
+    tmp_path, field, value
+):
+    audio = MODEL_CARD_FIELDS["audio"] | {field: value}
+    path = _write_text(tmp_path, _yaml(MODEL_CARD_FIELDS | {"audio": audio}))
+
+    with pytest.raises(ValueError, match=field) as exc:
+        read_card(path)
+
+    assert str(path) in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("window_duration", 0.0), ("window_duration", -1.0), ("window_overlap", -1.0)],
+)
+def test_a_card_whose_window_is_not_positive_or_overlap_is_negative_is_refused(field, value):
+    with pytest.raises(ValidationError) as exc:
+        _model_card(**{field: value})
+
+    assert exc.value.errors()[0]["loc"] == (field,)
+
+
+@pytest.mark.parametrize("field", ["window_duration", "window_overlap"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf")])
+def test_a_card_whose_window_or_overlap_is_not_finite_is_refused(field, value):
+    with pytest.raises(ValidationError) as exc:
+        _model_card(**{field: value})
+
+    assert exc.value.errors()[0]["loc"] == (field,)
+
+
+@pytest.mark.parametrize("overlap", [5.0, 6.0])
+def test_a_card_whose_windows_would_not_advance_is_refused(overlap):
+    with pytest.raises(ValidationError, match="must be less than window_duration"):
+        _model_card(window_duration=5.0, window_overlap=overlap)
+
+
+def test_a_storage_precision_the_engine_does_not_store_is_refused():
+    with pytest.raises(ValidationError) as exc:
+        _model_card(dtype="float64")
+
+    assert exc.value.errors()[0]["loc"] == ("dtype",)
 
 
 def test_model_card_canonical_output_declares_every_field():
@@ -103,16 +274,6 @@ def test_card_digest_delegates_to_the_canonical_digest():
     head = _head_card()
 
     assert card_digest(head) == sha256_v1(head)
-
-
-MODEL_CARD_FIELDS = {
-    "model_name": "perch",
-    "model_version": "v8",
-    "runtime": "tf-saved-model",
-    "segment_duration": 5.0,
-    "sample_rate": 32000,
-    "min_detection_threshold": 0.01,
-}
 
 
 # --- Card files ---------------------------------------------------------------
@@ -153,8 +314,17 @@ def test_reading_a_card_keeps_comments_and_layout_out_of_its_digest(tmp_path):
         "model_version: v8\n"
         "model_name: perch\n"
         "runtime: tf-saved-model\n"
-        "segment_duration: 5.0\n"
-        "min_detection_threshold: 0.01\n",
+        "window_duration: 5.0\n"
+        "window_overlap: 0.0\n"
+        "min_detection_threshold: 0.01\n"
+        "score_domain: probability\n"
+        "audio:\n"
+        "  pad: centre_crop_end_pad   # keys in any order\n"
+        "  downmix: mean\n"
+        "  resampler: {by: runner, algorithm: soxr_hq}\n"
+        "backend: tf-saved-model\n"
+        "embedding_transform: {kind: identity}\n"
+        "dtype: float32\n",
     )
 
     assert card_digest(read_card(path)) == card_digest(_model_card())
@@ -180,9 +350,7 @@ def test_the_same_card_in_two_folders_has_one_digest(tmp_path):
     ],
 )
 def test_a_loose_yaml_value_is_refused_not_coerced(tmp_path, text, reason):
-    body = "".join(
-        f"{key}: {value}\n" for key, value in MODEL_CARD_FIELDS.items() if key != "model_version"
-    )
+    body = _yaml({key: value for key, value in MODEL_CARD_FIELDS.items() if key != "model_version"})
     path = _write_text(tmp_path, body + text)
 
     with pytest.raises(ValueError, match="model_version") as exc:
@@ -192,16 +360,14 @@ def test_a_loose_yaml_value_is_refused_not_coerced(tmp_path, text, reason):
 
 
 def test_a_quoted_version_is_text(tmp_path):
-    body = "".join(
-        f"{key}: {value}\n" for key, value in MODEL_CARD_FIELDS.items() if key != "model_version"
-    )
+    body = _yaml({key: value for key, value in MODEL_CARD_FIELDS.items() if key != "model_version"})
     path = _write_text(tmp_path, body + 'model_version: "1.10"\n')
 
     assert read_card(path).model_version == "1.10"
 
 
 def test_a_repeated_key_is_refused(tmp_path):
-    body = "".join(f"{key}: {value}\n" for key, value in MODEL_CARD_FIELDS.items())
+    body = _yaml(MODEL_CARD_FIELDS)
     path = _write_text(tmp_path, body + "model_version: v9\n")
 
     with pytest.raises(ValueError, match="model_version") as exc:
@@ -228,7 +394,7 @@ def test_a_file_that_is_not_a_mapping_is_refused(tmp_path, text):
 
 
 def test_a_card_with_an_unknown_field_is_refused(tmp_path):
-    body = "".join(f"{key}: {value}\n" for key, value in MODEL_CARD_FIELDS.items())
+    body = _yaml(MODEL_CARD_FIELDS)
     path = _write_text(tmp_path, body + "colour: brown\n")
 
     with pytest.raises(ValueError, match="colour") as exc:

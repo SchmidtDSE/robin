@@ -4,13 +4,49 @@ A card says what a model is, not where its files are: the work pins those.
 """
 
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from robin_contracts.canonical import is_sha256_v1, sha256_v1
 from robin_contracts.embedding_transforms import EmbeddingTransform
+
+PadPolicy = Literal["centre_crop_end_pad", "drop", "time_scaled"]
+
+EmbeddingDtype = Literal["float16", "float32"]
+
+
+def refuse_windows_that_do_not_advance(duration: float, overlap: float) -> None:
+    """Refuse an overlap so long that the next window would not start after this one."""
+    if overlap >= duration:
+        raise ValueError(
+            f"window_overlap {overlap} must be less than window_duration {duration}"
+        )
+
+
+class RunnerResampled(BaseModel, frozen=True):
+    """This repository resampled the audio, and chose how."""
+    by: Literal["runner"] = "runner"
+    algorithm: Literal["soxr_hq", "librosa"]
+
+
+class BackendResampled(BaseModel, frozen=True):
+    """The model library resampled inside its own call."""
+    by: Literal["backend"] = "backend"
+    library: str
+    version: str
+
+
+Resampling = Annotated[RunnerResampled | BackendResampled, Field(discriminator="by")]
 
 
 class ModelRef(BaseModel):
@@ -52,32 +88,41 @@ class InferenceParam(BaseModel):
 
 
 class AudioGeometry(BaseModel):
-    """Audio handling facts a backbone declares."""
+    """How a backbone's audio is reduced to one channel, resampled and padded."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    downmix: str | None = None
-    resampler: str | None = None
-    pad: str | None = None
+    downmix: Literal["mean", "first"]
+    resampler: Resampling
+    pad: PadPolicy
 
 
 class ModelCard(BaseModel):
-    """Serializable backbone facts."""
+    """Serializable backbone facts, including every fact its recipe is built from.
+
+    `min_detection_threshold` is the lowest score the model emits. At or below the
+    score domain's minimum, the model emits every label for every window.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     model_name: str
     model_version: str
     runtime: str
-    segment_duration: float
+    window_duration: float = Field(gt=0, allow_inf_nan=False)
+    window_overlap: float = Field(ge=0, allow_inf_nan=False)  # seconds shared with the next
     sample_rate: int
     min_detection_threshold: float
+    score_domain: Literal["probability"] | None  # None: the model emits no scores
     spectrogram_shape: tuple[int, int] | None = None
-    audio: AudioGeometry | None = None
-    backend: str | None = None
+    audio: AudioGeometry
+    backend: str
+    embedding_transform: EmbeddingTransform
+    dtype: EmbeddingDtype  # the precision embeddings are stored at
     inference_params: tuple[InferenceParam, ...] = ()
     can_emit_embeddings: bool = False
     embedding_dim: int | None = None
+    embedding_dtype: EmbeddingDtype | None = None  # the precision the model emits
 
     @field_validator("model_name", "model_version", "runtime")
     @classmethod
@@ -86,7 +131,7 @@ class ModelCard(BaseModel):
             raise ValueError("model card identity fields must be non-empty")
         return value
 
-    @field_validator("segment_duration", "min_detection_threshold")
+    @field_validator("min_detection_threshold")
     @classmethod
     def _finite(cls, value: float) -> float:
         if value != value or value in (float("inf"), float("-inf")):
@@ -106,6 +151,26 @@ class ModelCard(BaseModel):
         if value is not None and value <= 0:
             raise ValueError("embedding_dim must be positive when declared")
         return value
+
+    @model_validator(mode="after")
+    def _windows_advance(self) -> "ModelCard":
+        refuse_windows_that_do_not_advance(self.window_duration, self.window_overlap)
+        return self
+
+    @model_validator(mode="after")
+    def _embeddings_are_described_exactly_when_emitted(self) -> "ModelCard":
+        if self.can_emit_embeddings:
+            if self.embedding_dim is None or self.embedding_dtype is None:
+                raise ValueError(
+                    "a card with can_emit_embeddings true must declare embedding_dim "
+                    "and embedding_dtype"
+                )
+        elif self.embedding_dim is not None or self.embedding_dtype is not None:
+            raise ValueError(
+                "a card with can_emit_embeddings false must declare neither embedding_dim "
+                "nor embedding_dtype"
+            )
+        return self
 
 
 class HeadCard(BaseModel):

@@ -30,6 +30,12 @@
       "changelog-path": "CHANGELOG.md",
       "component": "runtime"
     },
+    "models": {
+      "package-name": "robin-models",
+      "release-type": "python",
+      "changelog-path": "CHANGELOG.md",
+      "component": "runtime"
+    },
     "robin": {
       "package-name": "robin-bioacoustics",
       "release-type": "python",

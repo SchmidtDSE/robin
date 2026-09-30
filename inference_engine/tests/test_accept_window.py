@@ -3,8 +3,9 @@ import math
 import numpy as np
 import pytest
 
+from robin_contracts.cards import AudioGeometry, ModelCard, RunnerResampled
+from robin_contracts.embedding_transforms import Identity
 from robin_contracts.output_contracts import ScoresRequest
-from robin_contracts.protocols import ModelCapabilities
 from robin_contracts.records import ClassScore, WindowOutput
 from robin_contracts.registry import RegistryEntry, TaxonRegistry
 from robin_contracts.specs import WindowGeometry
@@ -14,9 +15,16 @@ from robin_inference_engine.accept_window import AcceptanceBoundary
 
 FINGERPRINT = "sha256:" + "0" * 64
 
+# The model's own floor: its library returns only the scores at or above this.
+MODEL_FLOOR = 0.01
+
 
 def build_scores_request(**overrides) -> ScoresRequest:
-    fields = {"contract_id": "robin.scores.arrow/1", "retention": "thresholded", "min_score": 0.0}
+    fields = {
+        "contract_id": "robin.scores.arrow/1",
+        "retention": "thresholded",
+        "min_score": MODEL_FLOOR,
+    }
     return ScoresRequest(**(fields | overrides))
 
 
@@ -31,15 +39,36 @@ def build_registry(*labels: str) -> TaxonRegistry:
     return TaxonRegistry(fingerprint=FINGERPRINT, entries=entries)
 
 
-def build_capabilities(**overrides) -> ModelCapabilities:
+def build_geometry() -> WindowGeometry:
+    return WindowGeometry(window_duration=3.0, window_overlap=0.0, pad="time_scaled")
+
+
+def build_card(*, geometry: WindowGeometry | None = None, **overrides) -> ModelCard:
+    geometry = geometry or build_geometry()
     fields = {
-        "emits_scores": True,
-        "emits_embeddings": True,
+        "model_name": "test-model",
+        "model_version": "1",
+        "runtime": "none",
+        "window_duration": geometry.window_duration,
+        "window_overlap": geometry.window_overlap,
+        "sample_rate": 16000,
+        "min_detection_threshold": MODEL_FLOOR,
         "score_domain": "probability",
+        "audio": AudioGeometry(
+            downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad=geometry.pad
+        ),
+        "backend": "none",
+        "embedding_transform": Identity(),
+        "dtype": "float32",
+        "can_emit_embeddings": True,
         "embedding_dim": 4,
         "embedding_dtype": "float32",
     }
-    return ModelCapabilities(**(fields | overrides))
+    return ModelCard(**(fields | overrides))
+
+
+# A model that emits every label for every window.
+FULL_STREAM_CARD = build_card(min_detection_threshold=0.0)
 
 
 def build_recordings(*durations: float | None) -> tuple[RecordingRef, ...]:
@@ -57,10 +86,13 @@ def build_recordings(*durations: float | None) -> tuple[RecordingRef, ...]:
 RECORDINGS = build_recordings(30.0, 30.0)
 
 
-def build_boundary(*, opened: int | None = 0, **overrides) -> AcceptanceBoundary:
+def build_boundary(
+    *, opened: int | None = 0, geometry: WindowGeometry | None = None, **overrides
+) -> AcceptanceBoundary:
+    geometry = geometry or build_geometry()
     fields = {
-        "geometry": WindowGeometry(window=3.0, hop=3.0, pad="time_scaled"),
-        "capabilities": build_capabilities(),
+        "geometry": geometry,
+        "card": build_card(geometry=geometry),
         "recordings": RECORDINGS,
         "registry": build_registry("rain", "wind"),
         "scores": build_scores_request(),
@@ -178,7 +210,8 @@ def test_accept_refuses_a_start_below_the_previous_one():
 
 
 def test_accept_allows_overlapping_windows():
-    boundary = build_boundary(geometry=WindowGeometry(window=3.0, hop=1.0, pad="time_scaled"))
+    geometry = WindowGeometry(window_duration=3.0, window_overlap=2.0, pad="time_scaled")
+    boundary = build_boundary(geometry=geometry)
 
     accepted = [
         boundary.accept(build_window(start=start, end=start + 3.0))
@@ -233,7 +266,7 @@ def test_accept_refuses_a_negative_start_even_on_the_hop_grid(start, duration):
 @pytest.mark.parametrize(("duration", "start"), [(1.0, 0.0), (10.0, 9.0)])
 def test_accept_refuses_a_partial_window_under_drop_policy(duration, start):
     boundary = build_boundary(
-        geometry=WindowGeometry(window=3.0, hop=3.0, pad="drop"),
+        geometry=WindowGeometry(window_duration=3.0, window_overlap=0.0, pad="drop"),
         recordings=build_recordings(duration),
     )
 
@@ -245,7 +278,7 @@ def test_accept_refuses_a_partial_window_under_drop_policy(duration, start):
 
 def test_accept_allows_a_complete_window_under_drop_policy():
     boundary = build_boundary(
-        geometry=WindowGeometry(window=3.0, hop=3.0, pad="drop"),
+        geometry=WindowGeometry(window_duration=3.0, window_overlap=0.0, pad="drop"),
         recordings=build_recordings(3.0),
     )
 
@@ -259,7 +292,7 @@ def test_accept_allows_a_trailing_pad_window_past_the_audio(pad):
     # The refused half is a 0.05 s band: the duration check runs after the geometry
     # check has already pinned end - start to the window, so a duration sitting a hair
     # above a hop multiple is the only shape that reaches it.
-    geometry = WindowGeometry(window=3.0, hop=1.0, pad=pad)
+    geometry = WindowGeometry(window_duration=3.0, window_overlap=2.0, pad=pad)
 
     accepted = build_boundary(geometry=geometry, recordings=build_recordings(9.05)).accept(
         build_window(start=9.0, end=12.0)
@@ -278,7 +311,7 @@ def test_accept_allows_a_trailing_pad_window_past_the_audio(pad):
 @pytest.mark.parametrize("pad", ["drop", "centre_crop_end_pad", "time_scaled"])
 def test_accept_checks_no_duration_when_the_recording_declares_none(pad):
     accepted = build_boundary(
-        geometry=WindowGeometry(window=3.0, hop=3.0, pad=pad),
+        geometry=WindowGeometry(window_duration=3.0, window_overlap=0.0, pad=pad),
         recordings=build_recordings(None),
     ).accept(build_window(start=90.0, end=93.0))
 
@@ -338,7 +371,7 @@ def test_accept_refuses_a_label_repeated_within_one_window():
 
 @pytest.mark.parametrize("scores", [(ClassScore(label="rain", score=0.5),), ()])
 def test_accept_refuses_a_window_missing_a_label_under_full_retention(scores):
-    boundary = build_boundary(scores=FULL)
+    boundary = build_boundary(card=FULL_STREAM_CARD, scores=FULL)
 
     with pytest.raises(errors.EngineError) as exc:
         boundary.accept(build_window(scores=scores))
@@ -352,23 +385,8 @@ def test_accept_allows_empty_scores_under_reduced_retention():
     assert accepted.scores == ()
 
 
-def test_accept_refuses_any_score_when_the_model_declares_no_registry():
-    with pytest.raises(errors.EngineError) as exc:
-        build_boundary(registry=None).accept(build_window())
-
-    assert exc.value.code == errors.UNKNOWN_LABEL
-    assert "registry" in exc.value.detail
-
-
-@pytest.mark.parametrize(
-    ("expect_embeddings", "emits_embeddings"),
-    [(False, True), (True, False)],
-)
-def test_accept_refuses_an_embedding_that_was_not_requested(expect_embeddings, emits_embeddings):
-    boundary = build_boundary(
-        expect_embeddings=expect_embeddings,
-        capabilities=build_capabilities(emits_embeddings=emits_embeddings),
-    )
+def test_accept_refuses_an_embedding_that_was_not_requested():
+    boundary = build_boundary(expect_embeddings=False)
 
     with pytest.raises(errors.EngineError) as exc:
         boundary.accept(build_window(embedding=build_embedding()))
@@ -401,7 +419,7 @@ def test_accept_refuses_a_malformed_embedding(embedding, fragment):
 def test_accept_refuses_an_embedding_that_is_not_the_declared_dtype(declared, arriving):
     boundary = build_boundary(
         expect_embeddings=True,
-        capabilities=build_capabilities(embedding_dtype=declared),
+        card=build_card(embedding_dtype=declared),
     )
 
     with pytest.raises(errors.EngineError) as exc:
@@ -413,10 +431,10 @@ def test_accept_refuses_an_embedding_that_is_not_the_declared_dtype(declared, ar
 
 
 @pytest.mark.parametrize("declared", ["float16", "float32"])
-def test_accept_takes_an_embedding_at_the_dtype_the_instance_declared(declared):
+def test_accept_takes_an_embedding_at_the_dtype_the_card_declares(declared):
     boundary = build_boundary(
         expect_embeddings=True,
-        capabilities=build_capabilities(embedding_dtype=declared),
+        card=build_card(embedding_dtype=declared),
     )
 
     accepted = boundary.accept(
@@ -441,19 +459,20 @@ def test_accept_refuses_an_embedding_that_is_not_in_this_machines_byte_order():
     assert exc.value.code == errors.MALFORMED_EMBEDDING
 
 
-@pytest.mark.parametrize("declared", [None, "float64"])
-def test_an_instance_emitting_embeddings_without_a_usable_dtype_is_a_defect(declared):
-    # Every such instance is refused before inference, so one reaching the boundary is
-    # the engine contradicting itself rather than an adapter sending something invalid.
+@pytest.mark.parametrize(("source", "storage"), [("float32", "float16"), ("float16", "float32")])
+def test_an_embedding_is_matched_against_the_emitted_precision_not_the_stored_one(source, storage):
     boundary = build_boundary(
-        expect_embeddings=True,
-        capabilities=build_capabilities(embedding_dtype=declared),
+        expect_embeddings=True, card=build_card(embedding_dtype=source, dtype=storage)
     )
 
-    with pytest.raises(RuntimeError) as exc:
-        boundary.accept(build_window(embedding=build_embedding()))
+    accepted = boundary.accept(build_window(embedding=build_embedding(dtype=np.dtype(source))))
+    assert accepted.embedding.dtype == np.dtype(source)
 
-    assert "embedding_dtype" in str(exc.value)
+    with pytest.raises(errors.EngineError) as exc:
+        boundary.accept(
+            build_window(start=3.0, end=6.0, embedding=build_embedding(dtype=np.dtype(storage)))
+        )
+    assert exc.value.code == errors.MALFORMED_EMBEDDING
 
 
 @pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf])
@@ -502,11 +521,6 @@ def test_accept_refuses_a_start_off_the_grid_on_the_negative_side():
     assert exc.value.code == errors.WINDOW_OFF_GEOMETRY
 
 
-def test_full_scores_without_a_registry_is_an_engine_defect():
-    with pytest.raises(RuntimeError):
-        build_boundary(opened=None, registry=None, scores=FULL)
-
-
 # --- Scores against the request -------------------------------------------------
 
 UNREQUESTED_SCORES = {
@@ -529,12 +543,38 @@ def test_scores_a_work_did_not_request_need_no_registry():
     assert accepted.scores == ()
 
 
+REQUESTS = {
+    "full": FULL,
+    "thresholded": build_scores_request(min_score=0.5),
+    "top_k": build_scores_request(retention="top_k", min_score=0.5, top_k=1),
+}
+
+
+@pytest.mark.parametrize("request_", REQUESTS.values(), ids=REQUESTS.keys())
+def test_a_full_stream_missing_a_label_is_refused_whatever_was_requested(request_):
+    boundary = build_boundary(card=FULL_STREAM_CARD, scores=request_)
+
+    with pytest.raises(errors.EngineError) as exc:
+        boundary.accept(build_window(scores=(ClassScore(label="rain", score=0.9),)))
+
+    assert exc.value.code == errors.INCOMPLETE_FULL_SCORES
+
+
+@pytest.mark.parametrize("request_", REQUESTS.values(), ids=REQUESTS.keys())
+def test_a_full_stream_is_accepted_whole_whatever_was_requested(request_):
+    # The request's floor and k are applied after the boundary, not checked by it.
+    scores = (ClassScore(label="rain", score=0.9), ClassScore(label="wind", score=0.0))
+    boundary = build_boundary(card=FULL_STREAM_CARD, scores=request_)
+
+    assert boundary.accept(build_window(scores=scores)).scores == scores
+
+
 @pytest.mark.parametrize("retention", ["thresholded", "top_k"])
-def test_accept_refuses_a_score_below_the_requested_floor(retention):
+def test_a_thresholded_stream_carrying_a_score_below_the_models_floor_is_refused(retention):
     request = build_scores_request(
-        retention=retention, min_score=0.3, top_k=2 if retention == "top_k" else None
+        retention=retention, min_score=MODEL_FLOOR, top_k=2 if retention == "top_k" else None
     )
-    below = (ClassScore(label="rain", score=0.29),)
+    below = (ClassScore(label="rain", score=0.009),)
 
     with pytest.raises(errors.EngineError) as exc:
         build_boundary(scores=request).accept(build_window(start=3.0, end=6.0, scores=below))
@@ -542,53 +582,24 @@ def test_accept_refuses_a_score_below_the_requested_floor(retention):
     assert exc.value.code == errors.SCORE_BELOW_FLOOR
     assert exc.value.recording is RECORDINGS[0]
     assert exc.value.window_start_s == 3.0
-    assert "0.29" in exc.value.detail and "0.3" in exc.value.detail
+    assert "0.009" in exc.value.detail and str(MODEL_FLOOR) in exc.value.detail
 
 
-@pytest.mark.parametrize("retention", ["thresholded", "top_k"])
-def test_accept_takes_a_score_exactly_at_the_requested_floor(retention):
-    request = build_scores_request(
-        retention=retention, min_score=0.3, top_k=2 if retention == "top_k" else None
-    )
-    at_floor = (ClassScore(label="rain", score=0.3),)
+def test_a_thresholded_stream_may_carry_a_score_exactly_at_the_models_floor():
+    at_floor = (ClassScore(label="rain", score=MODEL_FLOOR),)
 
-    assert build_boundary(scores=request).accept(build_window(scores=at_floor)).scores == at_floor
+    assert build_boundary().accept(build_window(scores=at_floor)).scores == at_floor
+
+
+def test_a_thresholded_stream_is_not_checked_against_the_requests_floor_or_k():
+    request = build_scores_request(retention="top_k", min_score=0.5, top_k=1)
+    scores = (ClassScore(label="rain", score=0.2), ClassScore(label="wind", score=0.1))
+
+    assert build_boundary(scores=request).accept(build_window(scores=scores)).scores == scores
 
 
 def test_a_non_finite_score_is_out_of_domain_before_it_meets_the_floor():
-    request = build_scores_request(min_score=0.3)
-
     with pytest.raises(errors.EngineError) as exc:
-        build_boundary(scores=request).accept(
-            build_window(scores=(ClassScore(label="rain", score=math.nan),))
-        )
+        build_boundary().accept(build_window(scores=(ClassScore(label="rain", score=math.nan),)))
 
     assert exc.value.code == errors.SCORE_OUT_OF_DOMAIN
-
-
-TOP_TWO = build_scores_request(retention="top_k", min_score=0.0, top_k=2)
-THREE_SCORES = (
-    ClassScore(label="rain", score=0.5),
-    ClassScore(label="wind", score=0.4),
-    ClassScore(label="hail", score=0.3),
-)
-
-
-def test_accept_refuses_more_scores_than_the_requested_top_k():
-    boundary = build_boundary(scores=TOP_TWO, registry=build_registry("rain", "wind", "hail"))
-
-    with pytest.raises(errors.EngineError) as exc:
-        boundary.accept(build_window(start=3.0, end=6.0, scores=THREE_SCORES))
-
-    assert exc.value.code == errors.SCORES_EXCEED_TOP_K
-    assert exc.value.recording is RECORDINGS[0]
-    assert exc.value.window_start_s == 3.0
-    assert "3" in exc.value.detail and "2" in exc.value.detail
-
-
-@pytest.mark.parametrize("count", [2, 1])
-def test_accept_takes_up_to_the_requested_top_k(count):
-    boundary = build_boundary(scores=TOP_TWO, registry=build_registry("rain", "wind", "hail"))
-    scores = THREE_SCORES[:count]
-
-    assert boundary.accept(build_window(scores=scores)).scores == scores

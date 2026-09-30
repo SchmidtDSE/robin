@@ -58,7 +58,6 @@ def test_protocol_reexports_are_importable():
         JsonScalar,
         Log,
         Model,
-        ModelCapabilities,
         ModelContext,
         ScoreRetention,
         noop,
@@ -67,7 +66,6 @@ def test_protocol_reexports_are_importable():
     assert JsonScalar is not None
     assert Log is not None
     assert Model is not None
-    assert ModelCapabilities is not None
     assert ModelContext is not None
     assert ScoreRetention is not None
     assert noop is not None
@@ -133,9 +131,12 @@ def test_spec_reexports_are_importable():
         Resampling,
         RunnerResampled,
         WindowGeometry,
+        recipe,
+        window_bounds,
         window_count,
     )
 
+    assert callable(recipe)
     assert AudioSpec is not None
     assert BackendResampled is not None
     assert PadPolicy is not None
@@ -144,6 +145,7 @@ def test_spec_reexports_are_importable():
     assert Resampling is not None
     assert RunnerResampled is not None
     assert WindowGeometry is not None
+    assert window_bounds is not None
     assert window_count is not None
 
 

@@ -18,17 +18,19 @@ robin-run-manager = { path = "run_manager", editable = true }
 robin-worker = { path = "worker", editable = true }
 robin-adapters = { path = "adapters", editable = true }
 robin-bioacoustics = { path = "robin", editable = true }
+robin-models = { path = "models", editable = true }
 
 [environments]
 test = ["test"]
 
 [tasks]
 boundary = "pytest tests/boundary -v"
-imports = "python -c \"import robin_contracts, robin_inference_engine, robin_run_manager, robin_worker, robin_adapters\""
+imports = "python -c \"import robin_contracts, robin_inference_engine, robin_run_manager, robin_worker, robin_adapters, robin_models\""
 test-contracts = "pytest contracts/tests -v"
 test-engine = "pytest inference_engine/tests -v"
 test-adapters = "pytest adapters/tests -v"
-test = "pytest contracts/tests inference_engine/tests adapters/tests tests/boundary -v"
+test-models = "pytest models/tests -v"
+test = "pytest contracts/tests inference_engine/tests adapters/tests models/tests tests/boundary -v"
 
 [tasks.wheels]
 cmd = """
@@ -46,12 +48,16 @@ echo === build: robin_adapters === &&
 python -m build --outdir .wheelcheck/dist adapters &&
 echo === build: robin_bioacoustics === &&
 python -m build --outdir .wheelcheck/dist robin &&
+echo === build: robin_models === &&
+python -m build --outdir .wheelcheck/dist models &&
 echo === seed: transitive deps === &&
 python -m pip download --dest .wheelcheck/dist "pydantic>=2.12,<3" &&
 python -m pip download --dest .wheelcheck/dist "pyyaml>=6.0.2,<7" &&
 python -m pip download --dest .wheelcheck/dist "numpy>=2.1,<3" &&
 python -m pip download --dest .wheelcheck/dist "pyarrow>=23.0.1,<24" &&
 python -m pip download --dest .wheelcheck/dist "duckdb>=1.5.5,<2" &&
+echo "=== seed: robin-models[owl] runtime ===" &&
+python -m pip download --dest .wheelcheck/dist --find-links .wheelcheck/dist ".wheelcheck/dist/robin_models-0.0.0-py3-none-any.whl[owl]" &&
 echo === install: robin-contracts === &&
 python -m venv .wheelcheck/venv-robin_contracts &&
 .wheelcheck/venv-robin_contracts/bin/pip install --no-index --find-links .wheelcheck/dist robin-contracts &&
@@ -82,7 +88,12 @@ python -m venv .wheelcheck/venv-robin_bioacoustics &&
 .wheelcheck/venv-robin_bioacoustics/bin/pip install --no-index --find-links .wheelcheck/dist robin-bioacoustics &&
 echo "=== import: robin-bioacoustics (expect no code) ===" &&
 .wheelcheck/venv-robin_bioacoustics/bin/python -I -c "import importlib.util as u; ok = u.find_spec('robin_bioacoustics') is None; print('OK: no robin_bioacoustics module importable from robin-bioacoustics alone' if ok else 'FAIL: robin_bioacoustics module unexpectedly importable'); raise SystemExit(0 if ok else 1)" &&
-rm -rf .wheelcheck/venv-robin_contracts .wheelcheck/venv-robin_inference_engine .wheelcheck/venv-robin_run_manager .wheelcheck/venv-robin_worker .wheelcheck/venv-robin_adapters .wheelcheck/venv-robin_bioacoustics
+echo === install: robin-models === &&
+python -m venv .wheelcheck/venv-robin_models &&
+.wheelcheck/venv-robin_models/bin/pip install --no-index --find-links .wheelcheck/dist robin-models &&
+echo "=== import: robin_models, its bundled card and registry, and no tensorflow ===" &&
+.wheelcheck/venv-robin_models/bin/python -I -c "import hashlib, importlib.util, robin_models.owl; from importlib.resources import files; from robin_contracts.cards import model_ref, read_card; resources = files('robin_models.owl') / 'resources'; ref = model_ref(read_card(resources / 'card.yaml')); digest = hashlib.sha256((resources / 'taxa_registry.csv').read_bytes()).hexdigest(); assert ref.id == 'owl/v4', ref; assert digest == 'bb172a45a873cada2a0bd5a2846f12053b1cf249eb58eab5eacdbb0efa6b19ed', digest; assert importlib.util.find_spec('tensorflow') is None, 'tensorflow is installed'; print('OK: imported robin_models, read card', ref.id, 'and registry sha256', digest, 'without tensorflow')" &&
+rm -rf .wheelcheck/venv-robin_contracts .wheelcheck/venv-robin_inference_engine .wheelcheck/venv-robin_run_manager .wheelcheck/venv-robin_worker .wheelcheck/venv-robin_adapters .wheelcheck/venv-robin_bioacoustics .wheelcheck/venv-robin_models
 """
 
 [tasks.install-shapes]

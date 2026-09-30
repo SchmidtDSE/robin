@@ -7,7 +7,8 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from robin_contracts.canonical import canonical_json_bytes, sha256_v1
-from robin_contracts.cards import ModelCard, model_ref
+from robin_contracts.cards import AudioGeometry, ModelCard, RunnerResampled, model_ref
+from robin_contracts.embedding_transforms import Identity
 from robin_contracts.output_contracts import ScoresRequest, ThresholdPolicy
 from robin_contracts.results import (
     ArtifactRecord,
@@ -18,7 +19,7 @@ from robin_contracts.results import (
     InferenceSuccess,
     RecordingCoverage,
 )
-from robin_contracts.specs import AudioSpec, Recipe, RunnerResampled, WindowGeometry
+from robin_contracts.specs import AudioSpec, Recipe, WindowGeometry
 from robin_contracts.work import PinnedFile, PinnedModel
 
 HEX = "0" * 64
@@ -29,12 +30,20 @@ CARD = ModelCard(
     model_name="owl",
     model_version="1",
     runtime="tensorflow",
-    segment_duration=3.0,
+    window_duration=3.0,
+    window_overlap=0.0,
     sample_rate=48000,
     min_detection_threshold=0.0,
+    score_domain="probability",
+    audio=AudioGeometry(
+        downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad="drop"
+    ),
+    backend="tensorflow",
+    embedding_transform=Identity(),
+    dtype="float32",
 )
 MODEL_REF = model_ref(CARD)
-GEOMETRY = WindowGeometry(window=3.0, hop=3.0, pad="drop")
+GEOMETRY = WindowGeometry(window_duration=3.0, window_overlap=0.0, pad="drop")
 
 DECLARED_STAGES = (
     "validate_request",
@@ -56,8 +65,8 @@ def build_recipe() -> Recipe:
         backend="tflite",
         audio=AudioSpec(
             sample_rate=48000,
-            window=3.0,
-            hop=3.0,
+            window_duration=3.0,
+            window_overlap=0.0,
             downmix="mean",
             resampler=RunnerResampled(algorithm="soxr_hq"),
             pad="drop",

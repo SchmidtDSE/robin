@@ -31,8 +31,8 @@ def test_every_declared_constant_is_a_stage_or_one_of_its_codes():
         if name.isupper() and isinstance(value, str)
     }
 
-    assert len(set(errors.ACCEPT_WINDOW_FAILURES)) == 14
-    assert len(set(errors.VALIDATE_REQUEST_FAILURES)) == 16
+    assert len(set(errors.ACCEPT_WINDOW_FAILURES)) == 13
+    assert len(set(errors.VALIDATE_REQUEST_FAILURES)) == 13
     assert len(set(errors.ACQUIRE_MODEL_FAILURES)) == 2
     assert len(set(errors.LOAD_REGISTRY_FAILURES)) == 2
     assert len(set(errors.CONSTRUCT_MODEL_FAILURES)) == 5
@@ -46,17 +46,19 @@ def test_every_declared_constant_is_a_stage_or_one_of_its_codes():
     }
 
 
-def test_retention_and_recipe_codes_belong_to_their_stages():
+def test_retention_and_setting_codes_belong_to_their_stages():
     assert errors.SCORE_BELOW_FLOOR == "score_below_floor"
-    assert errors.SCORES_EXCEED_TOP_K == "scores_exceed_top_k"
-    assert errors.RECIPE_MODEL_DISAGREES == "recipe_model_disagrees"
-    assert errors.TOP_K_DISAGREES == "top_k_disagrees"
-    assert {errors.SCORE_BELOW_FLOOR, errors.SCORES_EXCEED_TOP_K} <= set(
-        errors.ACCEPT_WINDOW_FAILURES
-    )
-    assert {errors.RECIPE_MODEL_DISAGREES, errors.TOP_K_DISAGREES} <= set(
-        errors.VALIDATE_REQUEST_FAILURES
-    )
+    assert errors.SCORE_FLOOR_BELOW_MODEL_FLOOR == "score_floor_below_model_floor"
+    assert errors.SETTING_UNDECLARED == "setting_undeclared"
+    assert errors.SETTING_TYPE_MISMATCH == "setting_type_mismatch"
+    assert errors.HEAD_NOT_SUPPORTED == "head_not_supported"
+    assert errors.SCORE_BELOW_FLOOR in errors.ACCEPT_WINDOW_FAILURES
+    assert {
+        errors.SCORE_FLOOR_BELOW_MODEL_FLOOR,
+        errors.SETTING_UNDECLARED,
+        errors.SETTING_TYPE_MISMATCH,
+        errors.HEAD_NOT_SUPPORTED,
+    } <= set(errors.VALIDATE_REQUEST_FAILURES)
 
 
 def test_no_code_belongs_to_two_stages():

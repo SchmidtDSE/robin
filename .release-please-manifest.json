@@ -4,5 +4,6 @@
   "run_manager": "0.0.0",
   "worker": "0.0.0",
   "adapters": "0.0.0",
+  "models": "0.0.0",
   "robin": "0.0.0"
 }

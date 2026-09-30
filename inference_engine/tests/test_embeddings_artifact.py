@@ -7,10 +7,18 @@ import numpy as np
 import pyarrow as pa
 import pytest
 
-from robin_contracts.cards import HeadCard, ModelCard, ModelRef, card_digest, model_ref
+from robin_contracts.cards import (
+    AudioGeometry,
+    HeadCard,
+    ModelCard,
+    ModelRef,
+    RunnerResampled,
+    card_digest,
+    model_ref,
+)
 from robin_contracts.embedding_transforms import Identity, L2Norm
 from robin_contracts.output_contracts import EmbeddingsRequest
-from robin_contracts.specs import AudioSpec, Recipe, RunnerResampled
+from robin_contracts.specs import AudioSpec, Recipe
 from robin_contracts.work import (
     REGISTRY_ROLE,
     AudioInput,
@@ -46,11 +54,20 @@ CARD = ModelCard(
     model_name="perch",
     model_version="8",
     runtime="tensorflow",
-    segment_duration=5.0,
+    window_duration=5.0,
     sample_rate=32000,
     min_detection_threshold=0.0,
     can_emit_embeddings=True,
     embedding_dim=4,
+    window_overlap=0.0,
+    score_domain="probability",
+    audio=AudioGeometry(
+        downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad="drop"
+    ),
+    backend="tensorflow",
+    embedding_transform=Identity(),
+    dtype="float32",
+    embedding_dtype="float32",
 )
 BACKBONE_REF = ModelRef(name="backbone", version="2", digest=BACKBONE_DIGEST)
 
@@ -83,8 +100,8 @@ def build_recipe(**overrides) -> Recipe:
         "backend": "tensorflow",
         "audio": AudioSpec(
             sample_rate=32000,
-            window=5.0,
-            hop=5.0,
+            window_duration=5.0,
+            window_overlap=0.0,
             downmix="mean",
             resampler=RunnerResampled(algorithm="soxr_hq"),
             pad="centre_crop_end_pad",

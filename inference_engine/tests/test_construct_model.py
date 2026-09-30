@@ -7,10 +7,9 @@ from pathlib import Path
 import pytest
 
 from doubles import CallLog, ScriptedModel, installed_distribution, installed_factory
-from robin_contracts.cards import ModelCard, ModelRef, model_ref
+from robin_contracts.cards import AudioGeometry, ModelCard, ModelRef, RunnerResampled, model_ref
 from robin_contracts.embedding_transforms import Identity
-from robin_contracts.protocols import ModelCapabilities, ModelContext
-from robin_contracts.specs import AudioSpec, Recipe, RunnerResampled
+from robin_contracts.protocols import ModelContext
 from robin_inference_engine import errors
 from robin_inference_engine.construct_model import (
     ENTRY_POINT_GROUP,
@@ -22,29 +21,20 @@ CARD = ModelCard(
     model_name="test-model",
     model_version="1",
     runtime="none",
-    segment_duration=3.0,
+    window_duration=3.0,
     sample_rate=16000,
     min_detection_threshold=0.0,
-)
-REF = model_ref(CARD)
-OTHER_REF = ModelRef(name="absent-model", version="9", digest=REF.digest)
-
-RECIPE = Recipe(
-    model=REF,
-    backend="none",
-    audio=AudioSpec(
-        sample_rate=16000,
-        window=3.0,
-        hop=3.0,
-        downmix="mean",
-        resampler=RunnerResampled(algorithm="soxr_hq"),
-        pad="centre_crop_end_pad",
+    window_overlap=0.0,
+    score_domain="probability",
+    audio=AudioGeometry(
+        downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad="drop"
     ),
+    backend="none",
     embedding_transform=Identity(),
     dtype="float32",
 )
-CAPABILITIES = ModelCapabilities(emits_scores=False, emits_embeddings=False)
-
+REF = model_ref(CARD)
+OTHER_REF = ModelRef(name="absent-model", version="9", digest=REF.digest)
 
 def build_context(scratch_dir: Path) -> ModelContext:
     return ModelContext(
@@ -52,6 +42,7 @@ def build_context(scratch_dir: Path) -> ModelContext:
         registry=None,
         files={"weights": scratch_dir / "weights.bin"},
         settings={"top_k": None, "gain": 1.5},
+        resources={"batch_size": 8},
         scratch_dir=scratch_dir,
         emit_embeddings=False,
         log=print,
@@ -59,7 +50,7 @@ def build_context(scratch_dir: Path) -> ModelContext:
 
 
 def build_model(calls: CallLog) -> ScriptedModel:
-    return ScriptedModel(recipe=RECIPE, capabilities=CAPABILITIES, script=(), calls=calls)
+    return ScriptedModel(script=(), calls=calls)
 
 
 def refusal(**kwargs) -> errors.EngineError:

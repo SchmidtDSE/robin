@@ -13,6 +13,7 @@ FIXED_ALLOWED_ROBIN_IMPORTS = {
     "robin_contracts": frozenset(),
     "robin_inference_engine": frozenset({"robin_contracts"}),
     "robin_run_manager": frozenset({"robin_contracts"}),
+    "robin_models": frozenset({"robin_contracts"}),
 }
 
 # robin_adapters.* is governed separately because its persistence subtree

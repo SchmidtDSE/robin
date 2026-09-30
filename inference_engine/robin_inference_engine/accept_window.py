@@ -6,8 +6,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from robin_contracts.cards import ModelCard
 from robin_contracts.output_contracts import ScoresRequest
-from robin_contracts.protocols import ModelCapabilities
 from robin_contracts.records import ClassScore, WindowOutput
 from robin_contracts.registry import TaxonRegistry
 from robin_contracts.specs import WindowGeometry
@@ -20,14 +20,6 @@ START_TOLERANCE_S = 0.05
 DURATION_TOLERANCE_S = 0.1
 
 PROBABILITY_RANGE = (0.0, 1.0)
-
-# Resolved through a mapping rather than np.dtype(declared): np.dtype(None) is float64,
-# so an instance that declared nothing would otherwise be compared against a dtype
-# nobody chose.
-EMBEDDING_DTYPES: dict[str, np.dtype] = {
-    "float16": np.dtype(np.float16),
-    "float32": np.dtype(np.float32),
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,33 +37,34 @@ class AcceptedWindow:
 
 
 class AcceptanceBoundary:
-    """Validates every window of one work, one recording at a time.
+    """Validates every window of one work, one recording at a time, against its card.
 
     Every check refuses and none repairs. A clamped score, a cast embedding or a sorted
     window stream would each turn a producer defect into a plausible published value.
+    The scores are checked as the model's card says it emits them. The request's own
+    floor and k are applied after this, so they are not checked here.
     """
 
     def __init__(
         self,
         *,
         geometry: WindowGeometry,
-        capabilities: ModelCapabilities,
+        card: ModelCard,
         recordings: Sequence[RecordingRef],
         registry: TaxonRegistry | None = None,
         scores: ScoresRequest | None = None,
         expect_embeddings: bool = False,
     ) -> None:
-        if scores is not None and scores.retention == "full" and registry is None:
-            raise RuntimeError(
-                "full score retention has no registry to compare a window against; "
-                "such a request is refused before the engine runs"
-            )
+        self._card = card
         self._geometry = geometry
-        self._capabilities = capabilities
+        # At or below the domain minimum the floor excludes nothing, so the model emits
+        # every label for every window.
+        self._full_stream = card.min_detection_threshold <= PROBABILITY_RANGE[0]
         self._recordings = tuple(recordings)
         self._registry = registry
         self._scores = scores
         self._expect_embeddings = expect_embeddings
+        self._embedding_dtype = np.dtype(card.embedding_dtype) if expect_embeddings else None
         self._open_recording: int | None = None
         self._processed: set[int] = set()
         self._last_start: float | None = None
@@ -164,11 +157,11 @@ class AcceptanceBoundary:
             )
 
         span = window.end - window.start
-        if abs(span - self._geometry.window) > DURATION_TOLERANCE_S:
+        if abs(span - self._geometry.window_duration) > DURATION_TOLERANCE_S:
             raise self._refuse(
                 errors.WINDOW_OFF_GEOMETRY,
                 window,
-                f"window spans {span}, not the {self._geometry.window} the recipe "
+                f"window spans {span}, not the {self._geometry.window_duration} the recipe "
                 f"declares, past the {DURATION_TOLERANCE_S} s tolerance",
             )
 
@@ -195,7 +188,7 @@ class AcceptanceBoundary:
                 f"end {window.end} is past the recording's {duration} s "
                 "under the drop policy",
             )
-        if window.end > duration + self._geometry.window:
+        if window.end > duration + self._geometry.window_duration:
             raise self._refuse(
                 errors.WINDOW_OUTSIDE_RECORDING,
                 window,
@@ -218,17 +211,8 @@ class AcceptanceBoundary:
             # After the domain check, so a NaN never reaches a comparison that is false.
             self._check_score_floor(window, score)
         self._check_every_label_is_present(window, len(scores))
-        self._check_top_k(window, len(scores))
 
     def _check_score_value(self, window: WindowOutput, score: ClassScore) -> None:
-        if self._capabilities.score_domain != "probability":
-            raise self._refuse(
-                errors.SCORE_OUT_OF_DOMAIN,
-                window,
-                f"score {score.score} for {score.label!r} has no domain to be inside; "
-                f"this instance declares score_domain "
-                f"{self._capabilities.score_domain!r}",
-            )
         low, high = PROBABILITY_RANGE
         if not math.isfinite(score.score) or not low <= score.score <= high:
             raise self._refuse(
@@ -243,12 +227,6 @@ class AcceptanceBoundary:
             raise self._refuse(
                 errors.UNKNOWN_LABEL, window, "a score carries an empty label"
             )
-        if self._registry is None:
-            raise self._refuse(
-                errors.UNKNOWN_LABEL,
-                window,
-                f"label {score.label!r} is undeclared: this model declares no registry",
-            )
         if score.label not in self._registry.labels:
             raise self._refuse(
                 errors.UNKNOWN_LABEL,
@@ -258,31 +236,20 @@ class AcceptanceBoundary:
             )
 
     def _check_score_floor(self, window: WindowOutput, score: ClassScore) -> None:
-        # Exact: the floor is a declared constant the adapter applied, so a tolerance
+        # Exact: the floor is a declared constant the model applied, so a tolerance
         # would only let a genuinely lower score through.
-        if self._scores.retention == "full" or score.score >= self._scores.min_score:
+        floor = self._card.min_detection_threshold
+        if self._full_stream or score.score >= floor:
             return
         raise self._refuse(
             errors.SCORE_BELOW_FLOOR,
             window,
-            f"score {score.score} for {score.label!r} is below the requested "
-            f"{self._scores.retention} floor {self._scores.min_score}",
+            f"score {score.score} for {score.label!r} is below the model's own floor "
+            f"{floor}, its card's min_detection_threshold",
         )
 
-    def _check_top_k(self, window: WindowOutput, count: int) -> None:
-        # Fewer than k is valid, because the floor can cut.
-        if self._scores is None or self._scores.retention != "top_k":
-            return
-        if count > self._scores.top_k:
-            raise self._refuse(
-                errors.SCORES_EXCEED_TOP_K,
-                window,
-                f"window carries {count} scores under a requested top_k of "
-                f"{self._scores.top_k}",
-            )
-
     def _check_every_label_is_present(self, window: WindowOutput, count: int) -> None:
-        if self._scores is None or self._scores.retention != "full":
+        if self._scores is None or not self._full_stream:
             return
         # Membership and uniqueness are settled above, so an equal count is an equal
         # set and a several-thousand-label registry needs no second set per window.
@@ -291,8 +258,9 @@ class AcceptanceBoundary:
             raise self._refuse(
                 errors.INCOMPLETE_FULL_SCORES,
                 window,
-                f"full retention needs each of registry "
-                f"{self._registry.fingerprint}'s {declared} labels once, got {count}",
+                f"this model emits every label, so each of registry "
+                f"{self._registry.fingerprint}'s {declared} labels must appear once, "
+                f"got {count}",
             )
 
     def _check_embedding(self, window: WindowOutput) -> None:
@@ -314,12 +282,6 @@ class AcceptanceBoundary:
                 window,
                 "this work requested no embeddings",
             )
-        if not self._capabilities.emits_embeddings:
-            raise self._refuse(
-                errors.UNEXPECTED_EMBEDDING,
-                window,
-                "this instance declares that it emits no embeddings",
-            )
 
     def _check_embedding_shape(self, window: WindowOutput) -> None:
         """Refuse a mismatch rather than cast, reshape or copy it into shape."""
@@ -330,7 +292,7 @@ class AcceptanceBoundary:
                 window,
                 f"embedding must be 1-D, got shape {embedding.shape}",
             )
-        declared = self._declared_embedding_dtype()
+        declared = self._embedding_dtype
         # Compared as dtypes, not as dtype names: a non-native byte order reports the
         # same name, passes every other check here and narrows through astype, so a
         # name comparison would let it reach storage as bytes in the wrong order.
@@ -344,25 +306,13 @@ class AcceptanceBoundary:
             raise self._refuse(
                 errors.MALFORMED_EMBEDDING, window, "embedding must be C-contiguous"
             )
-        if embedding.size != self._capabilities.embedding_dim:
+        if embedding.size != self._card.embedding_dim:
             raise self._refuse(
                 errors.MALFORMED_EMBEDDING,
                 window,
-                f"embedding must be {self._capabilities.embedding_dim} values wide, "
+                f"embedding must be {self._card.embedding_dim} values wide, "
                 f"got {embedding.size}",
             )
-
-    def _declared_embedding_dtype(self) -> np.dtype:
-        # Every instance that emits embeddings without one of these is refused before
-        # inference, so one reaching here is an engine defect, not an untrusted input.
-        declared = self._capabilities.embedding_dtype
-        if declared not in EMBEDDING_DTYPES:
-            raise RuntimeError(
-                f"an instance emitting embeddings declares embedding_dtype "
-                f"{declared!r}; this engine accepts "
-                f"{', '.join(EMBEDDING_DTYPES)}"
-            )
-        return EMBEDDING_DTYPES[declared]
 
     def _refuse(self, code: str, window: WindowOutput, detail: str) -> errors.EngineError:
         return errors.EngineError(

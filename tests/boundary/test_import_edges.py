@@ -226,6 +226,26 @@ def test_inference_engine_importing_contracts_is_accepted(tmp_path):
     )
 
 
+def test_models_importing_inference_engine_is_rejected(tmp_path):
+    module = _write_module(
+        tmp_path,
+        "robin_models.owl.adapter",
+        ["from robin_inference_engine.construct_model import installed_models"],
+    )
+    violations = check_file(module, tmp_path)
+    assert violations, "robin_models must not import robin_inference_engine"
+
+
+def test_models_importing_contracts_is_accepted(tmp_path):
+    module = _write_module(
+        tmp_path,
+        "robin_models.owl.adapter",
+        ["from robin_contracts.protocols import ModelContext"],
+    )
+    violations = check_file(module, tmp_path)
+    assert not violations, f"robin_models may import robin_contracts: {violations}"
+
+
 # ---------------------------------------------------------------------------
 # Real-tree scan.
 # ---------------------------------------------------------------------------

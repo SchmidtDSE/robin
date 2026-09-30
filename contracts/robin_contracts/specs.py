@@ -1,58 +1,67 @@
 """What a run did to the audio, and what that makes a window mean."""
 
 import math
-from typing import Annotated, Literal, NewType
+from typing import Literal, NewType
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from robin_contracts.canonical import sha256_v1
-from robin_contracts.cards import ModelRef
+from robin_contracts.cards import (
+    EmbeddingDtype,
+    ModelCard,
+    ModelRef,
+    PadPolicy,
+    Resampling,
+    model_ref,
+    refuse_windows_that_do_not_advance,
+)
 from robin_contracts.embedding_transforms import EmbeddingTransform
 
 RecipeFingerprint = NewType("RecipeFingerprint", str)
-
-PadPolicy = Literal["centre_crop_end_pad", "drop", "time_scaled"]
 
 # Guards the boundary case where a duration is an exact multiple of the hop and binary
 # float arithmetic lands a hair either side of it.
 _EPS = 1e-9
 
 
-class RunnerResampled(BaseModel, frozen=True):
-    """This repository resampled the audio, and chose how."""
-    by: Literal["runner"] = "runner"
-    algorithm: Literal["soxr_hq", "librosa"]
-
-
-class BackendResampled(BaseModel, frozen=True):
-    """The model library resampled inside its own call."""
-    by: Literal["backend"] = "backend"
-    library: str
-    version: str
-
-
-Resampling = Annotated[RunnerResampled | BackendResampled, Field(discriminator="by")]
-
-
 class WindowGeometry(BaseModel, frozen=True):
     """What decides how many windows a duration yields, and where each one starts."""
-    window: float = Field(gt=0, allow_inf_nan=False)
-    hop: float = Field(gt=0, allow_inf_nan=False)
+    window_duration: float = Field(gt=0, allow_inf_nan=False)
+    window_overlap: float = Field(ge=0, allow_inf_nan=False)
     pad: PadPolicy
+
+    @model_validator(mode="after")
+    def _windows_advance(self) -> "WindowGeometry":
+        refuse_windows_that_do_not_advance(self.window_duration, self.window_overlap)
+        return self
+
+    @property
+    def hop(self) -> float:
+        """How far each window starts after the one before it."""
+        return self.window_duration - self.window_overlap
 
 
 class AudioSpec(BaseModel, frozen=True):
     """Everything that changes what a window IS."""
     sample_rate: int
-    window: float = Field(gt=0, allow_inf_nan=False)
-    hop: float = Field(gt=0, allow_inf_nan=False)
+    window_duration: float = Field(gt=0, allow_inf_nan=False)
+    window_overlap: float = Field(ge=0, allow_inf_nan=False)
     downmix: Literal["mean", "first"]
     resampler: Resampling
     pad: PadPolicy
 
+    @model_validator(mode="after")
+    def _windows_advance(self) -> "AudioSpec":
+        refuse_windows_that_do_not_advance(self.window_duration, self.window_overlap)
+        return self
+
     @property
     def geometry(self) -> WindowGeometry:
-        return WindowGeometry(window=self.window, hop=self.hop, pad=self.pad)
+        return WindowGeometry(
+            window_duration=self.window_duration,
+            window_overlap=self.window_overlap,
+            pad=self.pad,
+        )
 
 
 class Recipe(BaseModel, frozen=True):
@@ -62,16 +71,42 @@ class Recipe(BaseModel, frozen=True):
     backend: str
     audio: AudioSpec
     embedding_transform: EmbeddingTransform
-    dtype: Literal["float16", "float32"]
+    dtype: EmbeddingDtype
 
     @property
     def id(self) -> RecipeFingerprint:
         return RecipeFingerprint(sha256_v1(self))
 
 
+def recipe(card: ModelCard) -> Recipe:
+    """The recipe a model card states. Every fact in it is the card's."""
+    return Recipe(
+        model=model_ref(card),
+        backend=card.backend,
+        audio=AudioSpec(
+            sample_rate=card.sample_rate,
+            window_duration=card.window_duration,
+            window_overlap=card.window_overlap,
+            downmix=card.audio.downmix,
+            resampler=card.audio.resampler,
+            pad=card.audio.pad,
+        ),
+        embedding_transform=card.embedding_transform,
+        dtype=card.dtype,
+    )
+
+
 def window_count(duration: float, geometry: WindowGeometry) -> int:
     """How many windows a recording of this duration yields under this geometry."""
-    raw = (duration - geometry.window) / geometry.hop + 1
+    raw = (duration - geometry.window_duration) / geometry.hop + 1
     if geometry.pad == "drop":
         return max(math.floor(raw + _EPS), 0)
     return max(math.ceil(raw - _EPS), 1)
+
+
+def window_bounds(duration: float, geometry: WindowGeometry) -> list[tuple[float, float]]:
+    """The `(start, end)` of every window: window i starts i hops in and spans one window."""
+    return [
+        (i * geometry.hop, i * geometry.hop + geometry.window_duration)
+        for i in range(window_count(duration, geometry))
+    ]

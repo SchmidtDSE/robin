@@ -1,0 +1,52 @@
+class_index,label,label_kind,scientific_name,common_name,gbif_taxon_key,model,rank,kind,match_type
+0,AEAC,taxon,Aegolius acadicus,Northern saw-whet owl,5232207,owl,SPECIES,species,EXACT
+1,BRCA,taxon,Branta canadensis,Canada goose,5232437,owl,SPECIES,species,EXACT
+2,BRMA,taxon,Brachyramphus marmoratus,Marbled murrelet,5229281,owl,SPECIES,species,EXACT
+3,BUVI,taxon,Bubo virginianus,Great horned owl,5959118,owl,SPECIES,species,EXACT
+4,CAGU,taxon,Catharus guttatus,Hermit thrush,2490810,owl,SPECIES,species,EXACT
+5,CALU,taxon,Canis lupus,Wolf howl,5219173,owl,SPECIES,species,EXACT
+6,CAUS,taxon,Catharus ustulatus,Swainson's thrush,2490821,owl,SPECIES,species,EXACT
+7,CCOO,taxon,Contopus cooperi,Olive-sided flycatcher,5229743,owl,SPECIES,species,EXACT
+8,CHFA,taxon,Chamaea fasciata,Wrentit,2493558,owl,SPECIES,species,EXACT
+9,CHMI,taxon,Chordeiles minor,Common nighthawk call,2497035,owl,SPECIES,species,EXACT
+10,CHMI_IRREG,taxon,Chordeiles minor,Common nighthawk boom,2497035,owl,SPECIES,species,EXACT
+11,COAU,taxon,Colaptes auratus,Northern flicker series,2478259,owl,SPECIES,species,EXACT
+12,COAU2,taxon,Colaptes auratus,Northern flicker 'skew',2478259,owl,SPECIES,species,EXACT
+13,COCO,taxon,Corvus corax,Common raven,2482492,owl,SPECIES,species,EXACT
+14,CYST,taxon,Cyanocitta stelleri,Steller's jay,2482598,owl,SPECIES,species,EXACT
+15,DEFU,taxon,Dendragapus fuliginosus,Sooty grouse,7340146,owl,SPECIES,species,EXACT
+16,DOG,non_taxonomic,,Dog barks,,owl,,non_taxon,
+17,DRPU,taxon,Dryobates pubescens,Downy woodpecker call,9149595,owl,SPECIES,species,EXACT
+18,DRUM,non_taxonomic,,Woodpecker spp. drum,,owl,,non_taxon,
+19,FLY,non_taxonomic,,Insect buzz,,owl,,non_taxon,
+20,FROG,non_taxonomic,,Frog chorus,,owl,,non_taxon,
+21,GLGN,taxon,Glaucidium gnoma,Northern pygmy-owl,9616953,owl,SPECIES,species,EXACT
+22,HOSA,non_taxonomic,,Human speech,,owl,,non_taxon,
+23,HYPI,taxon,Dryocopus pileatus,Pileated woodpecker call,5228824,owl,SPECIES,species,EXACT
+24,INSP,taxon,Strix varia,Barred owl inspection call,2497541,owl,SPECIES,species,EXACT
+25,IXNA,taxon,Ixoreus naevius,Varied thrush,2490926,owl,SPECIES,species,EXACT
+26,MEKE,taxon,Megascops kennicottii,Western screech-owl,2497341,owl,SPECIES,species,VARIANT
+27,MYTO,taxon,Myadestes townsendi,Townsend's solitaire,2490849,owl,SPECIES,species,EXACT
+28,NUCO,taxon,Nucifraga columbiana,Clark's nutcracker,2482614,owl,SPECIES,species,EXACT
+29,OCPR,taxon,Ochotona princeps,American pika,2436982,owl,SPECIES,species,EXACT
+30,ORPI,taxon,Oreortyx pictus,Mountain quail,2474320,owl,SPECIES,species,EXACT
+31,PAFA,taxon,Patagioenas fasciata,Band-tailed pigeon,2495266,owl,SPECIES,species,EXACT
+32,PECA,taxon,Perisoreus canadensis,Canada jay,2482436,owl,SPECIES,species,EXACT
+33,PHNU,taxon,Phalaenoptilus nuttallii,Common poorwill,2497062,owl,SPECIES,species,EXACT
+34,PIMA,taxon,Pipilo maculatus,Spotted towhee,9709230,owl,SPECIES,species,EXACT
+35,POEC,taxon,Poecile,Chickadee song,2487782,owl,GENUS,genus,HIGHERRANK
+36,PSFL,taxon,Psiloscops flammeolus,Flammulated owl,7807178,owl,SPECIES,species,EXACT
+37,SHOT,non_taxonomic,,Gunshot,,owl,,non_taxon,
+38,SITT,taxon,Sitta,Nuthatch,2484878,owl,GENUS,genus,HIGHERRANK
+39,SPRU,taxon,Sphyrapicus,Sapsucker drum,2478596,owl,GENUS,genus,HIGHERRANK
+40,STOC,taxon,Strix occidentalis,Spotted owl location call,2497487,owl,SPECIES,species,EXACT
+41,STOC_IRREG,taxon,Strix occidentalis,Spotted owl series call,2497487,owl,SPECIES,species,EXACT
+42,STVA,taxon,Strix varia,Barred owl eight-note call,2497541,owl,SPECIES,species,EXACT
+43,STVA_IRREG,taxon,Strix varia,Barred owl series call,2497541,owl,SPECIES,species,EXACT
+44,TADO1,taxon,Tamiasciurus douglasii,Douglas' squirrel rattle,2437281,owl,SPECIES,species,EXACT
+45,TADO2,taxon,Tamiasciurus douglasii,Douglas' squirrel chirp,2437281,owl,SPECIES,species,EXACT
+46,TAMI,taxon,Neotamias,Chipmunk chirp,4828027,owl,GENUS,genus,HIGHERRANK
+47,TUMI,taxon,Turdus migratorius,American robin whinny,9510564,owl,SPECIES,species,EXACT
+48,WHIS,taxon,Strix,Strix owl contact whistle,2497486,owl,GENUS,genus,HIGHERRANK
+49,YARD,non_taxonomic,,Yarder (machine),,owl,,non_taxon,
+50,ZEMA,taxon,Zenaida macroura,Mourning dove,2495347,owl,SPECIES,species,EXACT
