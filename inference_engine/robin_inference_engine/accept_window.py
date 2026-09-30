@@ -14,10 +14,8 @@ from robin_contracts.specs import WindowGeometry
 from robin_contracts.work import RecordingRef
 from robin_inference_engine import errors
 
-# BirdNET's adapter rounds library-reported bounds to one decimal, so a bound carries
-# up to 0.05 s of rounding error and a duration computed from two of them up to 0.1 s.
-START_TOLERANCE_S = 0.05
-DURATION_TOLERANCE_S = 0.1
+# Relative to the hop or window. Covers binary rounding in i * hop, nothing more.
+GRID_ALLOWANCE = 1e-9
 
 PROBABILITY_RANGE = (0.0, 1.0)
 
@@ -142,27 +140,25 @@ class AcceptanceBoundary:
         )
 
     def _check_geometry(self, window: WindowOutput) -> None:
-        # The remainder alone would accept a start just past a multiple and refuse one
-        # just before the next, so the distance to the nearer multiple is what counts.
-        # Python's % keeps it non-negative for a positive hop; math.fmod would not, and
-        # would slip every negative start under the tolerance.
-        remainder = window.start % self._geometry.hop
-        off_grid = min(remainder, self._geometry.hop - remainder)
-        if off_grid > START_TOLERANCE_S:
+        # A start just below a multiple leaves a remainder of nearly a whole hop, so
+        # measure to the nearer multiple. Python's %, unlike math.fmod, is never negative.
+        hop = self._geometry.hop
+        remainder = window.start % hop
+        off_grid = min(remainder, hop - remainder)
+        if off_grid > GRID_ALLOWANCE * hop:
             raise self._refuse(
                 errors.WINDOW_OFF_GEOMETRY,
                 window,
-                f"start {window.start} is {off_grid} from a multiple of hop "
-                f"{self._geometry.hop}, past the {START_TOLERANCE_S} s tolerance",
+                f"start {window.start} is {off_grid} from a multiple of hop {hop}",
             )
 
         span = window.end - window.start
-        if abs(span - self._geometry.window_duration) > DURATION_TOLERANCE_S:
+        declared = self._geometry.window_duration
+        if abs(span - declared) > GRID_ALLOWANCE * declared:
             raise self._refuse(
                 errors.WINDOW_OFF_GEOMETRY,
                 window,
-                f"window spans {span}, not the {self._geometry.window_duration} the recipe "
-                f"declares, past the {DURATION_TOLERANCE_S} s tolerance",
+                f"window spans {span}, not the {declared} the recipe declares",
             )
 
     def _check_within_recording(self, window: WindowOutput) -> None:
@@ -187,13 +183,6 @@ class AcceptanceBoundary:
                 window,
                 f"end {window.end} is past the recording's {duration} s "
                 "under the drop policy",
-            )
-        if window.end > duration + self._geometry.window_duration:
-            raise self._refuse(
-                errors.WINDOW_OUTSIDE_RECORDING,
-                window,
-                f"end {window.end} is more than one window past the recording's "
-                f"{duration} s",
             )
 
     def _check_scores(self, window: WindowOutput, scores: tuple[ClassScore, ...]) -> None:

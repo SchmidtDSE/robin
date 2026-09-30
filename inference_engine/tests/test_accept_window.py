@@ -8,7 +8,7 @@ from robin_contracts.embedding_transforms import Identity
 from robin_contracts.output_contracts import ScoresRequest
 from robin_contracts.records import ClassScore, WindowOutput
 from robin_contracts.registry import RegistryEntry, TaxonRegistry
-from robin_contracts.specs import WindowGeometry
+from robin_contracts.specs import WindowGeometry, window_bounds
 from robin_contracts.work import RecordingRef
 from robin_inference_engine import errors
 from robin_inference_engine.accept_window import AcceptanceBoundary
@@ -229,10 +229,20 @@ def test_accept_refuses_a_start_off_the_hop_grid():
 
 
 @pytest.mark.parametrize("start", [2.96, 3.04])
-def test_accept_tolerates_a_start_rounded_to_one_decimal(start):
-    accepted = build_boundary().accept(build_window(start=start, end=start + 3.0))
+def test_accept_refuses_a_start_rounded_to_one_decimal(start):
+    with pytest.raises(errors.EngineError) as exc:
+        build_boundary().accept(build_window(start=start, end=start + 3.0))
 
-    assert accepted.start == start
+    assert exc.value.code == errors.WINDOW_OFF_GEOMETRY
+
+
+def test_accept_refuses_a_start_one_sample_off_the_grid_at_96_khz():
+    start = 3.0 + 1 / 96000
+
+    with pytest.raises(errors.EngineError) as exc:
+        build_boundary().accept(build_window(start=start, end=start + 3.0))
+
+    assert exc.value.code == errors.WINDOW_OFF_GEOMETRY
 
 
 def test_accept_refuses_a_window_of_the_wrong_duration():
@@ -240,6 +250,26 @@ def test_accept_refuses_a_window_of_the_wrong_duration():
         build_boundary().accept(build_window(start=3.0, end=8.0))
 
     assert exc.value.code == errors.WINDOW_OFF_GEOMETRY
+
+
+def test_accept_refuses_a_window_slightly_longer_than_the_recipe_declares():
+    with pytest.raises(errors.EngineError) as exc:
+        build_boundary().accept(build_window(start=3.0, end=6.08))
+
+    assert exc.value.code == errors.WINDOW_OFF_GEOMETRY
+
+
+def test_accept_takes_every_window_of_a_day_long_recording_at_a_hop_with_no_exact_binary_form():
+    # An 11.1 s hop has no exact binary form, so i * hop drifts off the grid by a few
+    # trillionths of a second over a day of windows.
+    duration = 24 * 60 * 60.0
+    geometry = WindowGeometry(window_duration=12.0, window_overlap=0.9, pad="time_scaled")
+    boundary = build_boundary(geometry=geometry, recordings=build_recordings(duration))
+
+    bounds = window_bounds(duration, geometry)
+    accepted = [boundary.accept(build_window(start=start, end=end)) for start, end in bounds]
+
+    assert [(window.start, window.end) for window in accepted] == bounds
 
 
 @pytest.mark.parametrize("start", [9.0, 12.0])
@@ -253,7 +283,7 @@ def test_accept_refuses_a_start_at_or_past_the_recording_duration(start):
 
 
 @pytest.mark.parametrize("duration", [10.0, None])
-@pytest.mark.parametrize("start", [-6.0, -3.0, -0.01])
+@pytest.mark.parametrize("start", [-6.0, -3.0, -1e-12])
 def test_accept_refuses_a_negative_start_even_on_the_hop_grid(start, duration):
     boundary = build_boundary(recordings=build_recordings(duration))
 
@@ -289,9 +319,6 @@ def test_accept_allows_a_complete_window_under_drop_policy():
 
 @pytest.mark.parametrize("pad", ["centre_crop_end_pad", "time_scaled"])
 def test_accept_allows_a_trailing_pad_window_past_the_audio(pad):
-    # The refused half is a 0.05 s band: the duration check runs after the geometry
-    # check has already pinned end - start to the window, so a duration sitting a hair
-    # above a hop multiple is the only shape that reaches it.
     geometry = WindowGeometry(window_duration=3.0, window_overlap=2.0, pad=pad)
 
     accepted = build_boundary(geometry=geometry, recordings=build_recordings(9.05)).accept(
@@ -300,12 +327,15 @@ def test_accept_allows_a_trailing_pad_window_past_the_audio(pad):
 
     assert accepted.end == 12.0
 
-    with pytest.raises(errors.EngineError) as exc:
-        build_boundary(geometry=geometry, recordings=build_recordings(9.05)).accept(
-            build_window(start=9.0, end=12.08)
-        )
 
-    assert exc.value.code == errors.WINDOW_OUTSIDE_RECORDING
+@pytest.mark.parametrize("pad", ["centre_crop_end_pad", "time_scaled"])
+def test_accept_allows_a_padded_last_window_starting_just_before_the_end(pad):
+    geometry = WindowGeometry(window_duration=3.0, window_overlap=0.0, pad=pad)
+    boundary = build_boundary(geometry=geometry, recordings=build_recordings(9.000001))
+
+    accepted = boundary.accept(build_window(start=9.0, end=12.0))
+
+    assert (accepted.start, accepted.end) == (9.0, 12.0)
 
 
 @pytest.mark.parametrize("pad", ["drop", "centre_crop_end_pad", "time_scaled"])
