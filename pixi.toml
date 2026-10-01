@@ -20,8 +20,15 @@ robin-adapters = { path = "adapters", editable = true }
 robin-bioacoustics = { path = "robin", editable = true }
 robin-models = { path = "models", editable = true }
 
+[feature.owl.pypi-dependencies]
+robin-models = { path = "models", editable = true, extras = ["owl"] }
+
+[feature.owl.tasks]
+test-owl = "pytest models/tests/test_owl_end_to_end.py -v"
+
 [environments]
 test = ["test"]
+owl = ["test", "owl"]
 
 [tasks]
 boundary = "pytest tests/boundary -v"
