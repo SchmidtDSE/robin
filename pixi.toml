@@ -19,6 +19,8 @@ robin-worker = { path = "worker", editable = true }
 robin-adapters = { path = "adapters", editable = true }
 robin-bioacoustics = { path = "robin", editable = true }
 robin-models = { path = "models", editable = true }
+scipy = ">=1.17.1,<2"
+soundfile = ">=0.13.1,<0.14"
 
 [environments]
 test = ["test"]
