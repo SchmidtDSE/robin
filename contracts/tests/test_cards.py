@@ -21,6 +21,7 @@ from robin_contracts.cards import (
 from robin_contracts.embedding_transforms import Identity, L2Norm
 
 CARD_DIGEST = "sha256:v1:" + "a" * 64
+REGISTRY_DIGEST = "sha256:" + "a" * 64
 
 MODEL_CARD_FIELDS = {
     "model_name": "perch",
@@ -31,6 +32,7 @@ MODEL_CARD_FIELDS = {
     "sample_rate": 32000,
     "min_detection_threshold": 0.01,
     "score_domain": "probability",
+    "taxa_registry_digest": REGISTRY_DIGEST,
     "audio": {
         "downmix": "mean",
         "resampler": {"by": "runner", "algorithm": "soxr_hq"},
@@ -109,7 +111,10 @@ def test_model_card_rejects_unknown_fields():
 
 @pytest.mark.parametrize("domain", ["probability", None])
 def test_a_card_states_its_score_domain_or_that_it_emits_no_scores(domain):
-    assert _model_card(score_domain=domain).score_domain == domain
+    digest = REGISTRY_DIGEST if domain else None
+    card = _model_card(score_domain=domain, taxa_registry_digest=digest)
+
+    assert card.score_domain == domain
 
 
 def test_a_card_must_state_its_score_domain():
@@ -126,6 +131,51 @@ def test_a_score_domain_the_engine_does_not_know_is_refused():
         _model_card(score_domain="logit")
 
     assert exc.value.errors()[0]["loc"] == ("score_domain",)
+
+
+@pytest.mark.parametrize("form", ["omitted", "null"])
+def test_a_card_that_emits_scores_must_declare_its_registry_digest(form):
+    fields = {
+        key: value for key, value in MODEL_CARD_FIELDS.items() if key != "taxa_registry_digest"
+    }
+    if form == "null":
+        fields["taxa_registry_digest"] = None
+
+    with pytest.raises(ValidationError, match="must declare taxa_registry_digest"):
+        ModelCard.model_validate(fields)
+
+
+def test_a_card_that_emits_no_scores_refuses_a_registry_digest():
+    with pytest.raises(ValidationError, match="must not declare taxa_registry_digest"):
+        _model_card(score_domain=None)
+
+
+@pytest.mark.parametrize("form", ["omitted", "null"])
+def test_a_card_that_emits_no_scores_needs_no_registry_digest(form):
+    fields = {
+        key: value for key, value in MODEL_CARD_FIELDS.items() if key != "taxa_registry_digest"
+    }
+    if form == "null":
+        fields["taxa_registry_digest"] = None
+
+    card = ModelCard.model_validate(fields | {"score_domain": None})
+
+    assert card.taxa_registry_digest is None
+
+
+@pytest.mark.parametrize(
+    "digest",
+    [
+        pytest.param("sha256:" + "A" * 64, id="uppercase"),
+        pytest.param("sha256:" + "a" * 63, id="63_characters"),
+        pytest.param("sha256:v1:" + "a" * 64, id="canonical_json_digest"),
+    ],
+)
+def test_a_malformed_registry_digest_is_refused(digest):
+    with pytest.raises(ValidationError) as exc:
+        _model_card(taxa_registry_digest=digest)
+
+    assert f"expected 'sha256:' and 64 hex characters, got {digest!r}" in str(exc.value)
 
 
 def test_embedding_dtype_declares_exactly_the_two_widths():
@@ -297,6 +347,20 @@ def test_a_written_card_reads_back_as_the_same_card(tmp_path, card):
     assert card_digest(read) == card_digest(card)
 
 
+def test_a_card_file_carrying_a_registry_digest_reads_back_with_it(tmp_path):
+    path = _write_text(tmp_path, _yaml(MODEL_CARD_FIELDS))
+
+    assert read_card(path).taxa_registry_digest == REGISTRY_DIGEST
+
+
+def test_a_written_card_keeps_its_registry_digest(tmp_path):
+    path = tmp_path / "card.yaml"
+
+    write_card(_model_card(), path)
+
+    assert read_card(path).taxa_registry_digest == REGISTRY_DIGEST
+
+
 def test_a_written_card_follows_the_field_order(tmp_path):
     path = tmp_path / "card.yaml"
 
@@ -318,6 +382,7 @@ def test_reading_a_card_keeps_comments_and_layout_out_of_its_digest(tmp_path):
         "window_overlap: 0.0\n"
         "min_detection_threshold: 0.01\n"
         "score_domain: probability\n"
+        f"taxa_registry_digest: {REGISTRY_DIGEST}\n"
         "audio:\n"
         "  pad: centre_crop_end_pad   # keys in any order\n"
         "  downmix: mean\n"

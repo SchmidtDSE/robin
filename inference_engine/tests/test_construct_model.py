@@ -17,6 +17,8 @@ from robin_inference_engine.construct_model import (
     installed_models,
 )
 
+REGISTRY_DIGEST = "sha256:" + "a" * 64
+
 CARD = ModelCard(
     model_name="test-model",
     model_version="1",
@@ -26,6 +28,7 @@ CARD = ModelCard(
     min_detection_threshold=0.0,
     window_overlap=0.0,
     score_domain="probability",
+    taxa_registry_digest=REGISTRY_DIGEST,
     audio=AudioGeometry(
         downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad="drop"
     ),

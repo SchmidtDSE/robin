@@ -31,6 +31,7 @@ def refuse_request(work: InferenceWork, *, registry: TaxonRegistry | None) -> No
     _refuse_embeddings_the_card_forbids(work, card)
     _refuse_unlabelled_scores(work)
     _refuse_a_substituted_registry(work, registry)
+    _refuse_a_registry_the_card_does_not_pin(work, card)
     _refuse_head_classes_the_registry_does_not_declare(card, registry)
     _refuse_a_head(card)
     _refuse_settings_the_card_does_not_declare(work, card)
@@ -94,6 +95,20 @@ def _refuse_a_substituted_registry(
             errors.REGISTRY_FINGERPRINT_MISMATCH,
             f"the work pins {REGISTRY_ROLE} file digest {pinned.digest} but the loaded "
             f"registry's fingerprint is {registry.fingerprint}",
+        )
+
+
+def _refuse_a_registry_the_card_does_not_pin(
+    work: InferenceWork, card: ModelCard | HeadCard
+) -> None:
+    pinned = work.model.files.get(REGISTRY_ROLE)
+    if pinned is None or isinstance(card, HeadCard) or card.taxa_registry_digest is None:
+        return
+    if pinned.digest != card.taxa_registry_digest:
+        raise _refused(
+            errors.REGISTRY_DISAGREES_WITH_CARD,
+            f"the work pins {REGISTRY_ROLE} file digest {pinned.digest} but card "
+            f"{_card_id(card)} declares taxa_registry_digest {card.taxa_registry_digest}",
         )
 
 

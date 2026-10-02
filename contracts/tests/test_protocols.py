@@ -8,6 +8,8 @@ from robin_contracts.cards import ModelCard
 from robin_contracts.protocols import Model, ModelContext, ScoreRetention, noop
 from robin_contracts.records import WindowOutput
 
+REGISTRY_DIGEST = "sha256:" + "a" * 64
+
 CARD = ModelCard.model_validate({
     "model_name": "owl",
     "model_version": "1",
@@ -17,6 +19,7 @@ CARD = ModelCard.model_validate({
     "sample_rate": 32000,
     "min_detection_threshold": 0.0,
     "score_domain": "probability",
+    "taxa_registry_digest": REGISTRY_DIGEST,
     "audio": {
         "downmix": "mean",
         "resampler": {"by": "runner", "algorithm": "soxr_hq"},

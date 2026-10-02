@@ -49,6 +49,7 @@ CARD = ModelCard(
     min_detection_threshold=0.0,
     window_overlap=0.0,
     score_domain="probability",
+    taxa_registry_digest=REGISTRY_FINGERPRINT,
     audio=AudioGeometry(
         downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad="drop"
     ),

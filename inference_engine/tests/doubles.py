@@ -37,6 +37,12 @@ ENTRY_POINT_GROUP = "robin.models"
 # A registry the loader accepts, declaring two labels.
 REGISTRY_CSV = b"class_index,label,label_kind\n0,owl,non_taxonomic\n1,rain,non_taxonomic\n"
 
+
+def registry_digest(csv: bytes) -> str:
+    """The digest a card names for a registry file holding `csv`."""
+    return "sha256:" + hashlib.sha256(csv).hexdigest()
+
+
 # Factories an installed test distribution hands out, keyed by the module that
 # exposes them. Filled and emptied by `installed_factory`.
 REGISTERED_FACTORIES: dict[str, Callable[[ModelContext], object]] = {}

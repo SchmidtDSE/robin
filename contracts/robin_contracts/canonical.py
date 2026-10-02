@@ -11,6 +11,9 @@ from pydantic import BaseModel
 
 
 _SHA256_V1 = re.compile(r"sha256:v1:[0-9a-f]{64}")
+# `sha256:` hashes file bytes, `sha256:v1:` hashes canonical JSON, so a digest of one
+# kind never matches one of the other. Strip the label where a path needs bare hex.
+_SHA256_BYTES = re.compile(r"sha256:[0-9a-f]{64}")
 
 
 class CanonicalizationError(ValueError):
@@ -52,3 +55,8 @@ def sha256_v1(value: Any) -> str:
 def is_sha256_v1(value: str) -> bool:
     """Whether `value` is spelled the way `sha256_v1` spells what it returns."""
     return _SHA256_V1.fullmatch(value) is not None
+
+
+def is_sha256_bytes(value: str) -> bool:
+    """Whether `value` is a `sha256:` digest of a file's bytes."""
+    return _SHA256_BYTES.fullmatch(value) is not None

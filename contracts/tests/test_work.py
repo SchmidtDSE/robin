@@ -19,6 +19,8 @@ from robin_contracts.work import (
     work_digest,
 )
 
+REGISTRY_DIGEST = "sha256:" + "a" * 64
+
 HEX = "0" * 64
 FILE_DIGEST = f"sha256:{HEX}"
 RECORD_DIGEST = f"sha256:v1:{HEX}"
@@ -32,6 +34,7 @@ CARD = ModelCard(
     sample_rate=32000,
     min_detection_threshold=0.0,
     score_domain="probability",
+    taxa_registry_digest=REGISTRY_DIGEST,
     audio=AudioGeometry(
         downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad="drop"
     ),

@@ -13,6 +13,8 @@ from robin_contracts.work import RecordingRef
 from robin_inference_engine import errors
 from robin_inference_engine.accept_window import AcceptanceBoundary
 
+REGISTRY_DIGEST = "sha256:" + "a" * 64
+
 FINGERPRINT = "sha256:" + "0" * 64
 
 # The model's own floor: its library returns only the scores at or above this.
@@ -54,6 +56,7 @@ def build_card(*, geometry: WindowGeometry | None = None, **overrides) -> ModelC
         "sample_rate": 16000,
         "min_detection_threshold": MODEL_FLOOR,
         "score_domain": "probability",
+        "taxa_registry_digest": REGISTRY_DIGEST,
         "audio": AudioGeometry(
             downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad=geometry.pad
         ),

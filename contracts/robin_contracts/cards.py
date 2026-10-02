@@ -17,7 +17,7 @@ from pydantic import (
     model_validator,
 )
 
-from robin_contracts.canonical import is_sha256_v1, sha256_v1
+from robin_contracts.canonical import is_sha256_bytes, is_sha256_v1, sha256_v1
 from robin_contracts.embedding_transforms import EmbeddingTransform
 
 PadPolicy = Literal["centre_crop_end_pad", "drop", "time_scaled"]
@@ -102,6 +102,8 @@ class ModelCard(BaseModel):
 
     `min_detection_threshold` is the lowest score the model emits. At or below the
     score domain's minimum, the model emits every label for every window.
+    `taxa_registry_digest` is the digest of the registry file the model's scores are
+    labelled by, and a card that emits scores must declare it.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -114,6 +116,7 @@ class ModelCard(BaseModel):
     sample_rate: int
     min_detection_threshold: float
     score_domain: Literal["probability"] | None  # None: the model emits no scores
+    taxa_registry_digest: str | None = None  # sha256 of the registry file that labels the scores
     spectrogram_shape: tuple[int, int] | None = None
     audio: AudioGeometry
     backend: str
@@ -145,6 +148,13 @@ class ModelCard(BaseModel):
             raise ValueError("sample_rate must be positive")
         return value
 
+    @field_validator("taxa_registry_digest")
+    @classmethod
+    def _a_file_digest(cls, value: str | None) -> str | None:
+        if value is not None and not is_sha256_bytes(value):
+            raise ValueError(f"expected 'sha256:' and 64 hex characters, got {value!r}")
+        return value
+
     @field_validator("embedding_dim")
     @classmethod
     def _positive_embedding_dim(cls, value: int | None) -> int | None:
@@ -155,6 +165,14 @@ class ModelCard(BaseModel):
     @model_validator(mode="after")
     def _windows_advance(self) -> "ModelCard":
         refuse_windows_that_do_not_advance(self.window_duration, self.window_overlap)
+        return self
+
+    @model_validator(mode="after")
+    def _registry_is_pinned_exactly_when_scores_are_emitted(self) -> "ModelCard":
+        if self.score_domain is not None and self.taxa_registry_digest is None:
+            raise ValueError("a card that emits scores must declare taxa_registry_digest")
+        if self.score_domain is None and self.taxa_registry_digest is not None:
+            raise ValueError("a card that emits no scores must not declare taxa_registry_digest")
         return self
 
     @model_validator(mode="after")

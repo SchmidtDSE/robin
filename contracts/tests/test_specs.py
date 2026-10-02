@@ -13,6 +13,8 @@ from robin_contracts.specs import (
     window_count,
 )
 
+REGISTRY_DIGEST = "sha256:" + "a" * 64
+
 MODEL = ModelRef(name="owl", version="1", digest="sha256:v1:" + "0" * 64)
 
 
@@ -49,6 +51,7 @@ def build_card(**overrides) -> ModelCard:
         "sample_rate": 32000,
         "min_detection_threshold": 0.0,
         "score_domain": "probability",
+        "taxa_registry_digest": REGISTRY_DIGEST,
         "audio": {
             "downmix": "first",
             "resampler": {"by": "runner", "algorithm": "librosa"},

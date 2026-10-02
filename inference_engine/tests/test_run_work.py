@@ -21,6 +21,7 @@ from doubles import (
     ScriptedModel,
     WorkBuilder,
     installed_factory,
+    registry_digest,
 )
 from robin_contracts.canonical import canonical_json_bytes
 from robin_contracts.cards import (
@@ -101,6 +102,7 @@ def build_card(*, pad: str = "centre_crop_end_pad", **overrides) -> ModelCard:
         "sample_rate": 16000,
         "min_detection_threshold": 0.0,
         "score_domain": "probability",
+        "taxa_registry_digest": registry_digest(REGISTRY_CSV),
         "audio": AudioGeometry(
             downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad=pad
         ),
@@ -374,6 +376,18 @@ def test_a_registry_replaced_after_verification_is_refused(rig, monkeypatch):
     assert_nothing_constructed(rig)
 
 
+def test_a_registry_the_card_does_not_name_is_refused_before_construction(tmp_path):
+    rig = Rig(tmp_path, card=build_card(taxa_registry_digest=registry_digest(TAXA_CSV)))
+    work = rig.work()
+
+    result = rig.run(work)
+
+    failure_of(
+        result, work, code=errors.REGISTRY_DISAGREES_WITH_CARD, stage=errors.VALIDATE_REQUEST
+    )
+    assert_nothing_constructed(rig)
+
+
 def test_a_head_declaring_a_class_the_registry_does_not_is_refused(tmp_path):
     head = HeadCard(
         model_name="test-head",
@@ -428,7 +442,7 @@ def test_a_factory_that_raises_is_refused_and_nothing_is_cleaned_up(rig):
 
 
 def test_scores_from_a_card_that_emits_none_are_refused_before_construction(tmp_path):
-    rig = Rig(tmp_path, card=build_card(score_domain=None))
+    rig = Rig(tmp_path, card=build_card(score_domain=None, taxa_registry_digest=None))
     work = rig.work()
 
     result = rig.run(work)
@@ -933,7 +947,8 @@ POLICY = ThresholdPolicy(min_score=0.5)
 
 @pytest.fixture
 def taxa_rig(tmp_path) -> Rig:
-    return Rig(tmp_path, registry_csv=TAXA_CSV)
+    card = build_card(taxa_registry_digest=registry_digest(TAXA_CSV))
+    return Rig(tmp_path, card=card, registry_csv=TAXA_CSV)
 
 
 def detections_request(policy=POLICY) -> DetectionsRequest:
@@ -1002,7 +1017,8 @@ def test_a_detections_header_names_the_scores_file_it_was_selected_from(taxa_rig
 
 
 def test_a_recording_with_no_windows_has_no_detections(tmp_path):
-    rig = Rig(tmp_path, card=DROPPING_CARD, registry_csv=TAXA_CSV)
+    card = build_card(pad="drop", taxa_registry_digest=registry_digest(TAXA_CSV))
+    rig = Rig(tmp_path, card=card, registry_csv=TAXA_CSV)
     recording = rig.build.recording("0", duration_seconds=2.0)
     work = rig.work(recordings=(recording,), outputs=(scores_request(), detections_request()))
 

@@ -53,6 +53,7 @@ MIN_SCORE_OUT_OF_DOMAIN = "min_score_out_of_domain"
 EMBEDDING_DTYPE_DISAGREES = "embedding_dtype_disagrees"
 REGISTRY_REQUIRED = "registry_required"
 REGISTRY_FINGERPRINT_MISMATCH = "registry_fingerprint_mismatch"
+REGISTRY_DISAGREES_WITH_CARD = "registry_disagrees_with_card"
 HEAD_CLASS_NOT_IN_REGISTRY = "head_class_not_in_registry"
 HEAD_NOT_SUPPORTED = "head_not_supported"
 SETTING_UNDECLARED = "setting_undeclared"
@@ -68,6 +69,7 @@ VALIDATE_REQUEST_FAILURES = (
     EMBEDDING_DTYPE_DISAGREES,
     REGISTRY_REQUIRED,
     REGISTRY_FINGERPRINT_MISMATCH,
+    REGISTRY_DISAGREES_WITH_CARD,
     HEAD_CLASS_NOT_IN_REGISTRY,
     HEAD_NOT_SUPPORTED,
     SETTING_UNDECLARED,

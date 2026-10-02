@@ -52,6 +52,7 @@ def build_card(**overrides) -> ModelCard:
         "sample_rate": 32000,
         "min_detection_threshold": 0.0,
         "score_domain": "probability",
+        "taxa_registry_digest": REGISTRY_FINGERPRINT,
         "audio": AudioGeometry(
             downmix="mean",
             resampler=RunnerResampled(algorithm="soxr_hq"),
@@ -164,7 +165,7 @@ def accepted(work: InferenceWork, *, registry: TaxonRegistry | None = REGISTRY) 
 
 
 def test_scores_from_a_card_that_emits_none_are_refused():
-    error = refused(build_work(card=build_card(score_domain=None)))
+    error = refused(build_work(card=build_card(score_domain=None, taxa_registry_digest=None)))
 
     assert error.code == errors.SCORES_NOT_EMITTED
     assert "score_domain" in error.detail
@@ -377,6 +378,30 @@ def test_a_loaded_registry_differing_from_its_pinned_file_is_refused():
     assert refused(build_work(), registry=None).code == errors.REGISTRY_FINGERPRINT_MISMATCH
 
 
+def a_work_pinning_another_registry_than_its_cards() -> errors.EngineError:
+    other = PinnedFile(uri="s3://b/other.csv", digest=OTHER_FINGERPRINT, size_bytes=8)
+    work = build_work(model=build_pinned_model(files={"weights": WEIGHTS, REGISTRY_ROLE: other}))
+    return refused(work, registry=build_registry(fingerprint=OTHER_FINGERPRINT))
+
+
+def test_a_pinned_registry_the_card_does_not_name_is_refused():
+    error = a_work_pinning_another_registry_than_its_cards()
+
+    assert (error.code, error.stage) == (
+        errors.REGISTRY_DISAGREES_WITH_CARD,
+        errors.VALIDATE_REQUEST,
+    )
+    assert OTHER_FINGERPRINT in error.detail
+    assert REGISTRY_FINGERPRINT in error.detail
+    assert "owl/1" in error.detail
+
+
+def test_an_embeddings_only_work_on_a_card_naming_no_registry_may_pin_one():
+    card = build_embedding_card(score_domain=None, taxa_registry_digest=None)
+
+    assert accepted(build_work(card=card, outputs=(build_embeddings(),)))
+
+
 def test_a_head_class_outside_the_registry_is_refused():
     error = refused(
         build_head_work(card=build_head(classes=("owl", "barred-owl"))),
@@ -398,7 +423,7 @@ def test_a_satisfiable_work_is_not_refused():
 
 
 REFUSING_CALLS = {
-    "scores_not_emitted": lambda: refused(build_work(card=build_card(score_domain=None))),
+    "scores_not_emitted": lambda: refused(build_work(card=build_card(score_domain=None, taxa_registry_digest=None))),
     "full_retention_reduced": lambda: refused(build_work(card=THRESHOLDED_CARD)),
     "score_floor_below_model_floor": lambda: refused(
         build_work(
@@ -428,6 +453,7 @@ REFUSING_CALLS = {
     "registry_fingerprint_mismatch": lambda: refused(
         build_work(), registry=build_registry(fingerprint=OTHER_FINGERPRINT)
     ),
+    "registry_disagrees_with_card": a_work_pinning_another_registry_than_its_cards,
     "head_class_not_in_registry": lambda: refused(
         build_head_work(card=build_head(classes=("owl", "barred-owl"))),
         registry=build_registry(labels=("owl",)),

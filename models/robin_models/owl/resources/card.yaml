@@ -16,6 +16,9 @@ spectrogram_shape: [257, 1000]
 # A floor of 0.0 excludes none of them.
 min_detection_threshold: 0.0
 score_domain: probability
+# The registry these scores are labelled by: the bundled taxa_registry.csv, copied
+# byte for byte from taxa_bureau commit 1213658, taxa_registries/owl_taxa_registry.csv.
+taxa_registry_digest: sha256:bb172a45a873cada2a0bd5a2846f12053b1cf249eb58eab5eacdbb0efa6b19ed
 
 # The first channel is read, and resampled to 8 kHz by the runner with soxr at its
 # high-quality setting. A last window shorter than 12 seconds is stretched to the full

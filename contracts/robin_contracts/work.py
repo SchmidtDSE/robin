@@ -6,13 +6,12 @@ excludes it.
 """
 
 import math
-import re
 from collections.abc import Mapping
 from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, Field, field_validator, model_validator
 
-from robin_contracts.canonical import is_sha256_v1, sha256_v1
+from robin_contracts.canonical import is_sha256_bytes, is_sha256_v1, sha256_v1
 from robin_contracts.cards import HeadCard, ModelCard
 from robin_contracts.output_contracts import (
     EmbeddingsContractId,
@@ -21,13 +20,9 @@ from robin_contracts.output_contracts import (
 )
 from robin_contracts.protocols import JsonScalar
 
-# `sha256:` hashes file bytes, `sha256:v1:` hashes canonical JSON, so a digest of one
-# kind never matches one of the other. Strip the label where a path needs bare hex.
-_BYTES_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
-
 
 def _bytes_digest(value: str) -> str:
-    if not _BYTES_DIGEST.fullmatch(value):
+    if not is_sha256_bytes(value):
         raise ValueError(f"expected 'sha256:' and 64 hex characters, got {value!r}")
     return value
 

@@ -1,6 +1,7 @@
 """The OWL adapter: its bundled card and registry, and the adapter against a fake runtime."""
 
 import csv
+import hashlib
 import importlib
 import sys
 import types
@@ -74,6 +75,12 @@ def test_the_card_declares_probability_scores_no_embeddings_and_no_settings():
     assert CARD.embedding_dim is None
     assert CARD.embedding_dtype is None
     assert CARD.inference_params == ()
+
+
+def test_the_card_names_the_bundled_registry_by_its_digest():
+    data = (RESOURCES / "taxa_registry.csv").read_bytes()
+
+    assert CARD.taxa_registry_digest == "sha256:" + hashlib.sha256(data).hexdigest()
 
 
 # What the adapter built OWL's recipe from before its card stated every fact itself. It
@@ -319,7 +326,11 @@ def changed_card(**changes) -> ModelCard:
             id="resampler",
         ),
         pytest.param("audio", {"audio": {**AUDIO, "pad": "drop"}}, id="pad"),
-        pytest.param("score_domain", {"score_domain": None}, id="score_domain"),
+        pytest.param(
+            "score_domain",
+            {"score_domain": None, "taxa_registry_digest": None},
+            id="score_domain",
+        ),
         pytest.param(
             "can_emit_embeddings",
             {"can_emit_embeddings": True, "embedding_dim": 4, "embedding_dtype": "float32"},
