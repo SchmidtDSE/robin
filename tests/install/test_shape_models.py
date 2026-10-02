@@ -11,3 +11,7 @@ def test_models_install_shape(built_wheels_dir: Path, tmp_path: Path) -> None:
 
 def test_meta_owl_install_shape(built_wheels_dir: Path, tmp_path: Path) -> None:
     check_shape("meta-owl", wheels_dir=built_wheels_dir, venv=tmp_path / "venv")
+
+
+def test_meta_birdnet_install_shape(built_wheels_dir: Path, tmp_path: Path) -> None:
+    check_shape("meta-birdnet", wheels_dir=built_wheels_dir, venv=tmp_path / "venv")

@@ -1848,6 +1848,8 @@ packages:
   - robin-worker>=0.0,<0.1 ; extra == 'worker'
   - robin-bioacoustics[inference-engine] ; extra == 'owl'
   - robin-models[owl]>=0.0,<0.1 ; extra == 'owl'
+  - robin-bioacoustics[inference-engine] ; extra == 'birdnet'
+  - robin-models[birdnet]>=0.0,<0.1 ; extra == 'birdnet'
   - robin-bioacoustics[inference-engine] ; extra == 'all'
   - robin-bioacoustics[run-manager] ; extra == 'all'
   - robin-bioacoustics[worker] ; extra == 'all'

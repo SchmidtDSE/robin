@@ -60,6 +60,8 @@ python -m pip download --dest .wheelcheck/dist "pyarrow>=23.0.1,<24" &&
 python -m pip download --dest .wheelcheck/dist "duckdb>=1.5.5,<2" &&
 echo "=== seed: robin-models[owl] runtime ===" &&
 python -m pip download --dest .wheelcheck/dist --find-links .wheelcheck/dist ".wheelcheck/dist/robin_models-0.0.0-py3-none-any.whl[owl]" &&
+echo "=== seed: robin-models[birdnet] runtime ===" &&
+python -m pip download --dest .wheelcheck/dist --find-links .wheelcheck/dist ".wheelcheck/dist/robin_models-0.0.0-py3-none-any.whl[birdnet]" &&
 echo === install: robin-contracts === &&
 python -m venv .wheelcheck/venv-robin_contracts &&
 .wheelcheck/venv-robin_contracts/bin/pip install --no-index --find-links .wheelcheck/dist robin-contracts &&

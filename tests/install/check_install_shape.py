@@ -56,6 +56,7 @@ _HEAVY_RUNTIMES = (
     "tf_keras",
     "sox_tensorflow",
     "soundfile",
+    "scipy",
     "PIL",
     "torch",
     "birdnet",
@@ -162,6 +163,18 @@ _register(
         "pyarrow",
         "duckdb",
     ),
+)
+_register(
+    "meta-birdnet",
+    install=("robin-bioacoustics[birdnet]",),
+    required=(
+        "robin_inference_engine",
+        "robin_contracts",
+        "robin_models",
+        "robin_models.birdnet",
+        "robin_models.birdnet.adapter",
+    ),
+    runtimes=("tensorflow", "soundfile", "scipy", "pyarrow", "duckdb"),
 )
 
 
