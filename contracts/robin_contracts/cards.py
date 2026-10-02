@@ -36,7 +36,7 @@ def refuse_windows_that_do_not_advance(duration: float, overlap: float) -> None:
 class RunnerResampled(BaseModel, frozen=True):
     """This repository resampled the audio, and chose how."""
     by: Literal["runner"] = "runner"
-    algorithm: Literal["soxr_hq", "librosa"]
+    algorithm: Literal["soxr_hq", "librosa", "scipy_fft_per_window"]
 
 
 class BackendResampled(BaseModel, frozen=True):

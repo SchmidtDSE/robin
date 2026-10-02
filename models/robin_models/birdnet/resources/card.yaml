@@ -1,0 +1,35 @@
+# BirdNET v2.4: the BirdNET team's official SavedModel, run on TensorFlow. It scores 6,522
+# classes: 6,511 of them species or other taxa, and 11 sounds that are not taxa.
+model_name: birdnet
+model_version: v2p4
+runtime: tensorflow
+
+# The network takes 3 seconds of raw audio at 48 kHz, 144,000 samples, and makes its own
+# spectrogram. Windows do not overlap: each starts where the last one ended.
+window_duration: 3.0
+window_overlap: 0.0
+sample_rate: 48000
+
+# Outputs are scores between 0 and 1, not calibrated probabilities. Every class is scored
+# for every window, and a floor of 0.0 excludes none of them.
+min_detection_threshold: 0.0
+score_domain: probability
+# The registry these scores are labelled by: the bundled taxa_registry.csv, copied
+# byte for byte from taxa_bureau commit 1213658, taxa_registries/birdnet_taxa_registry.csv.
+taxa_registry_digest: sha256:b758a58bee475d45b1fb04a8f42cbaa13c794d2dc782f0e86968e6c1515d4c2d
+
+# Channels are averaged. Audio not at 48 kHz is resampled by the runner one window at a
+# time, with SciPy's FFT resampler. A last window shorter than 3 seconds is padded with
+# zeros at its end.
+audio:
+  downmix: mean
+  resampler: {by: runner, algorithm: scipy_fft_per_window}
+  pad: centre_crop_end_pad
+backend: pb-fp32
+
+# Each window's embedding is the 1,024 float32 values the classifier reads, stored as they are.
+embedding_transform: {kind: identity}
+dtype: float32
+can_emit_embeddings: true
+embedding_dim: 1024
+embedding_dtype: float32

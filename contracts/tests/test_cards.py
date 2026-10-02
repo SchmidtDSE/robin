@@ -246,6 +246,25 @@ def test_a_card_can_state_that_its_library_resamples():
     assert card.audio.resampler == BackendResampled(library="birdnet", version="2.4")
 
 
+def test_a_card_file_can_state_that_the_runner_resamples_each_window_with_scipy(tmp_path):
+    resampler = {"by": "runner", "algorithm": "scipy_fft_per_window"}
+    audio = MODEL_CARD_FIELDS["audio"] | {"resampler": resampler}
+    path = _write_text(tmp_path, _yaml(MODEL_CARD_FIELDS | {"audio": audio}))
+
+    assert read_card(path).audio.resampler == RunnerResampled(algorithm="scipy_fft_per_window")
+
+
+def test_a_card_file_naming_a_runner_algorithm_the_contract_does_not_is_refused(tmp_path):
+    resampler = {"by": "runner", "algorithm": "sinc_best"}
+    audio = MODEL_CARD_FIELDS["audio"] | {"resampler": resampler}
+    path = _write_text(tmp_path, _yaml(MODEL_CARD_FIELDS | {"audio": audio}))
+
+    with pytest.raises(ValueError, match="algorithm") as exc:
+        read_card(path)
+
+    assert str(path) in str(exc.value)
+
+
 def test_a_cards_embedding_transform_reads_as_a_transform():
     assert _model_card().embedding_transform == Identity()
 
