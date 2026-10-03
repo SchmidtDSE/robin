@@ -182,6 +182,18 @@ _register(
     ),
     runtimes=("tensorflow", "soundfile", "scipy", "pyarrow", "duckdb"),
 )
+_register(
+    "meta-perch",
+    install=("robin-bioacoustics[perch]",),
+    required=(
+        "robin_inference_engine",
+        "robin_contracts",
+        "robin_models",
+        "robin_models.perch",
+        "robin_models.perch.adapter",
+    ),
+    runtimes=("tensorflow", "soundfile", "scipy", "pyarrow", "duckdb"),
+)
 
 
 def check_shape(shape_name: str, wheels_dir: Path, venv: Path) -> None:

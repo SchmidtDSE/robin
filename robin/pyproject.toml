@@ -16,6 +16,7 @@ run-manager = ["robin-run-manager >=0.0,<0.1"]
 worker = ["robin-worker >=0.0,<0.1"]
 owl = ["robin-bioacoustics[inference-engine]", "robin-models[owl] >=0.0,<0.1"]
 birdnet = ["robin-bioacoustics[inference-engine]", "robin-models[birdnet] >=0.0,<0.1"]
+perch = ["robin-bioacoustics[inference-engine]", "robin-models[perch] >=0.0,<0.1"]
 all = [
   "robin-bioacoustics[inference-engine]",
   "robin-bioacoustics[run-manager]",
