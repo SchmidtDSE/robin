@@ -6,7 +6,6 @@ import pyarrow as pa
 import pytest
 
 from robin_contracts.cards import AudioGeometry, ModelCard, RunnerResampled, model_ref
-from robin_contracts.embedding_transforms import Identity, L2Norm
 from robin_contracts.output_contracts import ScoresRequest
 from robin_contracts.records import ClassScore
 from robin_contracts.specs import AudioSpec, Recipe
@@ -54,7 +53,6 @@ CARD = ModelCard(
         downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad="drop"
     ),
     backend="tensorflow",
-    embedding_transform=Identity(),
     dtype="float32",
 )
 
@@ -88,7 +86,6 @@ def build_recipe() -> Recipe:
             resampler=RunnerResampled(algorithm="soxr_hq"),
             pad="centre_crop_end_pad",
         ),
-        embedding_transform=L2Norm(),
         dtype="float32",
     )
 

@@ -16,7 +16,7 @@ from robin_contracts.cards import (
     card_digest,
     model_ref,
 )
-from robin_contracts.embedding_transforms import Identity, L2Norm
+from robin_contracts.embedding_transforms import L2Norm
 from robin_contracts.output_contracts import EmbeddingsRequest
 from robin_contracts.specs import AudioSpec, Recipe
 from robin_contracts.work import (
@@ -66,7 +66,6 @@ CARD = ModelCard(
         downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad="drop"
     ),
     backend="tensorflow",
-    embedding_transform=Identity(),
     dtype="float32",
     embedding_dtype="float32",
 )
@@ -107,7 +106,6 @@ def build_recipe(**overrides) -> Recipe:
             resampler=RunnerResampled(algorithm="soxr_hq"),
             pad="centre_crop_end_pad",
         ),
-        "embedding_transform": Identity(),
         "dtype": "float32",
     }
     return Recipe(**(fields | overrides))

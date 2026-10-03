@@ -29,7 +29,5 @@ audio:
   pad: time_scaled
 backend: h5-fp32
 
-# OWL emits no embeddings. These say how a model's embeddings would be treated if it did.
-embedding_transform: {kind: identity}
 dtype: float32
 can_emit_embeddings: false

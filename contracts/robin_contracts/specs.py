@@ -15,7 +15,6 @@ from robin_contracts.cards import (
     model_ref,
     refuse_windows_that_do_not_advance,
 )
-from robin_contracts.embedding_transforms import EmbeddingTransform
 
 RecipeFingerprint = NewType("RecipeFingerprint", str)
 
@@ -70,7 +69,6 @@ class Recipe(BaseModel, frozen=True):
     model: ModelRef
     backend: str
     audio: AudioSpec
-    embedding_transform: EmbeddingTransform
     dtype: EmbeddingDtype
 
     @property
@@ -91,7 +89,6 @@ def recipe(card: ModelCard) -> Recipe:
             resampler=card.audio.resampler,
             pad=card.audio.pad,
         ),
-        embedding_transform=card.embedding_transform,
         dtype=card.dtype,
     )
 

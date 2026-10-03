@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from robin_contracts.cards import AudioGeometry, HeadCard, ModelCard, ModelRef, RunnerResampled
-from robin_contracts.embedding_transforms import Identity, L2Norm
+from robin_contracts.embedding_transforms import L2Norm
 from robin_contracts.output_contracts import DetectionsRequest, ScoresRequest, ThresholdPolicy
 from robin_contracts.work import (
     REGISTRY_ROLE,
@@ -39,7 +39,6 @@ CARD = ModelCard(
         downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad="drop"
     ),
     backend="tensorflow",
-    embedding_transform=Identity(),
     dtype="float32",
 )
 

@@ -32,7 +32,7 @@ from robin_contracts.cards import (
     RunnerResampled,
     model_ref,
 )
-from robin_contracts.embedding_transforms import Identity, L2Norm
+from robin_contracts.embedding_transforms import L2Norm
 from robin_contracts.layout import artifact_path
 from robin_contracts.output_contracts import (
     DetectionsRequest,
@@ -107,7 +107,6 @@ def build_card(*, pad: str = "centre_crop_end_pad", **overrides) -> ModelCard:
             downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad=pad
         ),
         "backend": "none",
-        "embedding_transform": Identity(),
         "dtype": "float32",
         # The setting every work WorkBuilder builds carries.
         "inference_params": (InferenceParam(name="gain", type="float"),),

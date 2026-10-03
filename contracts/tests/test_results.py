@@ -8,7 +8,6 @@ from pydantic import TypeAdapter, ValidationError
 
 from robin_contracts.canonical import canonical_json_bytes, sha256_v1
 from robin_contracts.cards import AudioGeometry, ModelCard, RunnerResampled, model_ref
-from robin_contracts.embedding_transforms import Identity
 from robin_contracts.output_contracts import ScoresRequest, ThresholdPolicy
 from robin_contracts.results import (
     ArtifactRecord,
@@ -42,7 +41,6 @@ CARD = ModelCard(
         downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad="drop"
     ),
     backend="tensorflow",
-    embedding_transform=Identity(),
     dtype="float32",
 )
 MODEL_REF = model_ref(CARD)
@@ -74,7 +72,6 @@ def build_recipe() -> Recipe:
             resampler=RunnerResampled(algorithm="soxr_hq"),
             pad="drop",
         ),
-        embedding_transform={"kind": "identity"},
         dtype="float32",
     )
 

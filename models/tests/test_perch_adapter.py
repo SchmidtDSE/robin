@@ -79,7 +79,6 @@ def test_the_card_states_every_field():
             "pad": "centre_crop_end_pad",
         },
         "backend": "pb-fp32",
-        "embedding_transform": {"kind": "identity"},
         "dtype": "float32",
         "inference_params": (),
         "can_emit_embeddings": True,

@@ -28,7 +28,6 @@ audio:
 backend: pb-fp32
 
 # Each window's embedding is the 1,024 float32 values the classifier reads, stored as they are.
-embedding_transform: {kind: identity}
 dtype: float32
 can_emit_embeddings: true
 embedding_dim: 1024

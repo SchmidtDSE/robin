@@ -8,7 +8,6 @@ import pytest
 
 from doubles import CallLog, ScriptedModel, installed_distribution, installed_factory
 from robin_contracts.cards import AudioGeometry, ModelCard, ModelRef, RunnerResampled, model_ref
-from robin_contracts.embedding_transforms import Identity
 from robin_contracts.protocols import ModelContext
 from robin_inference_engine import errors
 from robin_inference_engine.construct_model import (
@@ -33,7 +32,6 @@ CARD = ModelCard(
         downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad="drop"
     ),
     backend="none",
-    embedding_transform=Identity(),
     dtype="float32",
 )
 REF = model_ref(CARD)

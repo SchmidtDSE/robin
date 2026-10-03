@@ -7,7 +7,6 @@ import pytest
 from pydantic import ValidationError
 
 from robin_contracts.cards import AudioGeometry, ModelCard, RunnerResampled, model_ref
-from robin_contracts.embedding_transforms import Identity
 from robin_contracts.output_contracts import (
     DetectionsRequest,
     EmbeddingsRequest,
@@ -49,7 +48,6 @@ CARD = ModelCard(
         downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad="drop"
     ),
     backend="tensorflow",
-    embedding_transform=Identity(),
     dtype="float32",
 )
 GEOMETRY = WindowGeometry(window_duration=3.0, window_overlap=0.0, pad="drop")
@@ -107,7 +105,6 @@ def build_recipe() -> Recipe:
             resampler=RunnerResampled(algorithm="soxr_hq"),
             pad="drop",
         ),
-        embedding_transform={"kind": "identity"},
         dtype="float32",
     )
 

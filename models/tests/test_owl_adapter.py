@@ -96,7 +96,6 @@ RECIPE_BEFORE_THE_CARD_STATED_IT = {
     },
     "backend": "h5-fp32",
     "dtype": "float32",
-    "embedding_transform": {"kind": "identity"},
     "version": 1,
 }
 

@@ -4,7 +4,6 @@ import numpy as np
 import pytest
 
 from robin_contracts.cards import AudioGeometry, ModelCard, RunnerResampled
-from robin_contracts.embedding_transforms import Identity
 from robin_contracts.output_contracts import ScoresRequest
 from robin_contracts.records import ClassScore, WindowOutput
 from robin_contracts.registry import RegistryEntry, TaxonRegistry
@@ -61,7 +60,6 @@ def build_card(*, geometry: WindowGeometry | None = None, **overrides) -> ModelC
             downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad=geometry.pad
         ),
         "backend": "none",
-        "embedding_transform": Identity(),
         "dtype": "float32",
         "can_emit_embeddings": True,
         "embedding_dim": 4,

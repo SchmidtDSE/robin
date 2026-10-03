@@ -3,7 +3,6 @@ from pydantic import ValidationError
 
 from robin_contracts.canonical import canonical_json_bytes
 from robin_contracts.cards import BackendResampled, ModelCard, ModelRef, RunnerResampled, model_ref
-from robin_contracts.embedding_transforms import Identity, L2Norm
 from robin_contracts.specs import (
     AudioSpec,
     Recipe,
@@ -35,7 +34,6 @@ def build_recipe(**overrides) -> Recipe:
         "model": MODEL,
         "backend": "tensorflow",
         "audio": build_audio(),
-        "embedding_transform": L2Norm(),
         "dtype": "float32",
     }
     return Recipe(**(fields | overrides))
@@ -58,7 +56,6 @@ def build_card(**overrides) -> ModelCard:
             "pad": "drop",
         },
         "backend": "tensorflow",
-        "embedding_transform": {"kind": "l2"},
         "dtype": "float16",
     }
     return ModelCard.model_validate(fields | overrides)
@@ -78,7 +75,6 @@ def test_the_recipe_a_card_states_takes_every_fact_from_the_card():
             resampler=RunnerResampled(algorithm="librosa"),
             pad="drop",
         ),
-        embedding_transform=L2Norm(),
         dtype="float16",
     )
 
@@ -105,13 +101,6 @@ def test_recipe_fingerprint_is_a_full_length_versioned_digest():
 
 def test_equal_recipes_have_equal_fingerprints():
     assert build_recipe().id == build_recipe().id
-
-
-def test_recipes_differing_only_in_embedding_transform_have_different_fingerprints():
-    one = build_recipe(embedding_transform=L2Norm())
-    other = build_recipe(embedding_transform=Identity())
-
-    assert one.id != other.id
 
 
 def test_recipes_differing_only_in_dtype_have_different_fingerprints():

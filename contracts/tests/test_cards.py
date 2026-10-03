@@ -18,7 +18,7 @@ from robin_contracts.cards import (
     read_card,
     write_card,
 )
-from robin_contracts.embedding_transforms import Identity, L2Norm
+from robin_contracts.embedding_transforms import L2Norm
 
 CARD_DIGEST = "sha256:v1:" + "a" * 64
 REGISTRY_DIGEST = "sha256:" + "a" * 64
@@ -39,7 +39,6 @@ MODEL_CARD_FIELDS = {
         "pad": "centre_crop_end_pad",
     },
     "backend": "tf-saved-model",
-    "embedding_transform": {"kind": "identity"},
     "dtype": "float32",
 }
 
@@ -277,12 +276,8 @@ def test_a_card_file_naming_a_runner_algorithm_the_contract_does_not_is_refused(
     assert str(path) in str(exc.value)
 
 
-def test_a_cards_embedding_transform_reads_as_a_transform():
-    assert _model_card().embedding_transform == Identity()
-
-
 @pytest.mark.parametrize(
-    "field", ["window_overlap", "dtype", "embedding_transform", "audio", "backend"]
+    "field", ["window_overlap", "dtype", "audio", "backend"]
 )
 def test_a_card_file_missing_a_recipe_fact_is_refused_when_read(tmp_path, field):
     fields = {key: value for key, value in MODEL_CARD_FIELDS.items() if key != field}
@@ -419,7 +414,6 @@ def test_reading_a_card_keeps_comments_and_layout_out_of_its_digest(tmp_path):
         "  downmix: mean\n"
         "  resampler: {by: runner, algorithm: soxr_hq}\n"
         "backend: tf-saved-model\n"
-        "embedding_transform: {kind: identity}\n"
         "dtype: float32\n",
     )
 

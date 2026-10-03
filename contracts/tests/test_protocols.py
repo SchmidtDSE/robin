@@ -26,7 +26,6 @@ CARD = ModelCard.model_validate({
         "pad": "drop",
     },
     "backend": "tensorflow",
-    "embedding_transform": {"kind": "identity"},
     "dtype": "float32",
 })
 

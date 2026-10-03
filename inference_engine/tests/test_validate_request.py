@@ -59,7 +59,6 @@ def build_card(**overrides) -> ModelCard:
             pad="centre_crop_end_pad",
         ),
         "backend": "tensorflow",
-        "embedding_transform": L2Norm(),
         "dtype": "float32",
     }
     return ModelCard(**(fields | overrides))

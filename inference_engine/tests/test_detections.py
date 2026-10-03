@@ -12,7 +12,6 @@ import pytest
 
 from robin_contracts.canonical import sha256_v1
 from robin_contracts.cards import AudioGeometry, ModelCard, RunnerResampled, model_ref
-from robin_contracts.embedding_transforms import Identity
 from robin_contracts.output_contracts import (
     DetectionsRequest,
     ScoresRequest,
@@ -293,7 +292,6 @@ CARD = ModelCard(
         downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad="drop"
     ),
     backend="none",
-    embedding_transform=Identity(),
     dtype="float32",
 )
 RECIPE = Recipe(
@@ -307,7 +305,6 @@ RECIPE = Recipe(
         resampler=RunnerResampled(algorithm="soxr_hq"),
         pad="drop",
     ),
-    embedding_transform=Identity(),
     dtype="float32",
 )
 SCORES_REQUEST = ScoresRequest(contract_id="robin.scores.arrow/1", retention="full")

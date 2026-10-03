@@ -122,7 +122,6 @@ class ModelCard(BaseModel):
     spectrogram_shape: tuple[int, int] | None = None
     audio: AudioGeometry
     backend: str
-    embedding_transform: EmbeddingTransform
     dtype: EmbeddingDtype  # the precision embeddings are stored at
     inference_params: tuple[InferenceParam, ...] = ()
     can_emit_embeddings: bool = False
