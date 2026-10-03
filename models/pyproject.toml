@@ -27,7 +27,14 @@ birdnet = [
   "scipy>=1.17.1,<2",
   "numpy>=2.1,<3",
 ]
+perch = [
+  "tensorflow>=2.21,<2.22",
+  "soundfile>=0.13.1,<0.14",
+  "scipy>=1.17.1,<2",
+  "numpy>=2.1,<3",
+]
 
 [project.entry-points."robin.models"]
 "owl/v4" = "robin_models.owl.adapter:build"
 "birdnet/v2p4" = "robin_models.birdnet.adapter:build"
+"perch/v8" = "robin_models.perch.adapter:build"

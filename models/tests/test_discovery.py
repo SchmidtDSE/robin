@@ -15,6 +15,7 @@ from robin_inference_engine.construct_model import construct_model, installed_mo
 RUNTIME_MODULES = (
     "robin_models.owl.adapter",
     "robin_models.birdnet.adapter",
+    "robin_models.perch.adapter",
     "tensorflow",
     "sox_tensorflow",
     "scipy",
@@ -24,6 +25,7 @@ RUNTIME_MODULES = (
 MODELS = [
     pytest.param("owl", "owl/v4", id="owl"),
     pytest.param("birdnet", "birdnet/v2p4", id="birdnet"),
+    pytest.param("perch", "perch/v8", id="perch"),
 ]
 
 
@@ -52,11 +54,16 @@ def test_birdnet_v2p4_is_installed():
     assert "birdnet/v2p4" in installed_models()
 
 
+def test_perch_v8_is_installed():
+    assert "perch/v8" in installed_models()
+
+
 def test_listing_models_imports_no_adapter_and_no_runtime():
     code = (
         "from robin_inference_engine.construct_model import installed_models\n"
         "assert 'owl/v4' in installed_models()\n"
-        "assert 'birdnet/v2p4' in installed_models()"
+        "assert 'birdnet/v2p4' in installed_models()\n"
+        "assert 'perch/v8' in installed_models()"
     )
     assert modules_loaded_after(code) == set()
 
@@ -67,6 +74,10 @@ def test_importing_the_owl_package_imports_no_adapter_and_no_runtime():
 
 def test_importing_the_birdnet_package_imports_no_adapter_and_no_runtime():
     assert modules_loaded_after("import robin_models.birdnet") == set()
+
+
+def test_importing_the_perch_package_imports_no_adapter_and_no_runtime():
+    assert modules_loaded_after("import robin_models.perch") == set()
 
 
 def test_the_bundled_card_reads_as_owl_v4():
@@ -80,7 +91,7 @@ runtime_missing = pytest.mark.skipif(
 
 
 @runtime_missing
-@pytest.mark.parametrize("package", ["owl", "birdnet"])
+@pytest.mark.parametrize("package", ["owl", "birdnet", "perch"])
 def test_importing_the_adapter_without_its_runtime_names_the_extra(package):
     with pytest.raises(ModuleNotFoundError, match=rf"robin-models\[{package}\]"):
         importlib.import_module(f"robin_models.{package}.adapter")

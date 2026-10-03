@@ -1839,6 +1839,10 @@ packages:
   - soundfile>=0.13.1,<0.14 ; extra == 'birdnet'
   - scipy>=1.17.1,<2 ; extra == 'birdnet'
   - numpy>=2.1,<3 ; extra == 'birdnet'
+  - tensorflow>=2.21,<2.22 ; extra == 'perch'
+  - soundfile>=0.13.1,<0.14 ; extra == 'perch'
+  - scipy>=1.17.1,<2 ; extra == 'perch'
+  - numpy>=2.1,<3 ; extra == 'perch'
   requires_python: '>=3.11'
 - pypi: robin
   name: robin-bioacoustics
