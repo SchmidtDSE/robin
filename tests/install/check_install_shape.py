@@ -142,7 +142,13 @@ _register(
 _register(
     "models",
     install=("robin-models",),
-    required=("robin_models", "robin_models.owl", "robin_models.birdnet", "robin_contracts"),
+    required=(
+        "robin_models",
+        "robin_models.owl",
+        "robin_models.birdnet",
+        "robin_models.perch",
+        "robin_contracts",
+    ),
 )
 _register(
     "meta-owl",

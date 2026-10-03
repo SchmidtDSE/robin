@@ -254,6 +254,18 @@ def test_a_card_file_can_state_that_the_runner_resamples_each_window_with_scipy(
     assert read_card(path).audio.resampler == RunnerResampled(algorithm="scipy_fft_per_window")
 
 
+def test_a_card_file_can_state_that_the_runner_resamples_with_scipy_polyphase_and_context(
+    tmp_path,
+):
+    resampler = {"by": "runner", "algorithm": "scipy_polyphase_with_context"}
+    audio = MODEL_CARD_FIELDS["audio"] | {"resampler": resampler}
+    path = _write_text(tmp_path, _yaml(MODEL_CARD_FIELDS | {"audio": audio}))
+
+    assert read_card(path).audio.resampler == RunnerResampled(
+        algorithm="scipy_polyphase_with_context"
+    )
+
+
 def test_a_card_file_naming_a_runner_algorithm_the_contract_does_not_is_refused(tmp_path):
     resampler = {"by": "runner", "algorithm": "sinc_best"}
     audio = MODEL_CARD_FIELDS["audio"] | {"resampler": resampler}

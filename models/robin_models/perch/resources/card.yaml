@@ -1,0 +1,39 @@
+# Perch v8: Google's bird vocalization classifier, version 8 of its Kaggle release, run from
+# its SavedModel on TensorFlow. It scores 10,932 eBird 2021 species codes and also returns
+# an embedding of each window.
+model_name: perch
+model_version: v8
+runtime: tensorflow
+
+# The network takes 5 seconds of raw audio at 32 kHz, 160,000 samples, and makes its own
+# spectrogram. Windows do not overlap: each starts where the last one ended.
+window_duration: 5.0
+window_overlap: 0.0
+sample_rate: 32000
+
+# The network returns logits; scores are their sigmoid, between 0 and 1, not calibrated
+# probabilities. Every class is scored for every window, and a floor of 0.0 excludes none
+# of them.
+min_detection_threshold: 0.0
+score_domain: probability
+# The registry these scores are labelled by: the bundled taxa_registry.csv, copied
+# byte for byte from taxa_bureau commit 1213658, taxa_registries/perch-v8_taxa_registry.csv.
+taxa_registry_digest: sha256:ca28f370cb5924af9966fee9fcd0a12d57632bba85a01a3f5908f9011ef99fd9
+
+# Channels are averaged. Audio not at 32 kHz is resampled by the runner as Perch's training
+# data was, with SciPy's polyphase resampler. Each window is read with up to a second of
+# audio either side, so the result equals resampling the whole recording. A last window
+# shorter than 5 seconds is padded with zeros at its end.
+audio:
+  downmix: mean
+  resampler: {by: runner, algorithm: scipy_polyphase_with_context}
+  pad: centre_crop_end_pad
+backend: pb-fp32
+
+# Each window's embedding is the 1,280 float32 values the network returns, stored as they
+# are. They are not normalised.
+embedding_transform: {kind: identity}
+dtype: float32
+can_emit_embeddings: true
+embedding_dim: 1280
+embedding_dtype: float32
