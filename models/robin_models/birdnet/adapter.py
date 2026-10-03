@@ -38,6 +38,10 @@ SAVED_MODEL_LAYOUT = {
     "variables_index": Path("variables") / "variables.index",
 }
 
+# The SavedModel's last layer, which turns an embedding into logits.
+CLASSIFIER_KERNEL = "CLASS_DENSE_LAYER/kernel:0"
+CLASSIFIER_BIAS = "CLASS_DENSE_LAYER/bias:0"
+
 # What BirdNET does whatever its card says. The SavedModel takes 3 seconds of mono audio
 # at 48 kHz, mixed down by channel mean, resampled per window with SciPy's FFT resampler
 # and zero-padded at the end; it scores every class, and emits 1,024 float32 embeddings.
@@ -69,22 +73,23 @@ def build(context: ModelContext) -> "BirdnetModel":
     folder = _saved_model_folder(context.files, context.scratch_dir)
     with tf.device(TF_DEVICE):
         loaded = tf.saved_model.load(str(folder))
-    basic, embeddings = _signatures(loaded)
-    window = round(card.window_duration * card.sample_rate)
-    _require_input(basic, "basic", window)
-    _require_input(embeddings, "embeddings", window)
+    embeddings = _signatures(loaded)
+    _require_input(embeddings, "embeddings", round(card.window_duration * card.sample_rate))
     _require_output(embeddings, "embeddings", "embeddings", card.embedding_dim)
-    labels = None
+    labels = kernel = bias = None
     if context.registry is not None:
-        _require_output(basic, "basic", "scores", len(context.registry.entries))
+        kernel, bias = _classifier_layer(
+            loaded, card.embedding_dim, len(context.registry.entries)
+        )
         labels = _labels_matching_the_registry(context.files["labels"], context.registry)
     return BirdnetModel(
         card=card,
         batch_size=batch_size,
         labels=labels,
         loaded=loaded,
-        basic=basic,
         embeddings=embeddings,
+        kernel=kernel,
+        bias=bias,
         emit_embeddings=context.emit_embeddings,
         log=context.log,
     )
@@ -136,15 +141,15 @@ def _saved_model_folder(files: Mapping[str, Path], scratch_dir: Path) -> Path:
     return folder
 
 
-def _signatures(loaded) -> tuple[object, object]:
+def _signatures(loaded) -> object:
+    """The SavedModel's `embeddings` signature."""
     signatures = loaded.signatures
-    found = sorted(signatures)
-    if "basic" not in signatures or "embeddings" not in signatures:
+    if "embeddings" not in signatures:
         raise ValueError(
-            "model birdnet/v2p4 needs the SavedModel signatures 'basic' and 'embeddings', "
-            f"and found {found}"
+            "model birdnet/v2p4 needs the SavedModel signature 'embeddings', "
+            f"and found {sorted(signatures)}"
         )
-    return signatures["basic"], signatures["embeddings"]
+    return signatures["embeddings"]
 
 
 def _require_input(signature, name: str, width: int) -> None:
@@ -170,6 +175,34 @@ def _require_output(signature, name: str, output: str, width: int) -> None:
             f"model birdnet/v2p4 needs the {name} signature's output {output!r} to have "
             f"shape [None, {width}], and found {shape}"
         )
+
+
+def _classifier_layer(loaded, embedding_dim: int, labels: int) -> tuple[object, object]:
+    """The kernel and bias of the layer that turns an embedding into one logit per label."""
+    model = getattr(loaded, "model", None)
+    if model is None:
+        raise ValueError(
+            "model birdnet/v2p4 needs the loaded SavedModel to have the attribute 'model', "
+            "which holds its classifier layer"
+        )
+    variables = {variable.name: variable for variable in model.variables}
+    kernel = _require_variable(variables, CLASSIFIER_KERNEL, [embedding_dim, labels])
+    bias = _require_variable(variables, CLASSIFIER_BIAS, [labels])
+    return kernel, bias
+
+
+def _require_variable(variables: Mapping[str, object], name: str, shape: list[int]) -> object:
+    if name not in variables:
+        raise ValueError(
+            f"model birdnet/v2p4 needs the SavedModel variable {name!r}, and found none"
+        )
+    found = variables[name].shape.as_list()
+    if found != shape:
+        raise ValueError(
+            f"model birdnet/v2p4 needs the SavedModel variable {name!r} to have shape {shape}, "
+            f"and it is {found}"
+        )
+    return variables[name]
 
 
 def _labels_matching_the_registry(path: Path, registry: TaxonRegistry) -> tuple[str, ...]:
@@ -203,8 +236,9 @@ class BirdnetModel:
         batch_size: int,
         labels: tuple[str, ...] | None,
         loaded: object,
-        basic: object,
         embeddings: object,
+        kernel: object | None,
+        bias: object | None,
         emit_embeddings: bool,
         log: Log,
     ) -> None:
@@ -214,8 +248,9 @@ class BirdnetModel:
         self._batch_size = batch_size
         self._labels = labels
         self._loaded = loaded
-        self._basic = basic
         self._embeddings = embeddings
+        self._kernel = kernel
+        self._bias = bias
         self._emit_embeddings = emit_embeddings
         self._log = log
 
@@ -253,14 +288,15 @@ class BirdnetModel:
 
     def _infer(self, batch: "np.ndarray") -> tuple["np.ndarray | None", "np.ndarray | None"]:
         """The batch's logits when there are labels, and its embeddings when asked for."""
-        logits = embeddings = None
+        logits = None
         with tf.device(TF_DEVICE):
             tensor = tf.convert_to_tensor(batch, dtype=tf.float32)
+            embeddings = self._embeddings(inputs=tensor)["embeddings"]
             if self._labels is not None:
-                logits = self._basic(inputs=tensor)["scores"].numpy()
-            if self._emit_embeddings:
-                embeddings = self._embeddings(inputs=tensor)["embeddings"].numpy()
-        return logits, embeddings
+                # The scores are the model's classifier layer on the embedding, so one pass
+                # gives both.
+                logits = (tf.matmul(embeddings, self._kernel) + self._bias).numpy()
+        return logits, embeddings.numpy() if self._emit_embeddings else None
 
     def _window_outputs(
         self,
@@ -292,8 +328,8 @@ class BirdnetModel:
         """Nothing to do: a recording leaves no files behind, and the model stays loaded."""
 
     def clean_up(self) -> None:
-        """Release the loaded SavedModel and its signatures."""
-        self._loaded = self._basic = self._embeddings = None
+        """Release the loaded SavedModel, its signature and its classifier layer."""
+        self._loaded = self._embeddings = self._kernel = self._bias = None
 
 
 def _read_window(audio: "sf.SoundFile", start: float, end: float) -> "np.ndarray":

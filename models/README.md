@@ -33,8 +33,8 @@ robin never rehosts these files. Download the archive from Zenodo, unpack it, an
 by its path, digest and size. The engine checks every digest and size before the model is built.
 
 A work that wants only embeddings should pin neither `taxa_registry` nor `labels`. A pinned
-registry makes the adapter compute scores: a full extra pass, whose results the engine then
-discards.
+registry makes the adapter compute scores, at the cost of one matrix multiply per batch, and the
+engine discards them when they weren't asked for.
 
 ### The registry
 
@@ -44,7 +44,9 @@ and the adapter checks that when it is built.
 
 ### Running it
 
-Install `robin-models[birdnet]`. BirdNET runs on the CPU only.
+Install `robin-models[birdnet]`. BirdNET runs on the CPU only. Each batch runs the SavedModel's
+`embeddings` signature once, and the scores are its output multiplied by the model's own
+classifier layer, which is what the `basic` signature computes.
 
 ### Credit
 

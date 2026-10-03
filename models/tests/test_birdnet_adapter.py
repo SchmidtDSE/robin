@@ -142,6 +142,8 @@ LABELS = tuple(entry.label for entry in REGISTRY.entries)
 AUDIO = CARD.audio.model_dump()
 WINDOW = 144_000
 CPU = "/CPU:0"
+KERNEL = "CLASS_DENSE_LAYER/kernel:0"
+BIAS = "CLASS_DENSE_LAYER/bias:0"
 
 
 class FakeSpec:
@@ -159,6 +161,34 @@ class FakeTensor:
         return np.array(self._values, dtype=np.float32, copy=True)
 
 
+class FakeProduct(FakeTensor):
+    """What `tf.matmul` returns: adding the bias to it is recorded."""
+
+    def __init__(self, runtime: "FakeTensorFlow", embeddings: np.ndarray, values) -> None:
+        super().__init__(values)
+        self._runtime = runtime
+        self._embeddings = embeddings
+
+    def __add__(self, other: "FakeVariable") -> FakeTensor:
+        runtime = self._runtime
+        runtime.additions.append(
+            types.SimpleNamespace(added=weakref.ref(other), device=runtime.device)
+        )
+        if runtime.logits is not None:
+            return FakeTensor(np.asarray(runtime.logits(self._embeddings), dtype=np.float32))
+        return FakeTensor((self._values + other.values).astype(np.float32))
+
+
+class FakeVariable:
+    """A variable of the loaded model: its name, its shape, and its values."""
+
+    def __init__(self, name: str, values: np.ndarray) -> None:
+        self.name = name
+        self.values = np.asarray(values, dtype=np.float32)
+        shape = list(self.values.shape)
+        self.shape = types.SimpleNamespace(as_list=lambda: list(shape))
+
+
 class FakeSignature:
     """One SavedModel signature. It refers to the runtime, never to the loaded object."""
 
@@ -170,24 +200,27 @@ class FakeSignature:
 
     def __call__(self, *, inputs):
         runtime = self._runtime
-        runtime.calls.append(
-            types.SimpleNamespace(
-                output=self._output,
-                given=inputs,
-                values=np.array(inputs, copy=True),
-                device=runtime.device,
-            )
+        call = types.SimpleNamespace(
+            output=self._output,
+            given=inputs,
+            values=np.array(inputs, copy=True),
+            device=runtime.device,
+            returned=None,
         )
+        runtime.calls.append(call)
         if runtime.call_error is not None:
             raise runtime.call_error
-        return {self._output: FakeTensor(runtime.outputs[self._output](np.asarray(inputs)))}
+        call.returned = FakeTensor(runtime.outputs[self._output](np.asarray(inputs)))
+        return {self._output: call.returned}
 
 
 class FakeLoaded:
-    """What `tf.saved_model.load` returns: only its signatures."""
+    """What `tf.saved_model.load` returns: its signatures, and the model holding its variables."""
 
-    def __init__(self, signatures: dict) -> None:
+    def __init__(self, signatures: dict, variables: list | None) -> None:
         self.signatures = signatures
+        if variables is not None:
+            self.model = types.SimpleNamespace(variables=variables)
 
 
 class FakeTensorFlow:
@@ -211,14 +244,20 @@ class FakeTensorFlow:
             },
         }
         self.missing: set[str] = set()
-        self.returned_widths: dict[str, int] = {}
-        self.outputs = {"scores": self.default_logits, "embeddings": self.default_embeddings}
+        self.outputs = {"scores": self.default_scores, "embeddings": self.default_embeddings}
+        # The classifier layer's values by variable name, made into new variables on each load.
+        self.head = {KERNEL: HEAD_KERNEL, BIAS: HEAD_BIAS}
+        self.has_model = True
+        self.matmuls: list = []
+        self.additions: list = []
+        self.logits = None
 
     def module(self) -> types.ModuleType:
         tf = types.ModuleType("tensorflow")
         tf.float32 = "float32"
         tf.device = self.on_device
         tf.convert_to_tensor = self.convert_to_tensor
+        tf.matmul = self.matmul
         tf.saved_model = types.SimpleNamespace(load=self.load)
         tf.config = types.SimpleNamespace(list_physical_devices=self.list_physical_devices)
         return tf
@@ -235,6 +274,14 @@ class FakeTensorFlow:
         self.converted.append(types.SimpleNamespace(value=value, dtype=dtype, device=self.device))
         return value
 
+    def matmul(self, a: FakeTensor, b: FakeVariable) -> FakeProduct:
+        # The variable is held weakly, so recording it does not keep it alive.
+        self.matmuls.append(types.SimpleNamespace(a=a, b=weakref.ref(b), device=self.device))
+        # OpenBLAS on arm64 macOS raises floating-point warnings for some finite products.
+        with np.errstate(all="ignore"):
+            product = np.matmul(a._values, b.values).astype(np.float32)
+        return FakeProduct(self, a._values, product)
+
     def load(self, path):
         folder = os.fspath(path)
         self.loads.append(
@@ -247,7 +294,9 @@ class FakeTensorFlow:
             for name, output in (("basic", "scores"), ("embeddings", "embeddings"))
             if name not in self.missing
         }
-        loaded = FakeLoaded(signatures)
+        variables = [FakeVariable("POST_BN_1/gamma:0", np.ones(1024))]
+        variables += [FakeVariable(name, values) for name, values in self.head.items()]
+        loaded = FakeLoaded(signatures, variables if self.has_model else None)
         self.loaded.append(weakref.ref(loaded))
         return loaded
 
@@ -256,15 +305,11 @@ class FakeTensorFlow:
             return [types.SimpleNamespace(name="/physical_device:GPU:0", device_type="GPU")]
         return []
 
-    def width(self, signature: str) -> int:
-        output = "scores" if signature == "basic" else "embeddings"
-        return self.returned_widths.get(output, self.signatures[signature]["output"][1])
-
-    def default_logits(self, batch: np.ndarray) -> np.ndarray:
-        return fake_logits(batch, self.width("basic"))
+    def default_scores(self, batch: np.ndarray) -> np.ndarray:
+        return head_logits(self.default_embeddings(batch))
 
     def default_embeddings(self, batch: np.ndarray) -> np.ndarray:
-        return fake_embeddings(batch, self.width("embeddings"))
+        return fake_embeddings(batch, self.signatures["embeddings"]["output"][1])
 
     def calls_to(self, output: str) -> list:
         return [call for call in self.calls if call.output == output]
@@ -283,16 +328,21 @@ def folder_contents(folder: str) -> dict[str, tuple[bool, str | None]]:
 
 LABEL_ORDER = np.random.default_rng(0).permutation(6523)
 
+# The default classifier layer gives each label its bias plus the embedding's element 0,
+# which is the window's mean: logits distinct per label and per window, from below -15 to
+# above 15.
+HEAD_KERNEL = np.zeros((1024, 6522), dtype=np.float32)
+HEAD_KERNEL[0] = 1.0
+HEAD_BIAS = np.linspace(-20.0, 20.0, 6523)[LABEL_ORDER][:6522].astype(np.float32)
 
-def fake_logits(batch: np.ndarray, width: int) -> np.ndarray:
-    """Finite logits, distinct per label and per window, from below -15 to above 15."""
-    base = np.linspace(-20.0, 20.0, 6523)[LABEL_ORDER][:width]
-    offset = np.float64(batch).mean(axis=1, keepdims=True)
-    return (base + offset).astype(np.float32)
+
+def head_logits(embeddings: np.ndarray) -> np.ndarray:
+    """The default classifier layer's logits for these embeddings."""
+    return (embeddings[:, :1] + HEAD_BIAS).astype(np.float32)
 
 
 def fake_embeddings(batch: np.ndarray, width: int) -> np.ndarray:
-    """Finite embeddings, distinct per window."""
+    """Finite embeddings, distinct per window. Element 0 is the window's mean."""
     offset = np.float64(batch).mean(axis=1, keepdims=True)
     return (np.arange(width) / width + offset).astype(np.float32)
 
@@ -506,16 +556,18 @@ def test_two_models_sharing_a_scratch_dir_get_separate_folders(runtime, tmp_path
 # The SavedModel's signatures.
 
 
-@pytest.mark.parametrize("name", ["basic", "embeddings"])
-def test_a_missing_signature_is_refused(runtime, tmp_path, name):
-    runtime.missing.add(name)
-    with pytest.raises(ValueError, match=name) as caught:
+def test_without_the_basic_signature_the_model_builds(runtime, tmp_path):
+    runtime.missing.add("basic")
+    runtime.adapter.build(birdnet_context(tmp_path))
+
+
+def test_a_missing_signature_is_refused(runtime, tmp_path):
+    runtime.missing.add("embeddings")
+    with pytest.raises(ValueError, match="embeddings") as caught:
         runtime.adapter.build(birdnet_context(tmp_path))
-    other = "embeddings" if name == "basic" else "basic"
-    assert f"[{other!r}]" in str(caught.value)
+    assert "['basic']" in str(caught.value)
 
 
-@pytest.mark.parametrize("name", ["basic", "embeddings"])
 @pytest.mark.parametrize(
     ("spec", "expected", "found"),
     [
@@ -526,11 +578,9 @@ def test_a_missing_signature_is_refused(runtime, tmp_path, name):
         pytest.param({"input": [1, WINDOW]}, "[None, 144000]", "[1, 144000]", id="fixed_batch"),
     ],
 )
-def test_an_input_the_card_does_not_describe_is_refused(
-    runtime, tmp_path, name, spec, expected, found
-):
-    runtime.signatures[name].update(spec)
-    with pytest.raises(ValueError, match=name) as caught:
+def test_an_input_the_card_does_not_describe_is_refused(runtime, tmp_path, spec, expected, found):
+    runtime.signatures["embeddings"].update(spec)
+    with pytest.raises(ValueError, match="embeddings") as caught:
         runtime.adapter.build(birdnet_context(tmp_path))
     assert expected in str(caught.value)
     assert found in str(caught.value)
@@ -544,18 +594,58 @@ def test_an_embedding_width_other_than_the_cards_is_refused(runtime, tmp_path):
     assert "[None, 512]" in str(caught.value)
 
 
-def test_with_a_registry_a_score_width_other_than_its_size_is_refused(runtime, tmp_path):
-    runtime.signatures["basic"]["output"] = [None, 6521]
-    with pytest.raises(ValueError, match="scores") as caught:
+# The SavedModel's classifier layer.
+
+
+def zeros(*shape: int) -> np.ndarray:
+    return np.zeros(shape, dtype=np.float32)
+
+
+@pytest.mark.parametrize(
+    ("head", "named", "expected", "found"),
+    [
+        pytest.param({KERNEL: None}, KERNEL, None, None, id="no_kernel"),
+        pytest.param({BIAS: None}, BIAS, None, None, id="no_bias"),
+        pytest.param(
+            {KERNEL: zeros(1024, 6521)}, KERNEL, "[1024, 6522]", "[1024, 6521]", id="kernel_labels"
+        ),
+        pytest.param(
+            {KERNEL: zeros(512, 6522)}, KERNEL, "[1024, 6522]", "[512, 6522]", id="kernel_width"
+        ),
+        pytest.param({BIAS: zeros(6521)}, BIAS, "[6522]", "[6521]", id="bias_labels"),
+    ],
+)
+def test_with_a_registry_a_classifier_layer_that_does_not_fit_is_refused(
+    runtime, tmp_path, head, named, expected, found
+):
+    for name, values in head.items():
+        if values is None:
+            del runtime.head[name]
+        else:
+            runtime.head[name] = values
+    with pytest.raises(ValueError) as caught:
         runtime.adapter.build(birdnet_context(tmp_path))
-    assert "6521" in str(caught.value)
-    assert "6522" in str(caught.value)
+    message = str(caught.value)
+    assert repr(named) in message
+    if expected is not None:
+        assert expected in message
+        assert found in message
 
 
-def test_without_a_registry_the_score_width_is_not_checked(runtime, tmp_path):
-    runtime.signatures["basic"]["output"] = [None, 51]
-    files = without(birdnet_files(tmp_path), "labels", "taxa_registry")
-    runtime.adapter.build(birdnet_context(tmp_path, files=files, registry=None))
+def test_with_a_registry_a_loaded_model_without_its_variables_is_refused(runtime, tmp_path):
+    runtime.has_model = False
+    with pytest.raises(ValueError) as caught:
+        runtime.adapter.build(birdnet_context(tmp_path))
+    assert "'model'" in str(caught.value)
+
+
+@pytest.mark.parametrize("missing", ["head", "model"])
+def test_without_a_registry_the_classifier_layer_is_not_looked_for(runtime, tmp_path, missing):
+    if missing == "head":
+        runtime.head.clear()
+    else:
+        runtime.has_model = False
+    runtime.adapter.build(embeddings_only(tmp_path, emit_embeddings=True))
 
 
 # The labels file shipped with the weights.
@@ -630,7 +720,7 @@ def run(model, path) -> list:
     return list(model.run(AudioClip(path=path)))
 
 
-def rows_given_to(runtime, output: str = "scores") -> np.ndarray:
+def rows_given_to(runtime, output: str = "embeddings") -> np.ndarray:
     return np.concatenate([call.values for call in runtime.calls_to(output)])
 
 
@@ -786,17 +876,31 @@ def test_the_sigmoid_is_the_birdnet_librarys_at_every_point_of_a_fine_grid(runti
 
 
 def test_run_gives_the_sigmoid_of_the_logits_exactly(runtime, tmp_path):
-    runtime.outputs["scores"] = lambda batch: np.resize(FIVE_LOGITS, (len(batch), 6522))
+    runtime.logits = lambda embeddings: np.resize(FIVE_LOGITS, (len(embeddings), 6522))
     model, _, path = model_and_noise(runtime, tmp_path, WINDOW)
     [window] = run(model, path)
     expected = np.resize(reference_sigmoid(FIVE_LOGITS), 6522).tolist()
     assert [score.score for score in window.scores] == expected
 
 
+def loaded_classifier_layer(runtime) -> tuple[FakeVariable, FakeVariable]:
+    [loaded] = runtime.loaded
+    variables = {variable.name: variable for variable in loaded().model.variables}
+    return variables[KERNEL], variables[BIAS]
+
+
 def test_every_window_scores_every_label_once_in_registry_order(runtime, tmp_path):
     model, _, path = model_and_noise(runtime, tmp_path, 2 * WINDOW)
     windows = run(model, path)
-    expected = reference_sigmoid(fake_logits(rows_given_to(runtime), 6522))
+    kernel, bias = loaded_classifier_layer(runtime)
+    [call] = runtime.calls_to("embeddings")
+    embeddings = call.returned.numpy()
+    expected = reference_sigmoid(np.matmul(embeddings, kernel.values) + bias.values)
+    [matmul] = runtime.matmuls
+    assert matmul.a is call.returned
+    assert matmul.b() is kernel
+    [addition] = runtime.additions
+    assert addition.added() is bias
     for window, scores in zip(windows, expected, strict=True):
         assert tuple(score.label for score in window.scores) == LABELS
         assert all(type(score.score) is float for score in window.scores)
@@ -805,7 +909,7 @@ def test_every_window_scores_every_label_once_in_registry_order(runtime, tmp_pat
 
 
 def test_a_model_returning_fewer_scores_than_it_declares_fails_the_recording(runtime, tmp_path):
-    runtime.returned_widths["scores"] = 6521
+    runtime.logits = lambda embeddings: head_logits(embeddings)[:, :6521]
     model, _, path = model_and_noise(runtime, tmp_path, WINDOW)
     with pytest.raises(ValueError):
         run(model, path)
@@ -813,13 +917,13 @@ def test_a_model_returning_fewer_scores_than_it_declares_fails_the_recording(run
 
 @pytest.mark.parametrize("value", [np.inf, -np.inf, np.nan], ids=["inf", "minus_inf", "nan"])
 def test_a_logit_that_is_not_finite_fails_the_recording_at_its_window(runtime, tmp_path, value):
-    def logits(batch):
-        out = fake_logits(batch, 6522)
-        if len(runtime.calls_to("scores")) == 2:
+    def logits(embeddings):
+        out = head_logits(embeddings)
+        if len(runtime.calls_to("embeddings")) == 2:
             out[1, 100] = value
         return out
 
-    runtime.outputs["scores"] = logits
+    runtime.logits = logits
     model, _, path = model_and_noise(
         runtime, tmp_path, 4 * WINDOW, resources={"batch_size": 2}
     )
@@ -837,10 +941,36 @@ def test_a_logit_that_is_not_finite_fails_the_recording_at_its_window(runtime, t
 # Embeddings, and both outputs at once.
 
 
-def test_without_embeddings_asked_for_none_are_computed(runtime, tmp_path):
-    model, _, path = model_and_noise(runtime, tmp_path, 2 * WINDOW)
-    assert all(window.embedding is None for window in run(model, path))
-    assert runtime.calls_to("embeddings") == []
+def test_scores_and_embeddings_take_one_network_pass_per_batch(runtime, tmp_path):
+    model, _, path = model_and_noise(
+        runtime, tmp_path, 4 * WINDOW, emit_embeddings=True, resources={"batch_size": 2}
+    )
+    windows = run(model, path)
+    assert len(runtime.calls_to("embeddings")) == 2
+    assert len(runtime.matmuls) == 2
+    assert len(runtime.additions) == 2
+    assert runtime.calls_to("scores") == []
+    assert all(len(window.scores) == 6522 for window in windows)
+    assert all(window.embedding is not None for window in windows)
+
+
+def test_scores_alone_come_from_the_embeddings_signature_and_emit_no_embedding(
+    runtime, tmp_path
+):
+    model, _, path = model_and_noise(runtime, tmp_path, 4 * WINDOW, resources={"batch_size": 2})
+    windows = run(model, path)
+    assert len(runtime.calls_to("embeddings")) == 2
+    assert runtime.calls_to("scores") == []
+    assert all(len(window.scores) == 6522 for window in windows)
+    assert all(window.embedding is None for window in windows)
+
+
+def test_a_model_without_the_basic_signature_scores(runtime, tmp_path):
+    runtime.missing.add("basic")
+    model, _, path = model_and_noise(runtime, tmp_path, WINDOW)
+    [window] = run(model, path)
+    assert len(window.scores) == 6522
+    assert runtime.calls_to("scores") == []
 
 
 def test_each_window_gets_its_own_copy_of_its_embedding(runtime, tmp_path):
@@ -857,16 +987,15 @@ def test_each_window_gets_its_own_copy_of_its_embedding(runtime, tmp_path):
         assert not np.shares_memory(windows[first].embedding, windows[second].embedding)
 
 
-def test_both_signatures_read_the_same_batch_and_scores_do_not_change(runtime, tmp_path):
+def test_asking_for_embeddings_does_not_change_a_score(runtime, tmp_path):
     samples = noise(3 * WINDOW)
     path = write_audio(tmp_path / "a.wav", samples, 48000)
     alone = run(runtime.adapter.build(birdnet_context(tmp_path)), path)
+    assert len(runtime.calls_to("embeddings")) == 1
     runtime.calls.clear()
     both = run(runtime.adapter.build(birdnet_context(tmp_path, emit_embeddings=True)), path)
-    basic, embeddings = runtime.calls_to("scores"), runtime.calls_to("embeddings")
-    assert len(basic) == len(embeddings) == 1
-    for scored, embedded in zip(basic, embeddings, strict=True):
-        assert scored.given is embedded.given
+    assert len(runtime.calls_to("embeddings")) == 1
+    assert runtime.calls_to("scores") == []
     assert [w.scores for w in both] == [w.scores for w in alone]
 
 
@@ -875,7 +1004,9 @@ def test_with_a_registry_scores_are_computed_even_when_only_embeddings_are_asked
 ):
     model, _, path = model_and_noise(runtime, tmp_path, WINDOW, emit_embeddings=True)
     [window] = run(model, path)
-    assert len(runtime.calls_to("scores")) == 1
+    assert len(runtime.calls_to("embeddings")) == 1
+    assert len(runtime.matmuls) == 1
+    assert runtime.calls_to("scores") == []
     assert len(window.scores) == 6522
 
 
@@ -883,6 +1014,7 @@ def test_without_a_registry_no_scores_are_computed(runtime, tmp_path):
     model = runtime.adapter.build(embeddings_only(tmp_path, emit_embeddings=True))
     windows = run(model, write_audio(tmp_path / "a.wav", noise(2 * WINDOW), 48000))
     assert runtime.calls_to("scores") == []
+    assert runtime.matmuls == []
     assert [window.scores for window in windows] == [(), ()]
     assert all(window.embedding is not None for window in windows)
 
@@ -894,7 +1026,7 @@ def test_windows_are_batched_within_one_recording_only(runtime, tmp_path):
     model, _, path = model_and_noise(runtime, tmp_path, 5 * WINDOW, resources={"batch_size": 2})
     run(model, path)
     run(model, write_audio(tmp_path / "b.wav", noise(3 * WINDOW, seed=1), 48000))
-    batches = [call.given for call in runtime.calls_to("scores")]
+    batches = [call.given for call in runtime.calls_to("embeddings")]
     assert [len(batch) for batch in batches] == [2, 2, 1, 2, 1]
     for batch in batches:
         assert batch.dtype == np.float32
@@ -909,7 +1041,10 @@ def test_with_a_gpu_visible_everything_runs_on_the_cpu(runtime, tmp_path):
     assert [load.device for load in runtime.loads] == [CPU]
     assert {call.device for call in runtime.calls} == {CPU}
     assert {converted.device for converted in runtime.converted} == {CPU}
-    assert len(runtime.calls) == 2
+    assert {matmul.device for matmul in runtime.matmuls} == {CPU}
+    assert {addition.device for addition in runtime.additions} == {CPU}
+    assert len(runtime.matmuls) == len(runtime.additions) == 1
+    assert len(runtime.calls) == 1
 
 
 # The model's lifecycle.
@@ -976,16 +1111,23 @@ def test_the_model_loads_once_and_stays_loaded_after_each_recording(runtime, tmp
     assert len(run(model, path)) == 1
     model.after_recording()
     assert len(runtime.loads) == 1
-    assert len(runtime.calls_to("scores")) == 2
+    assert len(runtime.calls_to("embeddings")) == 2
 
 
-def test_clean_up_releases_the_loaded_model_and_both_signatures(runtime, tmp_path):
+def test_clean_up_releases_the_loaded_model_its_signature_and_classifier_layer(
+    runtime, tmp_path
+):
     model, _, path = model_and_noise(runtime, tmp_path, WINDOW)
     run(model, path)
     [loaded] = runtime.loaded
-    signatures = loaded().signatures
-    watched = [loaded, weakref.ref(signatures["basic"]), weakref.ref(signatures["embeddings"])]
-    del signatures
+    kernel, bias = loaded_classifier_layer(runtime)
+    watched = [
+        loaded,
+        weakref.ref(loaded().signatures["embeddings"]),
+        weakref.ref(kernel),
+        weakref.ref(bias),
+    ]
+    del kernel, bias
     gc.collect()
     assert all(ref() is not None for ref in watched)
     model.clean_up()
