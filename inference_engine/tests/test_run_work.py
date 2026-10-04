@@ -160,7 +160,7 @@ class Rig:
     def files(self, name: str, paths: dict[str, Path], **kwargs) -> LocalFiles:
         return LocalFiles(name, paths, self.calls, **kwargs)
 
-    def run(self, work, model=None, *, audio=None, artifacts=None, install=True, **kwargs):
+    def run(self, work, model=None, *, inputs=None, artifacts=None, install=True, **kwargs):
         model = model or self.model()
 
         def factory(context: ModelContext) -> ScriptedModel:
@@ -171,7 +171,7 @@ class Rig:
             return run_work(
                 work,
                 model_files=self.model_files,
-                audio=audio or self.files("audio", self.build.audio_paths),
+                inputs=inputs or self.files("audio", self.build.audio_paths),
                 artifacts=artifacts or CopyingWriter(self.destination, self.calls),
                 **kwargs,
             )
@@ -834,11 +834,14 @@ def test_each_recording_gets_its_own_file_of_each_kind(rig):
         ("embeddings", "1"): [30.0, 33.0, 36.0],
     }
     for record in result.artifacts:
+        recording = next(one for one in work.recordings if one.value == record.value)
         read = read_scores if record.kind == "scores" else read_embeddings
         with read(published(rig, record), expected_checksum=record.checksum) as stream:
             assert stream.metadata["robin.recording_work_digest"] == recording_work_digest(
-                work, next(one for one in work.recordings if one.value == record.value)
+                work, recording
             )
+            assert stream.metadata["robin.recording_namespace"] == recording.namespace
+            assert stream.metadata["robin.recording_value"] == recording.value
 
 
 def test_a_recording_with_no_score_rows_still_gets_its_embeddings_file(tmp_path):
@@ -1233,13 +1236,13 @@ def test_a_writer_that_fails_on_the_second_create_fails_the_work(rig):
     assert_failed_cleanly(rig, result)
 
 
-def test_audio_the_port_cannot_fetch_fails_the_work_at_acquisition(rig):
+def test_an_input_the_port_cannot_fetch_fails_the_work_at_acquisition(rig):
     work = rig.work()
-    audio = rig.files("audio", {})
+    inputs = rig.files("audio", {})
 
-    result = rig.run(work, rig.model(script(1)), audio=audio)
+    result = rig.run(work, rig.model(script(1)), inputs=inputs)
 
-    failure = failure_of(result, work, code=errors.AUDIO_UNAVAILABLE, stage=errors.ACQUIRE_AUDIO)
+    failure = failure_of(result, work, code=errors.INPUT_UNAVAILABLE, stage=errors.ACQUIRE_INPUT)
     assert (failure.namespace, failure.value) == ("test", "0")
     assert "KeyError" in failure.detail
     assert not any(call[:2] == ("audio", "release") for call in rig.calls)
@@ -1335,11 +1338,11 @@ CLEANUP_FAILURES = {
         errors.INFER,
         ("test", "0"),
     ),
-    "audio_release": (
+    "input_release": (
         {},
-        {"audio": {"fail_release": OSError("disk busy")}},
-        errors.AUDIO_UNAVAILABLE,
-        errors.ACQUIRE_AUDIO,
+        {"inputs": {"fail_release": OSError("disk busy")}},
+        errors.INPUT_UNAVAILABLE,
+        errors.ACQUIRE_INPUT,
         ("test", "0"),
     ),
     "clean_up": (
@@ -1367,9 +1370,9 @@ def test_a_cleanup_step_failing_on_an_otherwise_successful_path_is_the_failure(r
         rig.model_files = rig.files(
             "model_files", rig.build.model_paths, **port_kwargs["model_files"]
         )
-    audio = rig.files("audio", rig.build.audio_paths, **port_kwargs.get("audio", {}))
+    inputs = rig.files("audio", rig.build.audio_paths, **port_kwargs.get("inputs", {}))
 
-    result = rig.run(work, rig.model(script(1), **model_kwargs), audio=audio)
+    result = rig.run(work, rig.model(script(1), **model_kwargs), inputs=inputs)
 
     failure = failure_of(result, work, code=code, stage=stage)
     assert (failure.namespace, failure.value) == recording
@@ -1397,7 +1400,7 @@ LEFT_BEHIND_CASES = {
         rig.model(script(2, embedding=True)),
         {"artifacts": CopyingWriter(rig.destination, rig.calls, fail_on=2)},
     ),
-    "audio_unavailable": lambda rig: (rig.model(script(1)), {"audio": rig.files("audio", {})}),
+    "input_unavailable": lambda rig: (rig.model(script(1)), {"inputs": rig.files("audio", {})}),
     "refused_window": lambda rig: (
         rig.model([[WindowOutput(start=0.0, end=3.0, scores=(ClassScore("hawk", 0.5),))]]),
         {},

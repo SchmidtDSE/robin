@@ -1156,7 +1156,7 @@ def test_a_work_runs_through_the_engine_to_scores_and_embeddings(runtime, tmp_pa
     result = run_work(
         work,
         model_files=LocalFileProvider(),
-        audio=LocalFileProvider(),
+        inputs=LocalFileProvider(),
         artifacts=LocalArtifactWriter(root),
     )
     assert isinstance(result, InferenceSuccess), result

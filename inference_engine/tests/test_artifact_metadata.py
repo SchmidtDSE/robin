@@ -126,7 +126,7 @@ def test_every_shared_key_is_present():
     decoded = decode_metadata(build_metadata())
 
     assert set(decoded) == set(REQUIRED_KEYS) | set(REGISTRY_KEYS)
-    assert len(REQUIRED_KEYS) == 7
+    assert len(REQUIRED_KEYS) == 9
     assert len(REGISTRY_KEYS) == 2
 
 
@@ -214,6 +214,48 @@ def test_the_header_carries_the_digest_of_the_work_narrowed_to_its_recording():
         headers["42"]["robin.recording_work_digest"]
         != headers["43"]["robin.recording_work_digest"]
     )
+
+
+@pytest.mark.parametrize(
+    "recording",
+    [
+        SOUNDHUB_42,
+        RecordingRef(namespace="site", value="site=a/2024/x.flac", audio_uri="s3://b/x.flac"),
+    ],
+    ids=["plain", "slash_and_equals"],
+)
+def test_the_header_names_its_recording(recording):
+    work = build_work(recordings=(recording,))
+
+    decoded = decode_metadata(build_metadata(work=work, recording=recording))
+
+    assert decoded["robin.recording_namespace"] == recording.namespace
+    assert decoded["robin.recording_value"] == recording.value
+
+
+def test_each_recordings_header_names_that_recording():
+    work = build_work(recordings=(SOUNDHUB_42, SOUNDHUB_43))
+
+    headers = {
+        recording.value: decode_metadata(build_metadata(work=work, recording=recording))
+        for recording in work.recordings
+    }
+
+    for recording in work.recordings:
+        assert headers[recording.value]["robin.recording_namespace"] == recording.namespace
+        assert headers[recording.value]["robin.recording_value"] == recording.value
+
+
+@pytest.mark.parametrize("key", ["robin.recording_namespace", "robin.recording_value"])
+def test_a_header_missing_its_recording_is_refused(key):
+    decoded = decode_metadata(build_metadata())
+    decoded.pop(key, None)
+
+    with pytest.raises(errors.EngineError) as exc:
+        require_metadata_keys(decoded, REQUIRED_KEYS, contract_id="robin.scores.arrow/1")
+
+    assert exc.value.code == errors.ARTIFACT_METADATA_INCOMPLETE
+    assert key in exc.value.detail
 
 
 def test_an_absent_registry_omits_its_keys():

@@ -447,7 +447,7 @@ def test_every_required_key_is_present_on_the_stream(tmp_path):
 
     with read_embeddings(staged.path, expected_checksum=staged.checksum) as stream:
         assert set(stream.metadata) == set(HEADER_KEYS)
-        assert len(HEADER_KEYS) == 14
+        assert len(HEADER_KEYS) == 16
 
 
 @pytest.mark.parametrize("absent", HEADER_KEYS)

@@ -122,14 +122,14 @@ CONSTRUCT_MODEL_FAILURES = (
 
 
 # ---------------------------------------------------------------------------
-# acquire_audio: fetching a recording's audio.
+# acquire_input: fetching a recording's input.
 # ---------------------------------------------------------------------------
 
-ACQUIRE_AUDIO = "acquire_audio"
+ACQUIRE_INPUT = "acquire_input"
 
-AUDIO_UNAVAILABLE = "audio_unavailable"
+INPUT_UNAVAILABLE = "input_unavailable"
 
-ACQUIRE_AUDIO_FAILURES = (AUDIO_UNAVAILABLE,)
+ACQUIRE_INPUT_FAILURES = (INPUT_UNAVAILABLE,)
 
 
 # ---------------------------------------------------------------------------

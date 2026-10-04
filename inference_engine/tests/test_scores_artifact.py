@@ -418,7 +418,7 @@ def test_every_required_metadata_key_is_present_on_the_stream(tmp_path):
 
     with read_scores(staged.path, expected_checksum=staged.checksum) as stream:
         assert set(stream.metadata) == set(TOP_K_KEYS)
-        assert len(TOP_K_KEYS) == 13
+        assert len(TOP_K_KEYS) == 15
 
 
 @pytest.mark.parametrize("absent", TOP_K_KEYS)

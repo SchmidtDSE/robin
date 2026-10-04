@@ -64,7 +64,7 @@ class _Run:
     work: InferenceWork
     digest: str
     model_files: FileProvider
-    audio: FileProvider
+    inputs: FileProvider
     artifacts: ArtifactWriter
     log: Log
 
@@ -73,7 +73,7 @@ def run_work(
     work: InferenceWork,
     *,
     model_files: FileProvider,
-    audio: FileProvider,
+    inputs: FileProvider,
     artifacts: ArtifactWriter,
     log: Log = noop,
 ) -> InferenceResult:
@@ -82,7 +82,7 @@ def run_work(
         work=work,
         digest=work_digest(work),
         model_files=model_files,
-        audio=audio,
+        inputs=inputs,
         artifacts=artifacts,
         log=log,
     )
@@ -237,10 +237,10 @@ def _run_recording(
     path: Path | None = None
     windows: Iterator[WindowOutput] | None = None
     with _cleanup_on_exit(
-        lambda: _recording_cleanup(model, run.audio, recording, path=path, windows=windows),
+        lambda: _recording_cleanup(model, run.inputs, recording, path=path, windows=windows),
         log=run.log,
     ):
-        path = _fetch_audio(run.audio, recording)
+        path = _fetch_input(run.inputs, recording)
         with outputs.open_window_writers(position, recording) as writers:
             windows = _start(model, recording, AudioClip(path=path))
             accepted = 0
@@ -267,7 +267,7 @@ def _run_recording(
 
 def _recording_cleanup(
     model: Model,
-    audio: FileProvider,
+    inputs: FileProvider,
     recording: RecordingRef,
     *,
     path: Path | None,
@@ -295,10 +295,10 @@ def _recording_cleanup(
     if path is not None:
         steps.append(
             _cleanup_step(
-                lambda: audio.release(path),
+                lambda: inputs.release(path),
                 "release",
-                errors.AUDIO_UNAVAILABLE,
-                errors.ACQUIRE_AUDIO,
+                errors.INPUT_UNAVAILABLE,
+                errors.ACQUIRE_INPUT,
                 recording,
             )
         )
@@ -319,7 +319,7 @@ def _zero_window_reason(
 
 
 # ---------------------------------------------------------------------------
-# Calls to the audio port, the writer and the adapter, reported at their stage.
+# Calls to the input port, the writer and the adapter, reported at their stage.
 # ---------------------------------------------------------------------------
 
 
@@ -344,13 +344,13 @@ def _publish(artifacts: ArtifactWriter, staged: StagedArtifact) -> ArtifactRecor
         ) from exc
 
 
-def _fetch_audio(audio: FileProvider, recording: RecordingRef) -> Path:
+def _fetch_input(inputs: FileProvider, recording: RecordingRef) -> Path:
     try:
-        return audio.fetch(recording.audio_uri)
+        return inputs.fetch(recording.audio_uri)
     except Exception as exc:
         raise errors.EngineError(
-            errors.AUDIO_UNAVAILABLE,
-            errors.ACQUIRE_AUDIO,
+            errors.INPUT_UNAVAILABLE,
+            errors.ACQUIRE_INPUT,
             f"fetching {recording.audio_uri} raised {type(exc).__name__}: {exc}",
             recording=recording,
         ) from exc

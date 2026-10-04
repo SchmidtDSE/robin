@@ -27,7 +27,7 @@ FailureStage = Literal[
     "validate_request",
     "acquire_model",
     "load_registry",
-    "acquire_audio",
+    "acquire_input",
     "read_input_artifact",
     "construct_model",
     "infer",

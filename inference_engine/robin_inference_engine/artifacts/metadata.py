@@ -29,11 +29,15 @@ BACKBONE_REF_KEY = "robin.backbone_ref"
 BACKBONE_CARD_DIGEST_KEY = "robin.backbone_card_digest"
 DETECTION_POLICY_KEY = "robin.detection_policy"
 SOURCE_ARTIFACTS_KEY = "robin.source_artifacts"
+RECORDING_NAMESPACE_KEY = "robin.recording_namespace"
+RECORDING_VALUE_KEY = "robin.recording_value"
 
 # Every artifact carries these keys, whatever its contract.
 REQUIRED_KEYS: tuple[str, ...] = (
     CONTRACT_KEY,
     "robin.recording_work_digest",
+    RECORDING_NAMESPACE_KEY,
+    RECORDING_VALUE_KEY,
     "robin.recipe_fingerprint",
     "robin.recipe",
     "robin.model_ref",
@@ -67,14 +71,17 @@ def required_metadata(
 ) -> dict[bytes, bytes]:
     """The provenance keys every artifact carries, as Arrow metadata.
 
-    The work is identified narrowed to `recording`, the one recording the file holds,
-    so the header does not depend on which other recordings shared the work.
+    The header names `recording`, the one recording the file holds, by its namespace
+    and value as given. The work is identified narrowed to that recording, so the
+    header does not depend on which other recordings shared the work.
     """
     _require_a_whole_registry_binding(registry_uri, registry_fingerprint)
     model = model_ref(work.model.card)
     values: dict[str, str] = {
         CONTRACT_KEY: contract_id,
         "robin.recording_work_digest": recording_work_digest(work, recording),
+        RECORDING_NAMESPACE_KEY: recording.namespace,
+        RECORDING_VALUE_KEY: recording.value,
         # Not a duplicate: one key holds the recipe, the other its digest.
         "robin.recipe_fingerprint": recipe.id,
         "robin.recipe": canonical_json_bytes(recipe).decode("utf-8"),

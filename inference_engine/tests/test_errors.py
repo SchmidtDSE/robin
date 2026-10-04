@@ -16,7 +16,7 @@ FAMILIES = (
     (errors.ACQUIRE_MODEL, errors.ACQUIRE_MODEL_FAILURES),
     (errors.LOAD_REGISTRY, errors.LOAD_REGISTRY_FAILURES),
     (errors.CONSTRUCT_MODEL, errors.CONSTRUCT_MODEL_FAILURES),
-    (errors.ACQUIRE_AUDIO, errors.ACQUIRE_AUDIO_FAILURES),
+    (errors.ACQUIRE_INPUT, errors.ACQUIRE_INPUT_FAILURES),
     (errors.INFER, errors.INFER_FAILURES),
     (errors.READ_INPUT_ARTIFACT, errors.READ_INPUT_ARTIFACT_FAILURES),
     (errors.WRITE_ARTIFACT, errors.WRITE_ARTIFACT_FAILURES),
@@ -36,7 +36,7 @@ def test_every_declared_constant_is_a_stage_or_one_of_its_codes():
     assert len(set(errors.ACQUIRE_MODEL_FAILURES)) == 2
     assert len(set(errors.LOAD_REGISTRY_FAILURES)) == 2
     assert len(set(errors.CONSTRUCT_MODEL_FAILURES)) == 5
-    assert len(set(errors.ACQUIRE_AUDIO_FAILURES)) == 1
+    assert len(set(errors.ACQUIRE_INPUT_FAILURES)) == 1
     assert len(set(errors.INFER_FAILURES)) == 2
     assert len(set(errors.READ_INPUT_ARTIFACT_FAILURES)) == 6
     assert len(set(errors.WRITE_ARTIFACT_FAILURES)) == 2
