@@ -1,7 +1,8 @@
 # robin-models
 
-`robin-models` holds ROBIN's model adapters, each with its bundled card and taxa registry, and
-each model's runtime behind an extra.
+`robin-models` holds ROBIN's model adapters and its head runtime, each with its runtime behind an
+extra. The backbone adapters bundle their card and taxa registry; the head runtime bundles
+neither.
 
 ## BirdNET v2.4
 
@@ -122,3 +123,62 @@ Reports* 13, 22876 (2023).
 
 Kaggle states the licence of version 8 as Apache 2.0. It is not covered by robin's BSD-3-Clause
 licence.
+
+## Heads
+
+A head is a small model that scores one backbone's saved embeddings. It is three files the work
+pins: a head card, an ONNX graph (role `graph`) and a taxa registry (role `taxa_registry`). robin
+ships none of them. A head runs from what the work pins, and the engine checks every file's digest
+and size before the head is built.
+
+### The card
+
+```yaml
+model_name: example-head
+model_version: "1"
+runtime: onnx
+backbone: {name: perch, version: v8, digest: 'sha256:v1:<the backbone card digest>'}
+embedding_dim: 1280
+min_detection_threshold: 0.0
+score_domain: probability
+taxa_registry_digest: sha256:<the registry file's sha256>
+```
+
+- `model_name` and `model_version` name the head.
+- `runtime` names the code that runs the head. `onnx` is the one runtime robin has.
+- `backbone` is the backbone whose embeddings the head reads: its `name`, `version` and card
+  `digest`.
+- `embedding_dim` is the width the graph takes. It must equal the backbone's.
+- `min_detection_threshold` means what it means on a model card.
+- `score_domain` means what it means on a model card, and is `probability`.
+- `taxa_registry_digest` is the sha256 of the registry file that labels the head's scores.
+
+### The input
+
+Each recording's input is its embeddings file, as its backbone wrote it, named on the recording
+by uri and checksum. The engine checks that the file came from the card's backbone, at the card's
+width, for that recording, before the head sees a vector.
+
+### The graph
+
+The graph has one input, float32, of shape `[batch, embedding_dim]`, and one output, float32, of
+shape `[batch, number of registry rows]`. The batch dimension must not be fixed. The input is the
+backbone's raw vectors as stored, widened to float32. Each output column is the score of the
+registry row at that position. The graph applies its own activation; robin applies none, and no
+clipping or threshold. A non-finite output fails the recording.
+
+### Normalisation
+
+robin applies no normalisation to a head's input. Any normalisation the head was trained with,
+such as `x / (‖x‖₂ + 1e-8)`, must be part of the graph. A graph that leaves it out still runs and
+gives plausible wrong scores, and robin can't detect that.
+
+### Running it
+
+Install `robin-models[onnx-head]`. A head runs on the CPU only, with onnxruntime's CPU provider,
+in batches of `batch_size` rows (default 256).
+
+### Where outputs go
+
+A head's scores and detections use the same paths as its backbone's, so a head work needs a
+writer root other than its backbone's. A writer refuses to replace a file that differs.

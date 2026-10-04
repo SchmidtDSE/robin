@@ -3,23 +3,31 @@
 import importlib.util
 import subprocess
 import sys
+from importlib.metadata import entry_points
 from importlib.resources import as_file, files
 
 import pytest
 
-from robin_contracts.cards import model_ref, read_card
+from robin_contracts.cards import HeadCard, model_ref, read_card
 from robin_contracts.protocols import ModelContext
 from robin_inference_engine import errors
-from robin_inference_engine.construct_model import construct_model, installed_models
+from robin_inference_engine.construct_model import (
+    HEAD_RUNTIME_GROUP,
+    construct_head,
+    construct_model,
+    installed_models,
+)
 
 RUNTIME_MODULES = (
     "robin_models.owl.adapter",
     "robin_models.birdnet.adapter",
     "robin_models.perch.adapter",
+    "robin_models.onnx_head.adapter",
     "tensorflow",
     "sox_tensorflow",
     "scipy",
     "soundfile",
+    "onnxruntime",
 )
 
 MODELS = [
@@ -80,6 +88,24 @@ def test_importing_the_perch_package_imports_no_adapter_and_no_runtime():
     assert modules_loaded_after("import robin_models.perch") == set()
 
 
+def test_the_onnx_head_runtime_is_registered_and_is_not_a_model():
+    [entry] = [entry for entry in entry_points(group=HEAD_RUNTIME_GROUP) if entry.name == "onnx"]
+    assert entry.value == "robin_models.onnx_head.adapter:build"
+    assert "onnx" not in installed_models()
+
+
+def test_listing_head_runtimes_imports_no_adapter_and_no_runtime():
+    code = (
+        "from importlib.metadata import entry_points\n"
+        f"assert 'onnx' in {{e.name for e in entry_points(group={HEAD_RUNTIME_GROUP!r})}}"
+    )
+    assert modules_loaded_after(code) == set()
+
+
+def test_importing_the_onnx_head_package_imports_no_adapter_and_no_runtime():
+    assert modules_loaded_after("import robin_models.onnx_head") == set()
+
+
 def test_the_bundled_card_reads_as_owl_v4():
     assert model_ref(bundled_card()).id == "owl/v4"
 
@@ -118,3 +144,43 @@ def test_constructing_a_model_without_its_runtime_is_an_unloadable_entry_point(
     assert caught.value.code == errors.MODEL_ENTRY_POINT_UNLOADABLE
     assert caught.value.stage == errors.CONSTRUCT_MODEL
     assert f"robin-models[{package}]" in caught.value.detail
+
+
+onnxruntime_missing = pytest.mark.skipif(
+    importlib.util.find_spec("onnxruntime") is not None,
+    reason="onnxruntime, which the head runtime needs, is installed",
+)
+
+
+@onnxruntime_missing
+def test_importing_the_onnx_head_adapter_without_onnxruntime_names_the_extra():
+    with pytest.raises(ModuleNotFoundError, match=r"robin-models\[onnx-head\]"):
+        importlib.import_module("robin_models.onnx_head.adapter")
+
+
+@onnxruntime_missing
+def test_constructing_an_onnx_head_without_onnxruntime_is_an_unloadable_entry_point(tmp_path):
+    card = HeadCard(
+        model_name="test-head",
+        model_version="1",
+        runtime="onnx",
+        backbone=model_ref(bundled_card()),
+        embedding_dim=4,
+        min_detection_threshold=0.0,
+        score_domain="probability",
+        taxa_registry_digest="sha256:" + "a" * 64,
+    )
+    context = ModelContext(
+        card=card,
+        registry=None,
+        files={},
+        settings={},
+        resources={},
+        scratch_dir=tmp_path,
+        emit_embeddings=False,
+    )
+    with pytest.raises(errors.EngineError) as caught:
+        construct_head(runtime="onnx", context=context)
+    assert caught.value.code == errors.MODEL_ENTRY_POINT_UNLOADABLE
+    assert caught.value.stage == errors.CONSTRUCT_MODEL
+    assert "robin-models[onnx-head]" in caught.value.detail
