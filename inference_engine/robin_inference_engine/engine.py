@@ -13,8 +13,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import get_args
 
-from robin_contracts.cards import model_ref
-from robin_contracts.inputs import AudioClip
+from robin_contracts.cards import HeadCard, model_ref
+from robin_contracts.inputs import AudioClip, Input
 from robin_contracts.output_contracts import ResultContractId
 from robin_contracts.ports import ArtifactWriter, FileProvider
 from robin_contracts.protocols import Log, Model, ModelContext, noop
@@ -31,7 +31,6 @@ from robin_contracts.results import (
 from robin_contracts.specs import Recipe, WindowGeometry, recipe, window_count
 from robin_contracts.work import (
     REGISTRY_ROLE,
-    AudioInput,
     InferenceWork,
     PinnedFile,
     RecordingRef,
@@ -40,13 +39,14 @@ from robin_contracts.work import (
 from robin_inference_engine import errors
 from robin_inference_engine.accept_window import AcceptanceBoundary
 from robin_inference_engine.artifacts.staging import StagedArtifact, checksum_file
-from robin_inference_engine.construct_model import construct_model
+from robin_inference_engine.construct_model import construct_head, construct_model
 from robin_inference_engine.coverage import CoverageBuilder, check_completion_evidence
 from robin_inference_engine.load_registry import load_registry
 from robin_inference_engine.recording_outputs import RecordingOutputs
 from robin_inference_engine.requested_outputs import embeddings_request, scores_request
 from robin_inference_engine.retention import retain_scores
 from robin_inference_engine.validate_request import refuse_request
+from robin_inference_engine.verify_head_input import read_head_input
 
 RESULT_CONTRACT_ID: ResultContractId = get_args(ResultContractId)[0]
 
@@ -109,7 +109,6 @@ def _failure(digest: str, error: errors.EngineError) -> InferenceFailure:
 
 
 def _run(run: _Run) -> InferenceResult:
-    _refuse_embedding_input(run.work)
     # One directory holds the model's scratch space and every staged artifact, so
     # removing it on the way out is the whole of the engine's own cleanup.
     with TemporaryDirectory(prefix="robin-work-") as temporary:
@@ -128,8 +127,10 @@ def _run_model(run: _Run, *, fetched: list[Path], root: Path) -> InferenceResult
     files = _fetch_model_files(work, run.model_files, fetched)
     registry = _load_registry(files)
     refuse_request(work, registry=registry)
-    # After the refusals, which leave only a backbone card, the one kind with a recipe.
-    stated = recipe(work.model.card)
+    # A head's windows are its backbone's, so a head work's recipe is its backbone's.
+    # The refusals leave a head work only with an input naming that backbone's card.
+    card = work.model.card
+    stated = recipe(work.input.backbone if isinstance(card, HeadCard) else card)
 
     scratch_dir = root / "scratch"
     scratch_dir.mkdir()
@@ -143,7 +144,11 @@ def _run_model(run: _Run, *, fetched: list[Path], root: Path) -> InferenceResult
         emit_embeddings=embeddings_request(work) is not None,
         log=run.log,
     )
-    model = construct_model(ref=model_ref(work.model.card), context=context)
+    model = (
+        construct_head(runtime=card.runtime, context=context)
+        if isinstance(card, HeadCard)
+        else construct_model(ref=model_ref(card), context=context)
+    )
     clean_up = _cleanup_step(model.clean_up, "clean_up", errors.MODEL_RUN_FAILED, errors.INFER)
     with _cleanup_on_exit(lambda: [clean_up], log=run.log):
         staging = root / "staging"
@@ -241,8 +246,9 @@ def _run_recording(
         log=run.log,
     ):
         path = _fetch_input(run.inputs, recording)
+        given = _recording_input(run.work, recording, path, boundary)
         with outputs.open_window_writers(position, recording) as writers:
-            windows = _start(model, recording, AudioClip(path=path))
+            windows = _start(model, recording, given)
             accepted = 0
             for window in _each(windows, recording):
                 kept = boundary.accept(window)
@@ -251,6 +257,7 @@ def _run_recording(
                 coverage.record(kept)
                 writers.write(kept)
                 accepted += 1
+            boundary.end_recording()
             staged = writers.finish()
         detected = outputs.stage_detections(staged)
         if detected is not None:
@@ -305,6 +312,21 @@ def _recording_cleanup(
     return steps
 
 
+def _recording_input(
+    work: InferenceWork, recording: RecordingRef, path: Path, boundary: AcceptanceBoundary
+) -> Input:
+    """The audio as fetched, or for a head, the recording's embeddings, read and checked.
+
+    A head's windows must then be exactly the rows it is given.
+    """
+    card = work.model.card
+    if not isinstance(card, HeadCard):
+        return AudioClip(path=path)
+    embeddings = read_head_input(path, card=card, recording=recording)
+    boundary.expect_windows(embeddings.starts, embeddings.ends)
+    return embeddings
+
+
 def _zero_window_reason(
     recording: RecordingRef, geometry: WindowGeometry
 ) -> ZeroWindowReason | None:
@@ -345,20 +367,22 @@ def _publish(artifacts: ArtifactWriter, staged: StagedArtifact) -> ArtifactRecor
 
 
 def _fetch_input(inputs: FileProvider, recording: RecordingRef) -> Path:
+    """The recording's embeddings file when it names one, and its audio otherwise."""
+    uri = recording.embeddings.uri if recording.embeddings is not None else recording.audio_uri
     try:
-        return inputs.fetch(recording.audio_uri)
+        return inputs.fetch(uri)
     except Exception as exc:
         raise errors.EngineError(
             errors.INPUT_UNAVAILABLE,
             errors.ACQUIRE_INPUT,
-            f"fetching {recording.audio_uri} raised {type(exc).__name__}: {exc}",
+            f"fetching {uri} raised {type(exc).__name__}: {exc}",
             recording=recording,
         ) from exc
 
 
-def _start(model: Model, recording: RecordingRef, clip: AudioClip) -> Iterator[WindowOutput]:
+def _start(model: Model, recording: RecordingRef, given: Input) -> Iterator[WindowOutput]:
     try:
-        return iter(model.run(clip))
+        return iter(model.run(given))
     except Exception as exc:
         raise _run_failure(recording, exc) from exc
 
@@ -382,21 +406,6 @@ def _run_failure(recording: RecordingRef, exc: Exception) -> errors.EngineError:
         f"the model raised {type(exc).__name__} on recording {errors.named(recording)}: {exc}",
         recording=recording,
     )
-
-
-# ---------------------------------------------------------------------------
-# Requests this engine refuses.
-# ---------------------------------------------------------------------------
-
-
-def _refuse_embedding_input(work: InferenceWork) -> None:
-    if not isinstance(work.input, AudioInput):
-        raise errors.EngineError(
-            errors.EMBEDDING_INPUT_NOT_AVAILABLE,
-            errors.VALIDATE_REQUEST,
-            f"the work's input is an {work.input.kind}, and no model that reads one "
-            f"is supported",
-        )
 
 
 # ---------------------------------------------------------------------------

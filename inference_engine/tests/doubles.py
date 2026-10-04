@@ -10,21 +10,31 @@ import importlib
 import shutil
 import sys
 import uuid
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 from robin_contracts.cards import HeadCard, ModelCard
-from robin_contracts.inputs import Input
+from robin_contracts.inputs import Embeddings, Input
 from robin_contracts.layout import artifact_path
+from robin_contracts.output_contracts import OutputRequest
 from robin_contracts.protocols import ModelContext
-from robin_contracts.records import WindowOutput
-from robin_contracts.results import ArtifactContractId, ArtifactKind, ArtifactRecord
+from robin_contracts.records import ClassScore, WindowOutput
+from robin_contracts.results import (
+    ArtifactContractId,
+    ArtifactKind,
+    ArtifactRecord,
+    InferenceSuccess,
+)
 from robin_contracts.work import (
     REGISTRY_ROLE,
     AudioInput,
+    EmbeddingArtifactInput,
     InferenceWork,
+    InputArtifact,
     PinnedFile,
     PinnedModel,
     RecordingRef,
@@ -33,6 +43,7 @@ from robin_contracts.work import (
 CallLog = list[tuple[object, ...]]
 
 ENTRY_POINT_GROUP = "robin.models"
+HEAD_RUNTIME_GROUP = "robin.head_runtimes"
 
 # A registry the loader accepts, declaring two labels.
 REGISTRY_CSV = b"class_index,label,label_kind\n0,owl,non_taxonomic\n1,rain,non_taxonomic\n"
@@ -107,6 +118,60 @@ class ScriptedModel:
         else:
             self._buffer[...] = window.embedding
         return replace(window, embedding=self._buffer)
+
+
+class ScriptedHead:
+    """A head that keeps a copy of each `Embeddings` it is run on.
+
+    By default it yields one window per row, at that row's start and end, scoring each
+    of `labels` in order with a value in [0, 1] that differs between windows. `windows`
+    replaces those with whatever it returns for the input, and `fail` is raised by `run`.
+    """
+
+    def __init__(
+        self,
+        *,
+        labels: Sequence[str],
+        calls: CallLog,
+        windows: Callable[[Embeddings], Iterable[WindowOutput]] | None = None,
+        fail: Exception | None = None,
+    ) -> None:
+        self._labels = tuple(labels)
+        self._calls = calls
+        self._windows = windows or self._one_per_row
+        self._fail = fail
+        self.given: list[Embeddings] = []
+
+    def run(self, input: Input) -> Iterator[WindowOutput]:
+        self._calls.append(("run", input.kind, len(input.starts)))
+        self.given.append(
+            Embeddings(
+                starts=input.starts.copy(), ends=input.ends.copy(), values=input.values.copy()
+            )
+        )
+        if self._fail is not None:
+            raise self._fail
+        return iter(list(self._windows(input)))
+
+    def after_recording(self) -> None:
+        self._calls.append(("after_recording",))
+
+    def clean_up(self) -> None:
+        self._calls.append(("clean_up",))
+
+    def _one_per_row(self, input: Embeddings) -> list[WindowOutput]:
+        count = len(input.starts) * len(self._labels) + 1
+        return [
+            WindowOutput(
+                start=float(start),
+                end=float(end),
+                scores=tuple(
+                    ClassScore(label=label, score=(row * len(self._labels) + column + 1) / count)
+                    for column, label in enumerate(self._labels)
+                ),
+            )
+            for row, (start, end) in enumerate(zip(input.starts, input.ends, strict=True))
+        ]
 
 
 class LocalFiles:
@@ -208,8 +273,9 @@ def installed_distribution(
     name: str,
     entry_points: Mapping[str, str],
     modules: Mapping[str, str],
+    group: str = ENTRY_POINT_GROUP,
 ) -> Iterator[None]:
-    """Install a distribution called `name` registering `entry_points` as models.
+    """Install a distribution called `name` registering `entry_points` under `group`.
 
     It is put on `sys.path`, so the real `importlib.metadata` lookup finds it.
     """
@@ -217,7 +283,7 @@ def installed_distribution(
     dist_info = site / f"{name.replace('-', '_')}-0.dist-info"
     dist_info.mkdir(parents=True)
     (dist_info / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {name}\nVersion: 0\n")
-    lines = [f"[{ENTRY_POINT_GROUP}]"]
+    lines = [f"[{group}]"]
     lines += [f"{entry} = {value}" for entry, value in entry_points.items()]
     (dist_info / "entry_points.txt").write_text("\n".join(lines) + "\n")
     for module, source in modules.items():
@@ -242,8 +308,9 @@ def installed_factory(
     factory: Callable[[ModelContext], object],
     *,
     distribution: str = "robin-test-model",
+    group: str = ENTRY_POINT_GROUP,
 ) -> Iterator[str]:
-    """Install a distribution whose `ref_id` entry point is `factory`.
+    """Install a distribution whose `ref_id` entry point under `group` is `factory`.
 
     Yields the entry point's module name; the module is imported only when the entry
     point is loaded.
@@ -257,6 +324,7 @@ def installed_factory(
             name=distribution,
             entry_points={ref_id: f"{module}:build"},
             modules={module: source},
+            group=group,
         ):
             yield module
     finally:
@@ -326,3 +394,32 @@ class WorkBuilder:
         uri = f"file:///model/{name}"
         self.model_paths[uri] = path
         self.files[role] = pinned_file(path, uri)
+
+
+def head_work(
+    backbone: InferenceWork,
+    result: InferenceSuccess,
+    head: WorkBuilder,
+    *,
+    outputs: Sequence[OutputRequest],
+) -> tuple[InferenceWork, dict[str, Path]]:
+    """A work running `head` over the embeddings files the backbone published.
+
+    Each recording the backbone wrote embeddings for names its file. Also returns the
+    local path of each file by its uri, for a `LocalFiles` input port.
+    """
+    recordings = {(one.namespace, one.value): one for one in backbone.recordings}
+    named: list[RecordingRef] = []
+    paths: dict[str, Path] = {}
+    for record in result.artifacts:
+        if record.kind != "embeddings":
+            continue
+        embeddings = InputArtifact(uri=record.uri, checksum=record.checksum)
+        recording = recordings[(record.namespace, record.value)]
+        named.append(RecordingRef(**(recording.model_dump() | {"embeddings": embeddings})))
+        paths[record.uri] = Path(url2pathname(urlparse(record.uri).path))
+    source = EmbeddingArtifactInput(
+        contract_id="robin.embeddings.arrow/1", backbone=backbone.model.card
+    )
+    work = head.work(named, input=source, settings={}, outputs=tuple(outputs))
+    return work, paths

@@ -1,4 +1,4 @@
-"""What the engine refuses to attempt, checked before any audio is touched.
+"""What the engine refuses to attempt, checked before any recording's input is fetched.
 
 Nothing here loads, reads, opens or fetches anything: every argument is an
 already-verified in-memory value. An engine that cannot do what was asked says so
@@ -8,7 +8,7 @@ both sides of the disagreement.
 
 from collections.abc import Iterator
 
-from robin_contracts.cards import HeadCard, ModelCard
+from robin_contracts.cards import HeadCard, ModelCard, model_ref
 from robin_contracts.output_contracts import ScoresRequest
 from robin_contracts.protocols import JsonScalar
 from robin_contracts.registry import TaxonRegistry
@@ -28,11 +28,15 @@ _SETTING_TYPES: dict[str, type] = {"int": int, "float": float}
 def refuse_request(work: InferenceWork, *, registry: TaxonRegistry | None) -> None:
     """Everything the engine refuses before it builds the model, all read from the card."""
     card = work.model.card
+    # First: whether the card is a head decides which of its fields the rest read.
+    _refuse_an_input_the_card_does_not_read(work, card)
+    if isinstance(card, HeadCard):
+        _refuse_a_backbone_the_head_does_not_read(work.input.backbone, card)
+        _refuse_embeddings_from_a_head(work, card)
     _refuse_embeddings_the_card_forbids(work, card)
     _refuse_unlabelled_scores(work)
     _refuse_a_substituted_registry(work, registry)
     _refuse_a_registry_the_card_does_not_pin(work, card)
-    _refuse_a_head(card)
     _refuse_settings_the_card_does_not_declare(work, card)
     scores = scores_request(work)
     if scores is not None:
@@ -50,6 +54,50 @@ def _refused(code: str, detail: str) -> errors.EngineError:
 
 def _card_id(card: ModelCard | HeadCard) -> str:
     return f"{card.model_name}/{card.model_version}"
+
+
+def _refuse_an_input_the_card_does_not_read(
+    work: InferenceWork, card: ModelCard | HeadCard
+) -> None:
+    # A head reads the embeddings its backbone saved; a backbone reads audio.
+    expected = "embedding_artifact" if isinstance(card, HeadCard) else "audio"
+    if work.input.kind != expected:
+        raise _refused(
+            errors.INPUT_KIND_DISAGREES_WITH_CARD,
+            f"the work's input is {work.input.kind!r}, but card {_card_id(card)} reads "
+            f"{expected!r} input",
+        )
+
+
+def _refuse_a_backbone_the_head_does_not_read(backbone: ModelCard, head: HeadCard) -> None:
+    given = model_ref(backbone)
+    if given != head.backbone:
+        raise _refused(
+            errors.HEAD_BACKBONE_DISAGREES,
+            f"the work's input comes from backbone {given.id} at {given.digest}, but head "
+            f"{_card_id(head)} reads backbone {head.backbone.id} at {head.backbone.digest}",
+        )
+    if not backbone.can_emit_embeddings:
+        raise _refused(
+            errors.HEAD_BACKBONE_DISAGREES,
+            f"backbone {given.id} declares can_emit_embeddings false, but head "
+            f"{_card_id(head)} reads its embeddings",
+        )
+    if backbone.embedding_dim != head.embedding_dim:
+        raise _refused(
+            errors.HEAD_BACKBONE_DISAGREES,
+            f"backbone {given.id} declares embedding_dim {backbone.embedding_dim}, but head "
+            f"{_card_id(head)} takes {head.embedding_dim} values",
+        )
+
+
+def _refuse_embeddings_from_a_head(work: InferenceWork, head: HeadCard) -> None:
+    if embeddings_request(work) is not None:
+        raise _refused(
+            errors.HEAD_EMITS_NO_EMBEDDINGS,
+            f"embeddings were requested, but head {_card_id(head)} writes none: it reads "
+            f"its backbone's",
+        )
 
 
 def _refuse_embeddings_the_card_forbids(
@@ -101,7 +149,7 @@ def _refuse_a_registry_the_card_does_not_pin(
     work: InferenceWork, card: ModelCard | HeadCard
 ) -> None:
     pinned = work.model.files.get(REGISTRY_ROLE)
-    if pinned is None or isinstance(card, HeadCard) or card.taxa_registry_digest is None:
+    if pinned is None or card.taxa_registry_digest is None:
         return
     if pinned.digest != card.taxa_registry_digest:
         raise _refused(
@@ -111,17 +159,12 @@ def _refuse_a_registry_the_card_does_not_pin(
         )
 
 
-def _refuse_a_head(card: ModelCard | HeadCard) -> None:
-    # A head's recipe is its backbone's, which its card does not state.
-    if isinstance(card, HeadCard):
-        raise _refused(
-            errors.HEAD_NOT_SUPPORTED,
-            f"head {_card_id(card)} cannot be run: this engine runs backbone models only",
-        )
-
-
-def _refuse_settings_the_card_does_not_declare(work: InferenceWork, card: ModelCard) -> None:
-    declared = {param.name: param.type for param in card.inference_params}
+def _refuse_settings_the_card_does_not_declare(
+    work: InferenceWork, card: ModelCard | HeadCard
+) -> None:
+    # A head card declares no settings.
+    params = card.inference_params if isinstance(card, ModelCard) else ()
+    declared = {param.name: param.type for param in params}
     for name, value in work.settings.items():
         if name not in declared:
             raise _refused(
@@ -143,7 +186,7 @@ def _refuse_a_setting_of_another_type(
         )
 
 
-def _refuse_scores_the_card_does_not_emit(card: ModelCard) -> None:
+def _refuse_scores_the_card_does_not_emit(card: ModelCard | HeadCard) -> None:
     if card.score_domain is None:
         raise _refused(
             errors.SCORES_NOT_EMITTED,
@@ -153,7 +196,7 @@ def _refuse_scores_the_card_does_not_emit(card: ModelCard) -> None:
 
 
 def _refuse_a_full_request_from_a_thresholded_stream(
-    scores: ScoresRequest, card: ModelCard
+    scores: ScoresRequest, card: ModelCard | HeadCard
 ) -> None:
     # A floor at or below the domain minimum excludes nothing, so such a model emits
     # every label. Above it, the scores under the floor were never produced.
@@ -168,7 +211,9 @@ def _refuse_a_full_request_from_a_thresholded_stream(
         )
 
 
-def _refuse_a_floor_below_the_models_own(scores: ScoresRequest, card: ModelCard) -> None:
+def _refuse_a_floor_below_the_models_own(
+    scores: ScoresRequest, card: ModelCard | HeadCard
+) -> None:
     """The scores between the two floors were never produced, so no floor can be below it."""
     floor = card.min_detection_threshold
     if scores.retention != "full" and scores.min_score < floor:
@@ -202,10 +247,11 @@ def _refuse_a_floor_outside_the_score_domain(work: InferenceWork) -> None:
 
 
 def _refuse_a_storage_width_the_card_does_not_declare(
-    work: InferenceWork, card: ModelCard
+    work: InferenceWork, card: ModelCard | HeadCard
 ) -> None:
-    # The card's dtype is inside the recipe fingerprint, so honoring the request
-    # instead would let two works sharing one fingerprint produce different bytes.
+    # A head work asking for embeddings was refused above, so a request here is a
+    # backbone's. The card's dtype is inside the recipe fingerprint, so honoring the
+    # request instead would let two works sharing one fingerprint produce different bytes.
     embeddings = embeddings_request(work)
     if embeddings is None or embeddings.storage_dtype in (None, card.dtype):
         return

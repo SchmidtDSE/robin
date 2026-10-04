@@ -31,14 +31,14 @@ def test_every_declared_constant_is_a_stage_or_one_of_its_codes():
         if name.isupper() and isinstance(value, str)
     }
 
-    assert len(set(errors.ACCEPT_WINDOW_FAILURES)) == 13
-    assert len(set(errors.VALIDATE_REQUEST_FAILURES)) == 13
+    assert len(set(errors.ACCEPT_WINDOW_FAILURES)) == 14
+    assert len(set(errors.VALIDATE_REQUEST_FAILURES)) == 14
     assert len(set(errors.ACQUIRE_MODEL_FAILURES)) == 2
     assert len(set(errors.LOAD_REGISTRY_FAILURES)) == 2
     assert len(set(errors.CONSTRUCT_MODEL_FAILURES)) == 5
     assert len(set(errors.ACQUIRE_INPUT_FAILURES)) == 1
     assert len(set(errors.INFER_FAILURES)) == 2
-    assert len(set(errors.READ_INPUT_ARTIFACT_FAILURES)) == 6
+    assert len(set(errors.READ_INPUT_ARTIFACT_FAILURES)) == 9
     assert len(set(errors.WRITE_ARTIFACT_FAILURES)) == 2
     assert len(set(errors.AGGREGATE_FAILURES)) == 2
     assert declared == {stage for stage, _ in FAMILIES} | {
@@ -51,13 +51,11 @@ def test_retention_and_setting_codes_belong_to_their_stages():
     assert errors.SCORE_FLOOR_BELOW_MODEL_FLOOR == "score_floor_below_model_floor"
     assert errors.SETTING_UNDECLARED == "setting_undeclared"
     assert errors.SETTING_TYPE_MISMATCH == "setting_type_mismatch"
-    assert errors.HEAD_NOT_SUPPORTED == "head_not_supported"
     assert errors.SCORE_BELOW_FLOOR in errors.ACCEPT_WINDOW_FAILURES
     assert {
         errors.SCORE_FLOOR_BELOW_MODEL_FLOOR,
         errors.SETTING_UNDECLARED,
         errors.SETTING_TYPE_MISMATCH,
-        errors.HEAD_NOT_SUPPORTED,
     } <= set(errors.VALIDATE_REQUEST_FAILURES)
 
 

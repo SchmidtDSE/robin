@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from robin_contracts.cards import ModelCard
+from robin_contracts.cards import HeadCard, ModelCard
 from robin_contracts.output_contracts import ScoresRequest
 from robin_contracts.records import ClassScore, WindowOutput
 from robin_contracts.registry import TaxonRegistry
@@ -47,7 +47,7 @@ class AcceptanceBoundary:
         self,
         *,
         geometry: WindowGeometry,
-        card: ModelCard,
+        card: ModelCard | HeadCard,
         recordings: Sequence[RecordingRef],
         registry: TaxonRegistry | None = None,
         scores: ScoresRequest | None = None,
@@ -66,6 +66,8 @@ class AcceptanceBoundary:
         self._open_recording: int | None = None
         self._processed: set[int] = set()
         self._last_start: float | None = None
+        self._expected: tuple[np.ndarray, np.ndarray] | None = None
+        self._accepted = 0
 
     def begin_recording(self, position: int) -> None:
         """Open the recording at this position in the work, and close the one before it."""
@@ -79,12 +81,41 @@ class AcceptanceBoundary:
         self._processed.add(position)
         self._open_recording = position
         self._last_start = None
+        self._expected = None
+        self._accepted = 0
+
+    def expect_windows(self, starts: np.ndarray, ends: np.ndarray) -> None:
+        """Require the open recording's windows to be exactly these, one per row, in order."""
+        if self._open_recording is None:
+            raise RuntimeError("no recording is open, so no windows can be expected")
+        self._expected = (np.array(starts, dtype=np.float64), np.array(ends, dtype=np.float64))
+
+    def end_recording(self) -> None:
+        """Refuse a recording that returned fewer windows than it was expected to."""
+        if self._open_recording is None:
+            raise RuntimeError("no recording is open, so none can end")
+        if self._expected is None:
+            return
+        starts, _ = self._expected
+        if self._accepted < len(starts):
+            missing = float(starts[self._accepted])
+            raise errors.EngineError(
+                errors.HEAD_WINDOWS_DISAGREE_WITH_INPUT,
+                errors.ACCEPT_WINDOW,
+                f"recording {errors.named(self._open())} returned {self._accepted} windows "
+                f"for an input of {len(starts)} rows; none was returned for the row "
+                f"starting at {missing}",
+                recording=self._open(),
+                window_start_s=missing,
+            )
 
     def accept(self, window: WindowOutput) -> AcceptedWindow:
         """Validate one window and return the engine's own copy of it."""
         if self._open_recording is None:
             raise RuntimeError("no recording is open, so no window can be accepted")
 
+        # First, so a moved window is reported as moved and not as off the grid.
+        self._check_expected_window(window)
         self._check_bounds(window)
         self._check_order(window)
         self._check_geometry(window)
@@ -98,6 +129,7 @@ class AcceptanceBoundary:
         # Only now, so a refused window leaves nothing for the next one to be
         # compared against and no array the adapter still owns.
         self._last_start = window.start
+        self._accepted += 1
         return AcceptedWindow(
             recording=self._open(),
             start=window.start,
@@ -108,6 +140,28 @@ class AcceptanceBoundary:
 
     def _open(self) -> RecordingRef:
         return self._recordings[self._open_recording]
+
+    def _check_expected_window(self, window: WindowOutput) -> None:
+        # Exact: the window's bounds are the row's float64 values copied, so any
+        # difference is a moved window.
+        if self._expected is None:
+            return
+        starts, ends = self._expected
+        row = self._accepted
+        if row >= len(starts):
+            raise self._refuse(
+                errors.HEAD_WINDOWS_DISAGREE_WITH_INPUT,
+                window,
+                f"the input has {len(starts)} rows, so there is no row for the window "
+                f"at {window.start}",
+            )
+        if window.start != starts[row] or window.end != ends[row]:
+            raise self._refuse(
+                errors.HEAD_WINDOWS_DISAGREE_WITH_INPUT,
+                window,
+                f"window {row} spans {window.start} to {window.end}, but row {row} of the "
+                f"input spans {float(starts[row])} to {float(ends[row])}",
+            )
 
     def _check_bounds(self, window: WindowOutput) -> None:
         if not math.isfinite(window.start) or not math.isfinite(window.end):

@@ -634,3 +634,104 @@ def test_a_non_finite_score_is_out_of_domain_before_it_meets_the_floor():
         build_boundary().accept(build_window(scores=(ClassScore(label="rain", score=math.nan),)))
 
     assert exc.value.code == errors.SCORE_OUT_OF_DOMAIN
+
+
+# ---------------------------------------------------------------------------
+# A recording whose windows must be exactly its input's rows.
+# ---------------------------------------------------------------------------
+
+ROW_STARTS = (0.0, 3.0, 6.0)
+
+
+def expecting_rows(boundary: AcceptanceBoundary | None = None) -> AcceptanceBoundary:
+    boundary = boundary or build_boundary()
+    starts = np.array(ROW_STARTS)
+    boundary.expect_windows(starts, starts + 3.0)
+    return boundary
+
+
+def assert_windows_disagree(caught, start: float) -> None:
+    error = caught.value
+    assert (error.code, error.stage) == (
+        errors.HEAD_WINDOWS_DISAGREE_WITH_INPUT,
+        errors.ACCEPT_WINDOW,
+    )
+    assert error.recording == RECORDINGS[0]
+    assert error.window_start_s == start
+
+
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [(3.0, 6.0), (0.0, 3.5), (0.5, 3.5)],
+    ids=["another_rows_window", "another_end", "a_moved_start"],
+)
+def test_a_window_that_is_not_its_rows_is_refused(start, end):
+    boundary = expecting_rows()
+
+    with pytest.raises(errors.EngineError) as caught:
+        boundary.accept(build_window(start=start, end=end))
+
+    assert_windows_disagree(caught, start)
+    assert str(start) in caught.value.detail
+    assert "0.0" in caught.value.detail
+
+
+def test_a_window_past_the_last_row_is_refused():
+    boundary = expecting_rows()
+    for start in ROW_STARTS:
+        boundary.accept(build_window(start=start, end=start + 3.0))
+
+    with pytest.raises(errors.EngineError) as caught:
+        boundary.accept(build_window(start=9.0, end=12.0))
+
+    assert_windows_disagree(caught, 9.0)
+
+
+def test_a_recording_ending_with_a_row_left_over_is_refused_naming_that_row():
+    boundary = expecting_rows()
+    boundary.accept(build_window(start=0.0, end=3.0))
+
+    with pytest.raises(errors.EngineError) as caught:
+        boundary.end_recording()
+
+    assert_windows_disagree(caught, 3.0)
+    assert "3.0" in caught.value.detail
+
+
+def test_a_recording_matching_every_row_is_accepted():
+    boundary = expecting_rows()
+
+    for start in ROW_STARTS:
+        boundary.accept(build_window(start=start, end=start + 3.0))
+    boundary.end_recording()
+
+
+def test_a_recording_expecting_no_windows_is_checked_as_before():
+    boundary = build_boundary()
+
+    with pytest.raises(errors.EngineError) as caught:
+        boundary.accept(build_window(start=0.5, end=3.5))
+    assert caught.value.code == errors.WINDOW_OFF_GEOMETRY
+
+    boundary.end_recording()
+
+
+def test_the_next_recording_expects_nothing_its_predecessor_did():
+    boundary = expecting_rows()
+    for start in ROW_STARTS:
+        boundary.accept(build_window(start=start, end=start + 3.0))
+    boundary.end_recording()
+
+    boundary.begin_recording(1)
+    boundary.accept(build_window(start=12.0, end=15.0))
+    boundary.end_recording()
+
+
+def test_the_boundary_keeps_its_own_copy_of_the_rows():
+    boundary = build_boundary()
+    starts = np.array(ROW_STARTS)
+    ends = starts + 3.0
+    boundary.expect_windows(starts, ends)
+    starts[0], ends[0] = 3.0, 6.0
+
+    boundary.accept(build_window(start=0.0, end=3.0))

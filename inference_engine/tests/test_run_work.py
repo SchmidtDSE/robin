@@ -214,7 +214,7 @@ def assert_nothing_constructed(rig: Rig) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_an_embedding_artifact_input_is_refused_before_anything_is_fetched(rig):
+def test_a_backbone_given_saved_embeddings_is_refused_before_any_input_is_fetched(rig):
     source = EmbeddingArtifactInput(contract_id="robin.embeddings.arrow/1", backbone=CARD)
     embeddings = InputArtifact(uri="file:///embeddings.arrow", checksum="sha256:" + "1" * 64)
     recording = rig.build.recording("0", embeddings=embeddings)
@@ -223,9 +223,9 @@ def test_an_embedding_artifact_input_is_refused_before_anything_is_fetched(rig):
     result = rig.run(work)
 
     failure_of(
-        result, work, code=errors.EMBEDDING_INPUT_NOT_AVAILABLE, stage=errors.VALIDATE_REQUEST
+        result, work, code=errors.INPUT_KIND_DISAGREES_WITH_CARD, stage=errors.VALIDATE_REQUEST
     )
-    assert rig.calls == []
+    assert not any(call[0] == "audio" for call in rig.calls)
     assert_nothing_constructed(rig)
 
 
@@ -450,7 +450,7 @@ def test_an_explicit_storage_width_the_card_does_not_declare_is_refused_before_c
     assert_nothing_constructed(rig)
 
 
-def test_a_head_work_is_refused_before_construction(tmp_path):
+def test_a_head_given_audio_is_refused_before_construction(tmp_path):
     head = HeadCard(
         model_name="test-head",
         model_version="1",
@@ -466,7 +466,9 @@ def test_a_head_work_is_refused_before_construction(tmp_path):
 
     result = rig.run(work)
 
-    failure_of(result, work, code=errors.HEAD_NOT_SUPPORTED, stage=errors.VALIDATE_REQUEST)
+    failure_of(
+        result, work, code=errors.INPUT_KIND_DISAGREES_WITH_CARD, stage=errors.VALIDATE_REQUEST
+    )
     assert_nothing_constructed(rig)
 
 

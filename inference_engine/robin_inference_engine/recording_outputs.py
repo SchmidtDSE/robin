@@ -38,7 +38,7 @@ DETECTIONS_CONTRACT_ID: DetectionsContractId = get_args(DetectionsContractId)[0]
 
 class RecordingOutputs:
     """Opens each recording's window writers and stages its detections, with the headers all its
-    files share. Built once per work, whose card must be a backbone's.
+    files share. Built once per work, for a backbone or a head.
     """
 
     def __init__(

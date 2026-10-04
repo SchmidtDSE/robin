@@ -6,12 +6,27 @@ from pathlib import Path
 
 import pytest
 
-from doubles import CallLog, ScriptedModel, installed_distribution, installed_factory
-from robin_contracts.cards import AudioGeometry, ModelCard, ModelRef, RunnerResampled, model_ref
+from doubles import (
+    HEAD_RUNTIME_GROUP,
+    CallLog,
+    ScriptedModel,
+    installed_distribution,
+    installed_factory,
+)
+from robin_contracts.cards import (
+    AudioGeometry,
+    HeadCard,
+    ModelCard,
+    ModelRef,
+    RunnerResampled,
+    model_ref,
+)
 from robin_contracts.protocols import ModelContext
 from robin_inference_engine import errors
+from robin_inference_engine import construct_model as construct_model_module
 from robin_inference_engine.construct_model import (
     ENTRY_POINT_GROUP,
+    construct_head,
     construct_model,
     installed_models,
 )
@@ -37,9 +52,22 @@ CARD = ModelCard(
 REF = model_ref(CARD)
 OTHER_REF = ModelRef(name="absent-model", version="9", digest=REF.digest)
 
-def build_context(scratch_dir: Path) -> ModelContext:
+HEAD = HeadCard(
+    model_name="test-head",
+    model_version="1",
+    runtime="test-runtime",
+    backbone=REF,
+    embedding_dim=4,
+    min_detection_threshold=0.0,
+    score_domain="probability",
+    taxa_registry_digest=REGISTRY_DIGEST,
+)
+RUNTIME = HEAD.runtime
+
+
+def build_context(scratch_dir: Path, card: ModelCard | HeadCard = CARD) -> ModelContext:
     return ModelContext(
-        card=CARD,
+        card=card,
         registry=None,
         files={"weights": scratch_dir / "weights.bin"},
         settings={"top_k": None, "gain": 1.5},
@@ -58,6 +86,7 @@ def refusal(**kwargs) -> errors.EngineError:
     with pytest.raises(errors.EngineError) as caught:
         construct_model(**kwargs)
     assert caught.value.stage == errors.CONSTRUCT_MODEL
+    assert ENTRY_POINT_GROUP in caught.value.detail
     return caught.value
 
 
@@ -212,3 +241,128 @@ def test_an_installed_test_distribution_is_gone_once_its_context_exits(tmp_path)
 
     assert REF.id not in installed_models()
     assert list(tmp_path.iterdir()) == []
+
+
+# ---------------------------------------------------------------------------
+# Heads, found by the runtime their card names.
+# ---------------------------------------------------------------------------
+
+
+def head_refusal(**kwargs) -> errors.EngineError:
+    with pytest.raises(errors.EngineError) as caught:
+        construct_head(**kwargs)
+    assert caught.value.stage == errors.CONSTRUCT_MODEL
+    assert HEAD_RUNTIME_GROUP in caught.value.detail
+    return caught.value
+
+
+def installed_runtime(tmp_path, factory, **kwargs):
+    return installed_factory(tmp_path, RUNTIME, factory, group=HEAD_RUNTIME_GROUP, **kwargs)
+
+
+def test_head_runtimes_are_registered_under_their_own_group():
+    assert construct_model_module.HEAD_RUNTIME_GROUP == "robin.head_runtimes"
+    assert HEAD_RUNTIME_GROUP == construct_model_module.HEAD_RUNTIME_GROUP
+
+
+def test_a_registered_runtime_constructs_the_head_from_the_context_given(tmp_path):
+    received: list[ModelContext] = []
+    model = build_model([])
+
+    def factory(context: ModelContext) -> ScriptedModel:
+        received.append(context)
+        return model
+
+    context = build_context(tmp_path, HEAD)
+    with installed_runtime(tmp_path, factory):
+        built = construct_head(runtime=RUNTIME, context=context)
+
+    assert built is model
+    assert len(received) == 1
+    assert received[0] is context
+
+
+def test_a_runtime_no_distribution_registers_is_refused_naming_the_group(tmp_path):
+    error = head_refusal(runtime=RUNTIME, context=build_context(tmp_path, HEAD))
+
+    assert error.code == errors.MODEL_NOT_INSTALLED
+    assert RUNTIME in error.detail
+    assert HEAD_RUNTIME_GROUP in error.detail
+
+
+def test_a_runtime_two_distributions_register_is_refused(tmp_path):
+    with installed_runtime(
+        tmp_path, lambda context: build_model([]), distribution="robin-runtime-a"
+    ), installed_runtime(
+        tmp_path, lambda context: build_model([]), distribution="robin-runtime-b"
+    ):
+        error = head_refusal(runtime=RUNTIME, context=build_context(tmp_path, HEAD))
+
+    assert error.code == errors.MODEL_REGISTERED_TWICE
+    assert "robin-runtime-a 0" in error.detail
+    assert "robin-runtime-b 0" in error.detail
+
+
+def test_a_runtime_entry_point_that_cannot_load_is_refused(tmp_path):
+    with installed_distribution(
+        tmp_path,
+        name="robin-test-no-runtime",
+        entry_points={RUNTIME: "robin_test_runtime_that_is_not_there:build"},
+        modules={},
+        group=HEAD_RUNTIME_GROUP,
+    ):
+        error = head_refusal(runtime=RUNTIME, context=build_context(tmp_path, HEAD))
+
+    assert error.code == errors.MODEL_ENTRY_POINT_UNLOADABLE
+    assert "ModuleNotFoundError" in error.detail
+
+
+def test_a_runtime_factory_that_raises_is_refused(tmp_path):
+    def factory(context: ModelContext) -> ScriptedModel:
+        raise ValueError("the graph takes 1280 values")
+
+    with installed_runtime(tmp_path, factory):
+        error = head_refusal(runtime=RUNTIME, context=build_context(tmp_path, HEAD))
+
+    assert error.code == errors.MODEL_CONSTRUCTION_FAILED
+    assert "the graph takes 1280 values" in error.detail
+
+
+def test_a_runtime_factory_returning_a_plain_object_is_refused(tmp_path):
+    with installed_runtime(tmp_path, lambda context: object()):
+        error = head_refusal(runtime=RUNTIME, context=build_context(tmp_path, HEAD))
+
+    assert error.code == errors.MODEL_PROTOCOL_UNSATISFIED
+    assert RUNTIME in error.detail
+
+
+def test_a_runtime_registered_as_a_model_is_not_found_as_a_head_runtime(tmp_path):
+    with installed_factory(tmp_path, RUNTIME, lambda context: build_model([])):
+        error = head_refusal(runtime=RUNTIME, context=build_context(tmp_path, HEAD))
+
+    assert error.code == errors.MODEL_NOT_INSTALLED
+
+
+def test_a_model_registered_as_a_head_runtime_is_not_found_as_a_model(tmp_path):
+    with installed_factory(
+        tmp_path, REF.id, lambda context: build_model([]), group=HEAD_RUNTIME_GROUP
+    ):
+        error = refusal(ref=REF, context=build_context(tmp_path))
+
+    assert error.code == errors.MODEL_NOT_INSTALLED
+    assert ENTRY_POINT_GROUP in error.detail
+
+
+def test_listing_models_names_no_head_runtime_and_imports_nothing(tmp_path):
+    module = "robin_test_runtime_listing_only"
+    with installed_distribution(
+        tmp_path,
+        name="robin-test-runtime-listing",
+        entry_points={RUNTIME: f"{module}:build"},
+        modules={module: "raise RuntimeError('imported by a listing')\n"},
+        group=HEAD_RUNTIME_GROUP,
+    ):
+        listed = installed_models()
+
+        assert RUNTIME not in listed
+        assert module not in sys.modules

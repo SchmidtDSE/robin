@@ -19,8 +19,9 @@ from robin_contracts.results import ArtifactContractId, ArtifactKind, ArtifactRe
 class FileProvider(Protocol):
     """Makes the bytes at a uri available as a local file, and releases it after.
 
-    The engine checks each model file `fetch` returns against its pinned digest. Audio
-    is used as fetched.
+    The engine checks each model file `fetch` returns against its pinned digest, and
+    each embeddings file against the checksum its recording names. Audio is used as
+    fetched.
     """
 
     def fetch(self, uri: str) -> Path: ...
