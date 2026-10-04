@@ -4,13 +4,13 @@ import pytest
 from pydantic import ValidationError
 
 from robin_contracts.cards import AudioGeometry, HeadCard, ModelCard, ModelRef, RunnerResampled
-from robin_contracts.embedding_transforms import L2Norm
 from robin_contracts.output_contracts import DetectionsRequest, ScoresRequest, ThresholdPolicy
 from robin_contracts.work import (
     REGISTRY_ROLE,
     AudioInput,
     EmbeddingArtifactInput,
     InferenceWork,
+    InputArtifact,
     PinnedFile,
     PinnedModel,
     RecordingRef,
@@ -45,10 +45,15 @@ CARD = ModelCard(
 HEAD = HeadCard(
     model_name="nutria",
     model_version="1",
+    runtime="onnx",
     backbone=ModelRef(name="perch", version="8", digest=RECORD_DIGEST),
-    classes=("nutria",),
-    required_embedding_transform=L2Norm(),
+    embedding_dim=1280,
+    min_detection_threshold=0.0,
+    score_domain="probability",
+    taxa_registry_digest=REGISTRY_DIGEST,
 )
+
+EMBEDDINGS_INPUT = EmbeddingArtifactInput(contract_id="robin.embeddings.arrow/1", backbone=CARD)
 
 
 def build_recording(**overrides) -> RecordingRef:
@@ -223,13 +228,70 @@ def test_a_pinned_model_round_trips_as_the_kind_of_card_it_holds(card):
     assert rebuilt == pinned
 
 
-def test_a_head_work_round_trips_as_a_head():
-    work = build_work(model=build_pinned_model(card=HEAD))
+def build_embeddings_file(**overrides) -> InputArtifact:
+    fields = {"uri": "s3://bucket/42/embeddings.arrow", "checksum": FILE_DIGEST}
+    return InputArtifact(**(fields | overrides))
+
+
+def build_head_work(**overrides) -> InferenceWork:
+    fields = {
+        "recordings": (build_recording(embeddings=build_embeddings_file()),),
+        "model": build_pinned_model(card=HEAD),
+        "input": EMBEDDINGS_INPUT,
+    }
+    return build_work(**(fields | overrides))
+
+
+def test_a_head_work_over_embeddings_round_trips_as_a_head():
+    work = build_head_work()
 
     rebuilt = InferenceWork.model_validate(work.model_dump(mode="json"))
 
     assert isinstance(rebuilt.model.card, HeadCard)
+    assert rebuilt.input.backbone == CARD
     assert work_digest(rebuilt) == work_digest(work)
+
+
+def test_a_recording_naming_its_embeddings_file_round_trips():
+    recording = build_recording(embeddings=build_embeddings_file())
+
+    assert RecordingRef.model_validate(recording.model_dump(mode="json")) == recording
+    assert recording.embeddings.checksum == FILE_DIGEST
+
+
+def test_a_work_over_embeddings_with_a_recording_naming_no_file_is_refused():
+    named = build_recording(value="42", embeddings=build_embeddings_file())
+    unnamed = build_recording(namespace="archive", value="43")
+
+    with pytest.raises(ValidationError, match="'archive'.*'43'"):
+        build_head_work(recordings=(named, unnamed))
+
+
+def test_a_work_over_audio_with_a_recording_naming_an_embeddings_file_is_refused():
+    named = build_recording(namespace="archive", value="43", embeddings=build_embeddings_file())
+
+    with pytest.raises(ValidationError, match="'archive'.*'43'"):
+        build_work(recordings=(build_recording(), named))
+
+
+def test_a_head_recording_work_digest_depends_on_its_own_embeddings_file_only():
+    def recordings(r_checksum: str, s_checksum: str) -> tuple[RecordingRef, RecordingRef]:
+        return (
+            build_recording(value="42", embeddings=build_embeddings_file(checksum=r_checksum)),
+            build_recording(value="43", embeddings=build_embeddings_file(checksum=s_checksum)),
+        )
+
+    other = f"sha256:{'1' * 64}"
+    base = build_head_work(recordings=recordings(FILE_DIGEST, FILE_DIGEST))
+    r_changed = build_head_work(recordings=recordings(other, FILE_DIGEST))
+    s_changed = build_head_work(recordings=recordings(FILE_DIGEST, other))
+
+    assert recording_work_digest(base, base.recordings[0]) != recording_work_digest(
+        r_changed, r_changed.recordings[0]
+    )
+    assert recording_work_digest(base, base.recordings[0]) == recording_work_digest(
+        s_changed, s_changed.recordings[0]
+    )
 
 
 def test_the_registry_role_is_named_once():
@@ -326,11 +388,9 @@ def test_digest_fields_reject_the_wrong_family():
     with pytest.raises(ValidationError):
         build_file(digest=f"sha256:{short}")
     with pytest.raises(ValidationError):
-        EmbeddingArtifactInput(
-            contract_id="robin.embeddings.arrow/1",
-            uri="s3://bucket/embeddings.arrow",
-            checksum=f"sha256:{short}",
-        )
+        build_embeddings_file(checksum=f"sha256:{short}")
+    with pytest.raises(ValidationError):
+        build_embeddings_file(checksum=RECORD_DIGEST)
 
 
 @pytest.mark.parametrize(("count", "batch_size"), [(7, 3), (6, 3), (1, 1), (3, 10)])

@@ -16,7 +16,6 @@ from robin_contracts.cards import (
     card_digest,
     model_ref,
 )
-from robin_contracts.embedding_transforms import L2Norm
 from robin_contracts.output_contracts import EmbeddingsRequest
 from robin_contracts.specs import AudioSpec, Recipe
 from robin_contracts.work import (
@@ -604,9 +603,12 @@ def test_a_backbone_run_names_itself_and_a_head_names_its_backbone(tmp_path):
     head_card = HeadCard(
         model_name="amy-head",
         model_version="1",
+        runtime="onnx",
         backbone=BACKBONE_REF,
-        classes=("owl",),
-        required_embedding_transform=L2Norm(),
+        embedding_dim=1280,
+        min_detection_threshold=0.0,
+        score_domain="probability",
+        taxa_registry_digest="sha256:" + "a" * 64,
     )
     head = build_work(model=build_model(head_card))
     staged = write_artifact(

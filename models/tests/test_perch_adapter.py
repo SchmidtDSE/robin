@@ -25,7 +25,7 @@ import robin_models.perch
 from robin_adapters.artifact_writer.local import LocalArtifactWriter
 from robin_adapters.file_provider.local import LocalFileProvider
 from robin_contracts.cards import ModelCard, model_ref, read_card
-from robin_contracts.inputs import AudioClip, Embedding
+from robin_contracts.inputs import AudioClip, Embeddings
 from robin_contracts.layout import artifact_path
 from robin_contracts.output_contracts import EmbeddingsRequest, ScoresRequest
 from robin_contracts.protocols import Model, ModelContext
@@ -1069,8 +1069,13 @@ def test_run_refuses_an_input_that_is_not_audio_before_reading_anything(
     recorder = RecordingSoundfile()
     monkeypatch.setattr(runtime.adapter, "sf", recorder)
     model = runtime.adapter.build(perch_context(tmp_path))
-    with pytest.raises(TypeError, match="Embedding"):
-        model.run(Embedding(start=0.0, end=5.0, values=(0.0,)))
+    embeddings = Embeddings(
+        starts=np.array([0.0]),
+        ends=np.array([5.0]),
+        values=np.zeros((1, 1), dtype=np.float32),
+    )
+    with pytest.raises(TypeError, match="Embeddings"):
+        model.run(embeddings)
     assert recorder.called == []
 
 

@@ -13,19 +13,11 @@ def test_top_level_reexports_have_expected_shape():
     assert sha256_v1({"a": 1}).startswith("sha256:v1:")
 
 
-def test_embedding_transform_reexports_are_importable():
-    from robin_contracts import EmbeddingTransform, Identity, L2Norm
-
-    assert EmbeddingTransform is not None
-    assert Identity is not None
-    assert L2Norm is not None
-
-
 def test_input_reexports_are_importable():
-    from robin_contracts import AudioClip, Embedding, Input
+    from robin_contracts import AudioClip, Embeddings, Input
 
     assert AudioClip is not None
-    assert Embedding is not None
+    assert Embeddings is not None
     assert Input is not None
 
 
@@ -96,6 +88,7 @@ def test_work_reexports_are_importable():
         AudioInput,
         EmbeddingArtifactInput,
         InferenceWork,
+        InputArtifact,
         PinnedFile,
         PinnedModel,
         RecordingRef,
@@ -107,6 +100,7 @@ def test_work_reexports_are_importable():
     assert AudioInput is not None
     assert EmbeddingArtifactInput is not None
     assert InferenceWork is not None
+    assert InputArtifact is not None
     assert PinnedFile is not None
     assert PinnedModel is not None
     assert RecordingRef is not None

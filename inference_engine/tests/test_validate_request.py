@@ -10,7 +10,6 @@ from robin_contracts.cards import (
     ModelRef,
     RunnerResampled,
 )
-from robin_contracts.embedding_transforms import L2Norm
 from robin_contracts.output_contracts import (
     DetectionsRequest,
     EmbeddingsRequest,
@@ -79,9 +78,12 @@ def build_head(**overrides) -> HeadCard:
     fields = {
         "model_name": "amy-head",
         "model_version": "1",
+        "runtime": "onnx",
         "backbone": BACKBONE_REF,
-        "classes": ("owl",),
-        "required_embedding_transform": L2Norm(),
+        "embedding_dim": 1280,
+        "min_detection_threshold": 0.0,
+        "score_domain": "probability",
+        "taxa_registry_digest": REGISTRY_FINGERPRINT,
     }
     return HeadCard(**(fields | overrides))
 
@@ -401,15 +403,6 @@ def test_an_embeddings_only_work_on_a_card_naming_no_registry_may_pin_one():
     assert accepted(build_work(card=card, outputs=(build_embeddings(),)))
 
 
-def test_a_head_class_outside_the_registry_is_refused():
-    error = refused(
-        build_head_work(card=build_head(classes=("owl", "barred-owl"))),
-        registry=build_registry(labels=("owl",)),
-    )
-
-    assert error.code == errors.HEAD_CLASS_NOT_IN_REGISTRY
-
-
 def test_a_head_work_is_refused_because_no_head_runs_yet():
     error = refused(build_head_work())
 
@@ -453,10 +446,6 @@ REFUSING_CALLS = {
         build_work(), registry=build_registry(fingerprint=OTHER_FINGERPRINT)
     ),
     "registry_disagrees_with_card": a_work_pinning_another_registry_than_its_cards,
-    "head_class_not_in_registry": lambda: refused(
-        build_head_work(card=build_head(classes=("owl", "barred-owl"))),
-        registry=build_registry(labels=("owl",)),
-    ),
     "head_not_supported": lambda: refused(build_head_work()),
 }
 

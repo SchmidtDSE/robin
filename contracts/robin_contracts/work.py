@@ -54,13 +54,25 @@ NonEmptyText = Annotated[str, AfterValidator(_non_empty)]
 REGISTRY_ROLE = "taxa_registry"
 
 
+class InputArtifact(BaseModel, frozen=True, extra="forbid"):
+    """One file a work reads as input: where it is, and what its bytes hash to."""
+
+    uri: NonEmptyText
+    checksum: BytesDigest
+
+
 class RecordingRef(BaseModel, frozen=True, extra="forbid"):
-    """One recording: its identity, `namespace` and `value`, and where its audio is."""
+    """One recording: its identity, `namespace` and `value`, and where its audio is.
+
+    In a work over saved embeddings, each recording names its own embeddings file in
+    `embeddings`; in a work over audio, none does.
+    """
 
     namespace: NonEmptyText
     value: NonEmptyText
     audio_uri: NonEmptyText
     duration_seconds: Annotated[float, AfterValidator(_positive_duration)] | None = None
+    embeddings: InputArtifact | None = None
 
 
 class PinnedFile(BaseModel, frozen=True, extra="forbid"):
@@ -88,12 +100,14 @@ class AudioInput(BaseModel, frozen=True, extra="forbid"):
 
 
 class EmbeddingArtifactInput(BaseModel, frozen=True, extra="forbid"):
-    """Inference runs over an embedding artifact some earlier work produced."""
+    """Inference runs over embeddings files the named backbone wrote.
+
+    There is one file per recording, named on each recording.
+    """
 
     kind: Literal["embedding_artifact"] = "embedding_artifact"
     contract_id: EmbeddingsContractId
-    uri: NonEmptyText
-    checksum: BytesDigest
+    backbone: ModelCard
 
 
 class InferenceWork(BaseModel, frozen=True, extra="forbid"):
@@ -130,6 +144,24 @@ class InferenceWork(BaseModel, frozen=True, extra="forbid"):
         identities = [(recording.namespace, recording.value) for recording in self.recordings]
         if len(set(identities)) != len(identities):
             raise ValueError("a repeated (namespace, value) is an error, never a merge")
+        return self
+
+    @model_validator(mode="after")
+    def _recordings_name_an_embeddings_file_exactly_when_the_input_is_embeddings(
+        self,
+    ) -> "InferenceWork":
+        over_embeddings = self.input.kind == "embedding_artifact"
+        for recording in self.recordings:
+            if over_embeddings and recording.embeddings is None:
+                raise ValueError(
+                    f"recording ({recording.namespace!r}, {recording.value!r}) names no "
+                    f"embeddings file, but the work runs over embeddings"
+                )
+            if not over_embeddings and recording.embeddings is not None:
+                raise ValueError(
+                    f"recording ({recording.namespace!r}, {recording.value!r}) names an "
+                    f"embeddings file, but the work runs over audio"
+                )
         return self
 
     @model_validator(mode="after")

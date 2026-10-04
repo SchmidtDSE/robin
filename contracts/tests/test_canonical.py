@@ -8,7 +8,7 @@ from robin_contracts.canonical import (
     is_sha256_bytes,
     sha256_v1,
 )
-from robin_contracts.embedding_transforms import L2Norm
+from robin_contracts.cards import RunnerResampled
 
 
 def test_canonical_digest_is_key_order_independent():
@@ -38,13 +38,13 @@ def test_canonical_encoding_covers_every_value_shape():
         "neg_zero": -0.0,
         "small": 0.01,
         "t": (1, 2),
-        "nested": L2Norm(),
+        "nested": RunnerResampled(algorithm="soxr_hq"),
         "null": None,
         "flag": False,
     })
 
     assert encoded == (
-        b'{"f":5.0,"flag":false,"neg_zero":0.0,"nested":{"kind":"l2"},'
+        b'{"f":5.0,"flag":false,"neg_zero":0.0,"nested":{"algorithm":"soxr_hq","by":"runner"},'
         b'"null":null,"small":0.01,"t":[1,2]}'
     )
 

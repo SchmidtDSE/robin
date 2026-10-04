@@ -9,11 +9,12 @@ from collections import Counter
 from importlib.resources import as_file, files
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 import robin_models.owl
 from robin_contracts.cards import ModelCard, read_card
-from robin_contracts.inputs import AudioClip, Embedding
+from robin_contracts.inputs import AudioClip, Embeddings
 from robin_contracts.protocols import Model, ModelContext
 from robin_contracts.records import ClassScore
 from robin_contracts.specs import recipe, window_bounds
@@ -462,7 +463,12 @@ def test_after_recording_is_safe_before_any_run(runtime, tmp_path):
 
 def test_run_refuses_an_input_that_is_not_audio_before_reading_anything(runtime, tmp_path):
     model = runtime.adapter.build(owl_context(tmp_path))
-    with pytest.raises(TypeError, match="Embedding"):
-        list(model.run(Embedding(start=0.0, end=12.0, values=(0.0,))))
+    embeddings = Embeddings(
+        starts=np.array([0.0]),
+        ends=np.array([12.0]),
+        values=np.zeros((1, 1), dtype=np.float32),
+    )
+    with pytest.raises(TypeError, match="Embeddings"):
+        list(model.run(embeddings))
     assert runtime.inspected == []
     assert runtime.rendered == []

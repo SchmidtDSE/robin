@@ -32,7 +32,6 @@ def refuse_request(work: InferenceWork, *, registry: TaxonRegistry | None) -> No
     _refuse_unlabelled_scores(work)
     _refuse_a_substituted_registry(work, registry)
     _refuse_a_registry_the_card_does_not_pin(work, card)
-    _refuse_head_classes_the_registry_does_not_declare(card, registry)
     _refuse_a_head(card)
     _refuse_settings_the_card_does_not_declare(work, card)
     scores = scores_request(work)
@@ -109,26 +108,6 @@ def _refuse_a_registry_the_card_does_not_pin(
             errors.REGISTRY_DISAGREES_WITH_CARD,
             f"the work pins {REGISTRY_ROLE} file digest {pinned.digest} but card "
             f"{_card_id(card)} declares taxa_registry_digest {card.taxa_registry_digest}",
-        )
-
-
-def _refuse_head_classes_the_registry_does_not_declare(
-    card: ModelCard | HeadCard, registry: TaxonRegistry | None
-) -> None:
-    if not isinstance(card, HeadCard):
-        return
-    if registry is None:
-        raise _refused(
-            errors.HEAD_CLASS_NOT_IN_REGISTRY,
-            f"head {_card_id(card)} declares {len(card.classes)} classes but no "
-            f"registry was supplied to declare them",
-        )
-    missing = [label for label in card.classes if label not in registry.labels]
-    if missing:
-        raise _refused(
-            errors.HEAD_CLASS_NOT_IN_REGISTRY,
-            f"head {_card_id(card)} declares class {missing[0]!r}, which registry "
-            f"{registry.fingerprint} does not",
         )
 
 

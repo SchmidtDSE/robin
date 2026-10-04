@@ -32,7 +32,6 @@ from robin_contracts.cards import (
     RunnerResampled,
     model_ref,
 )
-from robin_contracts.embedding_transforms import L2Norm
 from robin_contracts.layout import artifact_path
 from robin_contracts.output_contracts import (
     DetectionsRequest,
@@ -54,6 +53,7 @@ from robin_contracts.work import (
     REGISTRY_ROLE,
     EmbeddingArtifactInput,
     InferenceWork,
+    InputArtifact,
     recording_work_digest,
     work_digest,
 )
@@ -215,12 +215,10 @@ def assert_nothing_constructed(rig: Rig) -> None:
 
 
 def test_an_embedding_artifact_input_is_refused_before_anything_is_fetched(rig):
-    source = EmbeddingArtifactInput(
-        contract_id="robin.embeddings.arrow/1",
-        uri="file:///embeddings.arrow",
-        checksum="sha256:" + "1" * 64,
-    )
-    work = rig.work(input=source)
+    source = EmbeddingArtifactInput(contract_id="robin.embeddings.arrow/1", backbone=CARD)
+    embeddings = InputArtifact(uri="file:///embeddings.arrow", checksum="sha256:" + "1" * 64)
+    recording = rig.build.recording("0", embeddings=embeddings)
+    work = rig.work(recordings=(recording,), input=source)
 
     result = rig.run(work)
 
@@ -387,26 +385,6 @@ def test_a_registry_the_card_does_not_name_is_refused_before_construction(tmp_pa
     assert_nothing_constructed(rig)
 
 
-def test_a_head_declaring_a_class_the_registry_does_not_is_refused(tmp_path):
-    head = HeadCard(
-        model_name="test-head",
-        model_version="1",
-        backbone=REF,
-        classes=("owl", "hawk"),
-        required_embedding_transform=L2Norm(),
-    )
-    rig = Rig(tmp_path, card=head)
-    work = rig.work()
-
-    result = rig.run(work)
-
-    failure = failure_of(
-        result, work, code=errors.HEAD_CLASS_NOT_IN_REGISTRY, stage=errors.VALIDATE_REQUEST
-    )
-    assert "hawk" in failure.detail
-    assert_nothing_constructed(rig)
-
-
 def test_a_model_nobody_installed_is_refused_at_construction(rig):
     work = rig.work()
 
@@ -476,9 +454,12 @@ def test_a_head_work_is_refused_before_construction(tmp_path):
     head = HeadCard(
         model_name="test-head",
         model_version="1",
+        runtime="onnx",
         backbone=REF,
-        classes=("owl", "rain"),
-        required_embedding_transform=L2Norm(),
+        embedding_dim=1280,
+        min_detection_threshold=0.0,
+        score_domain="probability",
+        taxa_registry_digest=registry_digest(REGISTRY_CSV),
     )
     rig = Rig(tmp_path, card=head)
     work = rig.work()

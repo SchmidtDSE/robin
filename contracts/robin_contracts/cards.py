@@ -18,7 +18,6 @@ from pydantic import (
 )
 
 from robin_contracts.canonical import is_sha256_bytes, is_sha256_v1, sha256_v1
-from robin_contracts.embedding_transforms import EmbeddingTransform
 
 PadPolicy = Literal["centre_crop_end_pad", "drop", "time_scaled"]
 
@@ -31,6 +30,24 @@ def refuse_windows_that_do_not_advance(duration: float, overlap: float) -> None:
         raise ValueError(
             f"window_overlap {overlap} must be less than window_duration {duration}"
         )
+
+
+def _refuse_a_non_finite_number(value: float) -> float:
+    if value != value or value in (float("inf"), float("-inf")):
+        raise ValueError("model card numeric fields must be finite")
+    return value
+
+
+def _refuse_a_malformed_file_digest(value: str | None) -> str | None:
+    if value is not None and not is_sha256_bytes(value):
+        raise ValueError(f"expected 'sha256:' and 64 hex characters, got {value!r}")
+    return value
+
+
+def _refuse_a_width_that_is_not_positive(value: int | None) -> int | None:
+    if value is not None and value <= 0:
+        raise ValueError("embedding_dim must be positive when declared")
+    return value
 
 
 class RunnerResampled(BaseModel, frozen=True):
@@ -138,9 +155,7 @@ class ModelCard(BaseModel):
     @field_validator("min_detection_threshold")
     @classmethod
     def _finite(cls, value: float) -> float:
-        if value != value or value in (float("inf"), float("-inf")):
-            raise ValueError("model card numeric fields must be finite")
-        return value
+        return _refuse_a_non_finite_number(value)
 
     @field_validator("sample_rate")
     @classmethod
@@ -152,16 +167,12 @@ class ModelCard(BaseModel):
     @field_validator("taxa_registry_digest")
     @classmethod
     def _a_file_digest(cls, value: str | None) -> str | None:
-        if value is not None and not is_sha256_bytes(value):
-            raise ValueError(f"expected 'sha256:' and 64 hex characters, got {value!r}")
-        return value
+        return _refuse_a_malformed_file_digest(value)
 
     @field_validator("embedding_dim")
     @classmethod
     def _positive_embedding_dim(cls, value: int | None) -> int | None:
-        if value is not None and value <= 0:
-            raise ValueError("embedding_dim must be positive when declared")
-        return value
+        return _refuse_a_width_that_is_not_positive(value)
 
     @model_validator(mode="after")
     def _windows_advance(self) -> "ModelCard":
@@ -193,29 +204,46 @@ class ModelCard(BaseModel):
 
 
 class HeadCard(BaseModel):
-    """Serializable head facts and the backbone embedding it requires."""
+    """Serializable facts about a head: a model that scores a backbone's embeddings.
+
+    It names the runtime that runs it, the backbone whose embeddings it reads, and
+    `embedding_dim`, the width its graph takes. `min_detection_threshold` and
+    `score_domain` mean what they mean on a model card. `taxa_registry_digest` is the
+    digest of the registry file that labels the head's outputs, in output order.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     model_name: str
     model_version: str
+    runtime: str
     backbone: ModelRef
-    classes: tuple[str, ...]
-    required_embedding_transform: EmbeddingTransform
+    embedding_dim: int
+    min_detection_threshold: float
+    score_domain: Literal["probability"]
+    taxa_registry_digest: str  # sha256 of the registry file that labels the scores
 
-    @field_validator("model_name", "model_version")
+    @field_validator("model_name", "model_version", "runtime")
     @classmethod
     def _required_text(cls, value: str) -> str:
         if not value:
             raise ValueError("head card text fields must be non-empty")
         return value
 
-    @field_validator("classes")
+    @field_validator("min_detection_threshold")
     @classmethod
-    def _classes_non_empty(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        if not value or any(not label for label in value):
-            raise ValueError("head card classes must be non-empty strings")
-        return value
+    def _finite(cls, value: float) -> float:
+        return _refuse_a_non_finite_number(value)
+
+    @field_validator("taxa_registry_digest")
+    @classmethod
+    def _a_file_digest(cls, value: str) -> str:
+        return _refuse_a_malformed_file_digest(value)
+
+    @field_validator("embedding_dim")
+    @classmethod
+    def _positive_embedding_dim(cls, value: int) -> int:
+        return _refuse_a_width_that_is_not_positive(value)
 
 
 def card_digest(card: ModelCard | HeadCard) -> str:

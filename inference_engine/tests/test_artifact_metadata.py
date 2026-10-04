@@ -14,7 +14,6 @@ from robin_contracts.cards import (
     card_digest,
     model_ref,
 )
-from robin_contracts.embedding_transforms import L2Norm
 from robin_contracts.output_contracts import ScoresRequest, ThresholdPolicy, TopKPolicy
 from robin_contracts.specs import AudioSpec, Recipe
 from robin_contracts.work import (
@@ -395,9 +394,12 @@ def test_a_backbones_own_run_names_itself_as_the_backbone():
 HEAD = HeadCard(
     model_name="amy-head",
     model_version="1",
+    runtime="onnx",
     backbone=ModelRef(name="perch", version="8", digest="sha256:v1:" + "d" * 64),
-    classes=("owl",),
-    required_embedding_transform=L2Norm(),
+    embedding_dim=1280,
+    min_detection_threshold=0.0,
+    score_domain="probability",
+    taxa_registry_digest="sha256:" + "a" * 64,
 )
 
 

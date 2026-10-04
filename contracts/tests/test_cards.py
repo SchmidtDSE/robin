@@ -18,7 +18,6 @@ from robin_contracts.cards import (
     read_card,
     write_card,
 )
-from robin_contracts.embedding_transforms import L2Norm
 
 CARD_DIGEST = "sha256:v1:" + "a" * 64
 REGISTRY_DIGEST = "sha256:" + "a" * 64
@@ -43,14 +42,20 @@ MODEL_CARD_FIELDS = {
 }
 
 
-def _head_card() -> HeadCard:
-    return HeadCard(
-        model_name="nutria",
-        model_version="v1",
-        backbone=ModelRef(name="perch", version="v8", digest=CARD_DIGEST),
-        classes=("nutria",),
-        required_embedding_transform=L2Norm(),
-    )
+HEAD_CARD_FIELDS = {
+    "model_name": "american-bullfrog-perch",
+    "model_version": "v3w5",
+    "runtime": "onnx",
+    "backbone": {"name": "perch", "version": "v8", "digest": CARD_DIGEST},
+    "embedding_dim": 1280,
+    "min_detection_threshold": 0.0,
+    "score_domain": "probability",
+    "taxa_registry_digest": REGISTRY_DIGEST,
+}
+
+
+def _head_card(**overrides) -> HeadCard:
+    return HeadCard.model_validate(HEAD_CARD_FIELDS | overrides)
 
 
 def _model_card(**overrides) -> ModelCard:
@@ -82,22 +87,77 @@ def test_model_ref_accepts_what_card_digest_produces():
     ).digest.startswith("sha256:v1:")
 
 
-def test_head_card_requires_an_embedding_transform():
-    with pytest.raises(ValidationError):
-        HeadCard.model_validate({
-            "model_name": "nutria",
-            "model_version": "v1",
-            "backbone": {"name": "perch", "version": "v8", "digest": CARD_DIGEST},
-            "classes": ["nutria"],
-        })
+@pytest.mark.parametrize(
+    "field",
+    [
+        "runtime",
+        "embedding_dim",
+        "min_detection_threshold",
+        "score_domain",
+        "taxa_registry_digest",
+    ],
+)
+def test_a_head_card_missing_a_required_fact_is_refused(field):
+    fields = {key: value for key, value in HEAD_CARD_FIELDS.items() if key != field}
+
+    with pytest.raises(ValidationError) as exc:
+        HeadCard.model_validate(fields)
+
+    assert exc.value.errors()[0]["loc"] == (field,)
 
 
-def test_head_card_serializes_its_required_transform():
-    card = _head_card()
+@pytest.mark.parametrize("width", [0, -1])
+def test_a_head_card_whose_embedding_width_is_not_positive_is_refused(width):
+    with pytest.raises(ValidationError, match="embedding_dim must be positive"):
+        _head_card(embedding_dim=width)
 
-    assert card.model_dump(mode="json")["required_embedding_transform"] == {
-        "kind": "l2",
-    }
+
+def test_a_head_card_that_emits_no_scores_is_refused():
+    with pytest.raises(ValidationError) as exc:
+        _head_card(score_domain=None)
+
+    assert exc.value.errors()[0]["loc"] == ("score_domain",)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_a_head_card_whose_score_floor_is_not_finite_is_refused(value):
+    with pytest.raises(ValidationError, match="must be finite"):
+        _head_card(min_detection_threshold=value)
+
+
+@pytest.mark.parametrize(
+    "digest",
+    ["sha256:" + "a" * 63, "sha256:" + "A" * 64, CARD_DIGEST],
+    ids=["63 hex", "uppercase hex", "card digest"],
+)
+def test_a_head_card_with_a_malformed_registry_digest_is_refused(digest):
+    with pytest.raises(ValidationError) as exc:
+        _head_card(taxa_registry_digest=digest)
+
+    assert exc.value.errors()[0]["loc"] == ("taxa_registry_digest",)
+
+
+def test_a_head_card_with_an_empty_runtime_is_refused():
+    with pytest.raises(ValidationError) as exc:
+        _head_card(runtime="")
+
+    assert exc.value.errors()[0]["loc"] == ("runtime",)
+
+
+def test_a_head_card_file_listing_its_classes_is_refused(tmp_path):
+    path = _write_text(tmp_path, _yaml(HEAD_CARD_FIELDS | {"classes": ["american-bullfrog"]}))
+
+    with pytest.raises(ValueError, match="classes"):
+        read_card(path)
+
+
+def test_a_head_card_file_follows_the_field_order(tmp_path):
+    path = tmp_path / "head.yaml"
+
+    write_card(_head_card(), path)
+    keys = [line.split(":")[0] for line in path.read_text().splitlines() if line[:1].isalpha()]
+
+    assert keys == list(HEAD_CARD_FIELDS)
 
 
 def test_model_card_rejects_unknown_fields():

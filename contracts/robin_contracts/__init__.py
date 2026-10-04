@@ -16,12 +16,7 @@ from robin_contracts.cards import (
     read_card,
     write_card,
 )
-from robin_contracts.embedding_transforms import (
-    EmbeddingTransform,
-    Identity,
-    L2Norm,
-)
-from robin_contracts.inputs import AudioClip, Embedding, Input
+from robin_contracts.inputs import AudioClip, Embeddings, Input
 from robin_contracts.layout import artifact_path
 from robin_contracts.output_contracts import (
     DetectionPolicy,
@@ -64,6 +59,7 @@ from robin_contracts.work import (
     AudioInput,
     EmbeddingArtifactInput,
     InferenceWork,
+    InputArtifact,
     PinnedFile,
     PinnedModel,
     RecordingRef,
@@ -82,20 +78,18 @@ __all__ = [
     "ClassScore",
     "DetectionPolicy",
     "DetectionsRequest",
-    "Embedding",
     "EmbeddingArtifactInput",
-    "EmbeddingTransform",
+    "Embeddings",
     "EmbeddingsRequest",
     "FailureReport",
     "HeadCard",
-    "Identity",
     "InferenceFailure",
     "InferenceResult",
     "InferenceSuccess",
     "InferenceWork",
     "Input",
+    "InputArtifact",
     "JsonScalar",
-    "L2Norm",
     "Log",
     "Model",
     "ModelCard",
