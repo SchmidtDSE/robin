@@ -38,7 +38,7 @@ jobs:
       matrix:
         os: [ubuntu-latest]
         python: ["3.11", "3.12", "3.13"]
-        shape: [contracts, inference-engine, run-manager, worker, adapters, meta-all, models, meta-owl, meta-birdnet, meta-perch]
+        shape: [contracts, inference-engine, run-manager, worker, adapters, meta-all, models, meta-owl, meta-birdnet, meta-perch, meta-onnx-head]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -69,6 +69,12 @@ jobs:
           python -m pip download --only-binary=:all: --dest .wheelcheck/dist --find-links .wheelcheck/dist
           ".wheelcheck/dist/robin_bioacoustics-0.0.0-py3-none-any.whl[perch]"
           ".wheelcheck/dist/robin_models-0.0.0-py3-none-any.whl[perch]"
+      # The onnx-head extra's runtime, which the download above leaves out.
+      - if: matrix.shape == 'meta-onnx-head'
+        run: >-
+          python -m pip download --only-binary=:all: --dest .wheelcheck/dist --find-links .wheelcheck/dist
+          ".wheelcheck/dist/robin_bioacoustics-0.0.0-py3-none-any.whl[onnx-head]"
+          ".wheelcheck/dist/robin_models-0.0.0-py3-none-any.whl[onnx-head]"
       - run: python tests/install/check_install_shape.py ${{ matrix.shape }} --wheels-dir .wheelcheck/dist --venv .venv-shape
 
   install-shape-main:
@@ -91,6 +97,7 @@ jobs:
           - { os: ubuntu-latest,    python: "3.11", shape: meta-owl }
           - { os: ubuntu-latest,    python: "3.11", shape: meta-birdnet }
           - { os: ubuntu-latest,    python: "3.11", shape: meta-perch }
+          - { os: ubuntu-latest,    python: "3.11", shape: meta-onnx-head }
           - { os: ubuntu-latest,    python: "3.12", shape: contracts }
           - { os: ubuntu-latest,    python: "3.12", shape: inference-engine }
           - { os: ubuntu-latest,    python: "3.12", shape: run-manager }
@@ -101,6 +108,7 @@ jobs:
           - { os: ubuntu-latest,    python: "3.12", shape: meta-owl }
           - { os: ubuntu-latest,    python: "3.12", shape: meta-birdnet }
           - { os: ubuntu-latest,    python: "3.12", shape: meta-perch }
+          - { os: ubuntu-latest,    python: "3.12", shape: meta-onnx-head }
           - { os: ubuntu-latest,    python: "3.13", shape: contracts }
           - { os: ubuntu-latest,    python: "3.13", shape: inference-engine }
           - { os: ubuntu-latest,    python: "3.13", shape: run-manager }
@@ -111,7 +119,8 @@ jobs:
           - { os: ubuntu-latest,    python: "3.13", shape: meta-owl }
           - { os: ubuntu-latest,    python: "3.13", shape: meta-birdnet }
           - { os: ubuntu-latest,    python: "3.13", shape: meta-perch }
-          # macOS arm64 — contracts / inference-engine / run-manager / meta-all / models / meta-owl / meta-birdnet / meta-perch.
+          - { os: ubuntu-latest,    python: "3.13", shape: meta-onnx-head }
+          # macOS arm64 — contracts / inference-engine / run-manager / meta-all / models / meta-owl / meta-birdnet / meta-perch / meta-onnx-head.
           - { os: macos-14,         python: "3.11", shape: contracts }
           - { os: macos-14,         python: "3.11", shape: inference-engine }
           - { os: macos-14,         python: "3.11", shape: run-manager }
@@ -120,6 +129,7 @@ jobs:
           - { os: macos-14,         python: "3.11", shape: meta-owl }
           - { os: macos-14,         python: "3.11", shape: meta-birdnet }
           - { os: macos-14,         python: "3.11", shape: meta-perch }
+          - { os: macos-14,         python: "3.11", shape: meta-onnx-head }
           - { os: macos-14,         python: "3.12", shape: contracts }
           - { os: macos-14,         python: "3.12", shape: inference-engine }
           - { os: macos-14,         python: "3.12", shape: run-manager }
@@ -128,6 +138,7 @@ jobs:
           - { os: macos-14,         python: "3.12", shape: meta-owl }
           - { os: macos-14,         python: "3.12", shape: meta-birdnet }
           - { os: macos-14,         python: "3.12", shape: meta-perch }
+          - { os: macos-14,         python: "3.12", shape: meta-onnx-head }
           - { os: macos-14,         python: "3.13", shape: contracts }
           - { os: macos-14,         python: "3.13", shape: inference-engine }
           - { os: macos-14,         python: "3.13", shape: run-manager }
@@ -136,6 +147,7 @@ jobs:
           - { os: macos-14,         python: "3.13", shape: meta-owl }
           - { os: macos-14,         python: "3.13", shape: meta-birdnet }
           - { os: macos-14,         python: "3.13", shape: meta-perch }
+          - { os: macos-14,         python: "3.13", shape: meta-onnx-head }
           # Linux arm64 — contracts / inference-engine only.
           - { os: ubuntu-24.04-arm, python: "3.11", shape: contracts }
           - { os: ubuntu-24.04-arm, python: "3.11", shape: inference-engine }
@@ -173,4 +185,10 @@ jobs:
           python -m pip download --only-binary=:all: --dest .wheelcheck/dist --find-links .wheelcheck/dist
           ".wheelcheck/dist/robin_bioacoustics-0.0.0-py3-none-any.whl[perch]"
           ".wheelcheck/dist/robin_models-0.0.0-py3-none-any.whl[perch]"
+      # The onnx-head extra's runtime, which the download above leaves out.
+      - if: matrix.shape == 'meta-onnx-head'
+        run: >-
+          python -m pip download --only-binary=:all: --dest .wheelcheck/dist --find-links .wheelcheck/dist
+          ".wheelcheck/dist/robin_bioacoustics-0.0.0-py3-none-any.whl[onnx-head]"
+          ".wheelcheck/dist/robin_models-0.0.0-py3-none-any.whl[onnx-head]"
       - run: python tests/install/check_install_shape.py ${{ matrix.shape }} --wheels-dir .wheelcheck/dist --venv .venv-shape

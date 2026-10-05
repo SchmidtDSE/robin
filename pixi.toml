@@ -62,6 +62,8 @@ echo "=== seed: robin-models[owl] runtime ===" &&
 python -m pip download --dest .wheelcheck/dist --find-links .wheelcheck/dist ".wheelcheck/dist/robin_models-0.0.0-py3-none-any.whl[owl]" &&
 echo "=== seed: robin-models[birdnet] runtime ===" &&
 python -m pip download --dest .wheelcheck/dist --find-links .wheelcheck/dist ".wheelcheck/dist/robin_models-0.0.0-py3-none-any.whl[birdnet]" &&
+echo "=== seed: robin-models[onnx-head] runtime ===" &&
+python -m pip download --dest .wheelcheck/dist --find-links .wheelcheck/dist ".wheelcheck/dist/robin_models-0.0.0-py3-none-any.whl[onnx-head]" &&
 echo === install: robin-contracts === &&
 python -m venv .wheelcheck/venv-robin_contracts &&
 .wheelcheck/venv-robin_contracts/bin/pip install --no-index --find-links .wheelcheck/dist robin-contracts &&

@@ -64,6 +64,7 @@ _HEAVY_RUNTIMES = (
     "boto3",
     "duckdb",
     "pyarrow",
+    "onnxruntime",
 )
 
 
@@ -147,6 +148,7 @@ _register(
         "robin_models.owl",
         "robin_models.birdnet",
         "robin_models.perch",
+        "robin_models.onnx_head",
         "robin_contracts",
     ),
 )
@@ -193,6 +195,18 @@ _register(
         "robin_models.perch.adapter",
     ),
     runtimes=("tensorflow", "soundfile", "scipy", "pyarrow", "duckdb"),
+)
+_register(
+    "meta-onnx-head",
+    install=("robin-bioacoustics[onnx-head]",),
+    required=(
+        "robin_inference_engine",
+        "robin_contracts",
+        "robin_models",
+        "robin_models.onnx_head",
+        "robin_models.onnx_head.adapter",
+    ),
+    runtimes=("onnxruntime", "pyarrow", "duckdb"),
 )
 
 
