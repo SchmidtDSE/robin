@@ -10,14 +10,14 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
-from robin_contracts.canonical import sha256_v1
+from robin_contracts.canonical import checksum_file, sha256_v1
 from robin_contracts.output_contracts import DetectionPolicy, DetectionsContractId, TopKPolicy
 from robin_contracts.registry import RegistryEntry, TaxonRegistry
 from robin_contracts.specs import Recipe
 from robin_contracts.work import InferenceWork, RecordingRef, recording_work_digest
 from robin_inference_engine import errors
 from robin_inference_engine.artifacts.scores import SCORES_SCHEMA, read_scores
-from robin_inference_engine.artifacts.staging import StagedArtifact, checksum_file
+from robin_inference_engine.artifacts.staging import StagedArtifact
 
 CONTRACT_ID: DetectionsContractId = get_args(DetectionsContractId)[0]
 

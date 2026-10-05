@@ -11,8 +11,6 @@ from robin_contracts.results import ArtifactContractId, ArtifactKind
 from robin_contracts.work import RecordingRef
 from robin_inference_engine import errors
 
-CHECKSUM_CHUNK_BYTES = 1 << 20
-
 
 @dataclass(frozen=True, slots=True)
 class StagedArtifact:
@@ -103,12 +101,3 @@ def require_contract(declared: object, *, expected: ArtifactContractId) -> None:
 def checksum_bytes(payload: bytes) -> str:
     """The `sha256:` checksum of bytes already in memory."""
     return "sha256:" + hashlib.sha256(payload).hexdigest()
-
-
-def checksum_file(path: Path) -> str:
-    """The `sha256:` checksum of a file, read a chunk at a time so any size is safe."""
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(CHECKSUM_CHUNK_BYTES):
-            digest.update(chunk)
-    return "sha256:" + digest.hexdigest()

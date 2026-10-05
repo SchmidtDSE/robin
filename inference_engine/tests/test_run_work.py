@@ -23,7 +23,7 @@ from doubles import (
     installed_factory,
     registry_digest,
 )
-from robin_contracts.canonical import canonical_json_bytes
+from robin_contracts.canonical import canonical_json_bytes, checksum_file
 from robin_contracts.cards import (
     AudioGeometry,
     HeadCard,
@@ -61,7 +61,6 @@ from robin_inference_engine import detections, engine, errors
 from robin_inference_engine.artifacts.embeddings import read_embeddings
 from robin_inference_engine.artifacts.metadata import decode_metadata
 from robin_inference_engine.artifacts.scores import read_scores
-from robin_inference_engine.artifacts.staging import checksum_file
 from robin_inference_engine.coverage import check_completion_evidence
 from robin_inference_engine.engine import run_work
 from robin_inference_engine.load_registry import load_registry

@@ -1,10 +1,11 @@
-"""Canonical JSON and versioned digests for public SoundHub contracts."""
+"""Canonical JSON, its versioned digest, and the checksum of a file's bytes."""
 
 import hashlib
 import json
 import math
 import re
 from dataclasses import asdict, is_dataclass
+from pathlib import Path
 from typing import Any, Mapping
 
 from pydantic import BaseModel
@@ -14,6 +15,8 @@ _SHA256_V1 = re.compile(r"sha256:v1:[0-9a-f]{64}")
 # `sha256:` hashes file bytes, `sha256:v1:` hashes canonical JSON, so a digest of one
 # kind never matches one of the other. Strip the label where a path needs bare hex.
 _SHA256_BYTES = re.compile(r"sha256:[0-9a-f]{64}")
+
+CHECKSUM_CHUNK_BYTES = 1 << 20
 
 
 class CanonicalizationError(ValueError):
@@ -60,3 +63,12 @@ def is_sha256_v1(value: str) -> bool:
 def is_sha256_bytes(value: str) -> bool:
     """Whether `value` is a `sha256:` digest of a file's bytes."""
     return _SHA256_BYTES.fullmatch(value) is not None
+
+
+def checksum_file(path: Path) -> str:
+    """The `sha256:` checksum of a file, read a chunk at a time so any size is safe."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        while chunk := stream.read(CHECKSUM_CHUNK_BYTES):
+            digest.update(chunk)
+    return "sha256:" + digest.hexdigest()

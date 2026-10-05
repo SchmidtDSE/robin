@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 from typing import BinaryIO
 
+from robin_contracts.canonical import checksum_file
 from robin_contracts.layout import artifact_path
 from robin_contracts.results import ArtifactContractId, ArtifactKind, ArtifactRecord
 
@@ -64,7 +65,7 @@ def _link_or_replay(temporary: Path, final: Path, checksum: str) -> None:
     try:
         os.link(temporary, final)
     except FileExistsError:
-        existing = _file_checksum(final)
+        existing = checksum_file(final)
         if existing != checksum:
             raise FileExistsError(
                 f"{final} already holds {existing}; refusing to publish {checksum} there"
@@ -77,8 +78,3 @@ def _copy_hashing(source: BinaryIO, target: BinaryIO) -> str:
         digest.update(chunk)
         target.write(chunk)
     return "sha256:" + digest.hexdigest()
-
-
-def _file_checksum(path: Path) -> str:
-    with open(path, "rb") as stream:
-        return "sha256:" + hashlib.file_digest(stream, "sha256").hexdigest()

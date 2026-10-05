@@ -16,6 +16,7 @@ import pytest
 import robin_models.onnx_head
 from robin_adapters.artifact_writer.local import LocalArtifactWriter
 from robin_adapters.file_provider.local import LocalFileProvider
+from robin_contracts.canonical import checksum_file
 from robin_contracts.cards import AudioGeometry, HeadCard, ModelCard, RunnerResampled, model_ref
 from robin_contracts.inputs import AudioClip, Embeddings
 from robin_contracts.layout import artifact_path
@@ -41,7 +42,6 @@ from robin_inference_engine.accept_window import AcceptedWindow
 from robin_inference_engine.artifacts.embeddings import CONTRACT_ID, EmbeddingsWriter
 from robin_inference_engine.artifacts.metadata import embedding_metadata, required_metadata
 from robin_inference_engine.artifacts.scores import read_scores
-from robin_inference_engine.artifacts.staging import checksum_file
 from robin_inference_engine.engine import run_work
 from robin_inference_engine.load_registry import load_registry
 

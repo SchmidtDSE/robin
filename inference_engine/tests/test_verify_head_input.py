@@ -8,6 +8,7 @@ import numpy as np
 import pyarrow as pa
 import pytest
 
+from robin_contracts.canonical import checksum_file
 from robin_contracts.cards import (
     AudioGeometry,
     HeadCard,
@@ -30,7 +31,6 @@ from robin_inference_engine.accept_window import AcceptedWindow
 from robin_inference_engine.artifacts import embeddings as embeddings_module
 from robin_inference_engine.artifacts.embeddings import CONTRACT_ID, EmbeddingsWriter
 from robin_inference_engine.artifacts.metadata import embedding_metadata, required_metadata
-from robin_inference_engine.artifacts.staging import checksum_file
 from robin_inference_engine.verify_head_input import read_head_input
 
 DIM = 4

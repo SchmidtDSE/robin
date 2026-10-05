@@ -13,6 +13,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import get_args
 
+from robin_contracts.canonical import checksum_file
 from robin_contracts.cards import HeadCard, model_ref
 from robin_contracts.inputs import AudioClip, Input
 from robin_contracts.output_contracts import ResultContractId
@@ -38,7 +39,7 @@ from robin_contracts.work import (
 )
 from robin_inference_engine import errors
 from robin_inference_engine.accept_window import AcceptanceBoundary
-from robin_inference_engine.artifacts.staging import StagedArtifact, checksum_file
+from robin_inference_engine.artifacts.staging import StagedArtifact
 from robin_inference_engine.construct_model import construct_head, construct_model
 from robin_inference_engine.coverage import CoverageBuilder, check_completion_evidence
 from robin_inference_engine.load_registry import load_registry

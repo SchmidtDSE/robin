@@ -15,6 +15,7 @@ from typing import get_args
 
 import pyarrow as pa
 
+from robin_contracts.canonical import checksum_file
 from robin_contracts.output_contracts import ScoresContractId
 from robin_contracts.protocols import ScoreRetention
 from robin_contracts.work import RecordingRef
@@ -33,7 +34,6 @@ from robin_inference_engine.artifacts.metadata import (
 )
 from robin_inference_engine.artifacts.staging import (
     StagedArtifact,
-    checksum_file,
     invalid_schema,
     open_stream,
     read_batches,

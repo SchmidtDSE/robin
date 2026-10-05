@@ -10,7 +10,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from robin_contracts.canonical import sha256_v1
+from robin_contracts.canonical import checksum_file, sha256_v1
 from robin_contracts.cards import AudioGeometry, ModelCard, RunnerResampled, model_ref
 from robin_contracts.output_contracts import (
     DetectionsRequest,
@@ -40,7 +40,7 @@ from robin_inference_engine.artifacts.metadata import (
     score_metadata,
 )
 from robin_inference_engine.artifacts.scores import ScoresStream, ScoresWriter
-from robin_inference_engine.artifacts.staging import StagedArtifact, checksum_file, malformed
+from robin_inference_engine.artifacts.staging import StagedArtifact, malformed
 from robin_inference_engine.detections import (
     DETECTIONS_SCHEMA,
     build_detections_sql,

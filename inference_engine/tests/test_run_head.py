@@ -25,6 +25,7 @@ from doubles import (
     installed_factory,
     registry_digest,
 )
+from robin_contracts.canonical import checksum_file
 from robin_contracts.cards import (
     AudioGeometry,
     HeadCard,
@@ -47,7 +48,6 @@ from robin_contracts.specs import recipe
 from robin_contracts.work import InferenceWork, InputArtifact, RecordingRef
 from robin_inference_engine import errors
 from robin_inference_engine.artifacts.metadata import decode_metadata
-from robin_inference_engine.artifacts.staging import checksum_file
 from robin_inference_engine.engine import run_work
 
 DIM = 4

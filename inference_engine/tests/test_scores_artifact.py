@@ -5,6 +5,7 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
+from robin_contracts.canonical import checksum_file
 from robin_contracts.cards import AudioGeometry, ModelCard, RunnerResampled, model_ref
 from robin_contracts.output_contracts import ScoresRequest
 from robin_contracts.records import ClassScore
@@ -33,7 +34,6 @@ from robin_inference_engine.artifacts.scores import (
     ScoresWriter,
     read_scores,
 )
-from robin_inference_engine.artifacts.staging import checksum_file
 
 HEX = "0" * 64
 FILE_DIGEST = f"sha256:{HEX}"

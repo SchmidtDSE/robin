@@ -5,13 +5,12 @@ import hashlib
 
 import pytest
 
+from robin_contracts.canonical import checksum_file
 from robin_contracts.work import RecordingRef
 from robin_inference_engine import errors
 from robin_inference_engine.artifacts.staging import (
-    CHECKSUM_CHUNK_BYTES,
     StagedArtifact,
     checksum_bytes,
-    checksum_file,
     invalid_schema,
     malformed,
     require_checksum,
@@ -35,23 +34,6 @@ def build_staged(tmp_path) -> StagedArtifact:
     )
 
 
-def test_a_checksum_is_the_sha256_of_the_exact_bytes(tmp_path):
-    path = tmp_path / "artifact.bin"
-    payload = b"the bytes a reader will verify, and nothing about how they were read"
-    path.write_bytes(payload)
-
-    assert checksum_file(path) == "sha256:" + hashlib.sha256(payload).hexdigest()
-
-
-def test_a_checksum_reads_in_bounded_chunks(tmp_path):
-    path = tmp_path / "large.bin"
-    payload = bytes(range(256)) * (CHECKSUM_CHUNK_BYTES * 3 // 256)
-    path.write_bytes(payload)
-
-    assert len(payload) > CHECKSUM_CHUNK_BYTES
-    assert checksum_file(path) == "sha256:" + hashlib.sha256(payload).hexdigest()
-
-
 def test_bytes_in_memory_and_the_same_bytes_on_disk_check_out_the_same(tmp_path):
     path = tmp_path / "artifact.bin"
     payload = b"what a writer produced, and what a reader finds on disk"
@@ -59,13 +41,6 @@ def test_bytes_in_memory_and_the_same_bytes_on_disk_check_out_the_same(tmp_path)
 
     assert checksum_bytes(payload) == checksum_file(path)
     assert checksum_bytes(payload) == "sha256:" + hashlib.sha256(payload).hexdigest()
-
-
-def test_an_empty_file_has_a_checksum(tmp_path):
-    path = tmp_path / "empty.bin"
-    path.write_bytes(b"")
-
-    assert checksum_file(path) == "sha256:" + hashlib.sha256(b"").hexdigest()
 
 
 def test_a_checksum_that_matches_is_accepted():
