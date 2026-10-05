@@ -187,24 +187,14 @@ _register(
     ),
 )
 _register(
-    "meta-birdnet",
-    install=("robin-bioacoustics[birdnet]",),
+    "meta-birdnet-perch",
+    install=("robin-bioacoustics[birdnet,perch]",),
     required=(
         "robin_inference_engine",
         "robin_contracts",
         "robin_models",
         "robin_models.birdnet",
         "robin_models.birdnet.adapter",
-    ),
-    runtimes=("tensorflow", "soundfile", "scipy", "pyarrow", "duckdb"),
-)
-_register(
-    "meta-perch",
-    install=("robin-bioacoustics[perch]",),
-    required=(
-        "robin_inference_engine",
-        "robin_contracts",
-        "robin_models",
         "robin_models.perch",
         "robin_models.perch.adapter",
     ),
