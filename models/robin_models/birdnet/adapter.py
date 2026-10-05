@@ -73,9 +73,9 @@ def build(context: ModelContext) -> "BirdnetModel":
     folder = _saved_model_folder(context.files, context.scratch_dir)
     with tf.device(TF_DEVICE):
         loaded = tf.saved_model.load(str(folder))
-    embeddings = _signatures(loaded)
-    _require_input(embeddings, "embeddings", round(card.window_duration * card.sample_rate))
-    _require_output(embeddings, "embeddings", "embeddings", card.embedding_dim)
+    embeddings = _embeddings_signature(loaded)
+    _require_input(embeddings, round(card.window_duration * card.sample_rate))
+    _require_output(embeddings, card.embedding_dim)
     labels = kernel = bias = None
     if context.registry is not None:
         kernel, bias = _classifier_layer(
@@ -141,7 +141,7 @@ def _saved_model_folder(files: Mapping[str, Path], scratch_dir: Path) -> Path:
     return folder
 
 
-def _signatures(loaded) -> object:
+def _embeddings_signature(loaded) -> object:
     """The SavedModel's `embeddings` signature."""
     signatures = loaded.signatures
     if "embeddings" not in signatures:
@@ -152,27 +152,27 @@ def _signatures(loaded) -> object:
     return signatures["embeddings"]
 
 
-def _require_input(signature, name: str, width: int) -> None:
+def _require_input(signature, width: int) -> None:
     inputs = signature.structured_input_signature[1]
     if list(inputs) != ["inputs"]:
         raise ValueError(
-            f"model birdnet/v2p4 needs the {name} signature to take one input named 'inputs', "
+            "model birdnet/v2p4 needs the embeddings signature to take one input named 'inputs', "
             f"and it takes {sorted(inputs)}"
         )
     shape = inputs["inputs"].shape.as_list()
     if shape != [None, width]:
         raise ValueError(
-            f"model birdnet/v2p4 needs the {name} signature's input shape to be "
+            "model birdnet/v2p4 needs the embeddings signature's input shape to be "
             f"[None, {width}], and it is {shape}"
         )
 
 
-def _require_output(signature, name: str, output: str, width: int) -> None:
+def _require_output(signature, width: int) -> None:
     outputs = signature.structured_outputs
-    shape = outputs[output].shape.as_list() if output in outputs else None
+    shape = outputs["embeddings"].shape.as_list() if "embeddings" in outputs else None
     if shape != [None, width]:
         raise ValueError(
-            f"model birdnet/v2p4 needs the {name} signature's output {output!r} to have "
+            "model birdnet/v2p4 needs the embeddings signature's output 'embeddings' to have "
             f"shape [None, {width}], and found {shape}"
         )
 
@@ -247,6 +247,7 @@ class BirdnetModel:
         self._width = round(card.window_duration * card.sample_rate)
         self._batch_size = batch_size
         self._labels = labels
+        # Kept so the signature's variables stay loaded.
         self._loaded = loaded
         self._embeddings = embeddings
         self._kernel = kernel
@@ -261,12 +262,11 @@ class BirdnetModel:
         return self._windows(input.path)
 
     def _windows(self, path: Path) -> Iterator[WindowOutput]:
-        info = sf.info(str(path))
-        if info.frames == 0:
-            raise ValueError(f"model birdnet/v2p4 cannot run {path}: it has no audio frames")
-        bounds = window_bounds(info.frames / info.samplerate, self._geometry)
-        self._log(f"running {len(bounds)} windows of {path.name}")
         with sf.SoundFile(str(path)) as audio:
+            if audio.frames == 0:
+                raise ValueError(f"model birdnet/v2p4 cannot run {path}: it has no audio frames")
+            bounds = window_bounds(audio.frames / audio.samplerate, self._geometry)
+            self._log(f"running {len(bounds)} windows of {path.name}")
             for first in range(0, len(bounds), self._batch_size):
                 batch_bounds = bounds[first : first + self._batch_size]
                 batch = self._batch(audio, batch_bounds)
@@ -307,7 +307,7 @@ class BirdnetModel:
         if logits is None:
             score_rows = [()] * len(bounds)
         else:
-            _refuse_a_non_finite_logit(logits, bounds, self._labels)
+            _refuse_unusable_logits(logits, bounds, self._labels)
             score_rows = [self._scored(row) for row in sigmoid(logits).tolist()]
         embedding_rows = [None] * len(bounds) if embeddings is None else list(embeddings)
         for (start, end), scores, embedding in zip(
@@ -318,10 +318,8 @@ class BirdnetModel:
             yield WindowOutput(start=start, end=end, scores=scores, embedding=embedding)
 
     def _scored(self, scores: list[float]) -> tuple[ClassScore, ...]:
-        # strict refuses a model that gives the registry more or fewer scores.
         return tuple(
-            ClassScore(label=label, score=score)
-            for label, score in zip(self._labels, scores, strict=True)
+            ClassScore(label=label, score=score) for label, score in zip(self._labels, scores)
         )
 
     def after_recording(self) -> None:
@@ -336,9 +334,10 @@ def _read_window(audio: "sf.SoundFile", start: float, end: float) -> "np.ndarray
     """The window's frames, read on their own, as float32 with one column per channel."""
     rate = audio.samplerate
     first = round(start * rate)
+    # Counted from the first frame: rounding both ends can read one frame too many or too few.
     audio.seek(first)
     return audio.read(
-        min(round(end * rate), audio.frames) - first, dtype="float32", always_2d=True
+        min(round((end - start) * rate), audio.frames - first), dtype="float32", always_2d=True
     )
 
 
@@ -362,15 +361,16 @@ def _resampled(window: "np.ndarray", rate: int, target_rate: int, start: float) 
     return resample(window, target)
 
 
-def _refuse_a_non_finite_logit(
+def _refuse_unusable_logits(
     logits: "np.ndarray", bounds: Sequence[tuple[float, float]], labels: Sequence[str]
 ) -> None:
-    # Checked before the sigmoid's clip, which would turn +inf into a confident score.
+    """Refuse logits not shaped (windows, labels), or not finite."""
     if logits.shape != (len(bounds), len(labels)):
         raise ValueError(
             f"model birdnet/v2p4 gave logits of shape {logits.shape} for {len(bounds)} "
             f"windows of {len(labels)} labels"
         )
+    # Checked before the sigmoid's clip, which would turn +inf into a confident score.
     found = np.argwhere(~np.isfinite(logits))
     if len(found):
         window, label = found[0]

@@ -219,6 +219,7 @@ class PerchModel:
         self._width = round(card.window_duration * card.sample_rate)
         self._batch_size = batch_size
         self._labels = labels
+        # Kept so the signature's variables stay loaded.
         self._loaded = loaded
         self._serving = serving
         self._emit_embeddings = emit_embeddings
@@ -231,12 +232,11 @@ class PerchModel:
         return self._windows(input.path)
 
     def _windows(self, path: Path) -> Iterator[WindowOutput]:
-        info = sf.info(str(path))
-        if info.frames == 0:
-            raise ValueError(f"model perch/v8 cannot run {path}: it has no audio frames")
-        bounds = window_bounds(info.frames / info.samplerate, self._geometry)
-        self._log(f"running {len(bounds)} windows of {path.name}")
         with sf.SoundFile(str(path)) as audio:
+            if audio.frames == 0:
+                raise ValueError(f"model perch/v8 cannot run {path}: it has no audio frames")
+            bounds = window_bounds(audio.frames / audio.samplerate, self._geometry)
+            self._log(f"running {len(bounds)} windows of {path.name}")
             for first in range(0, len(bounds), self._batch_size):
                 batch_bounds = bounds[first : first + self._batch_size]
                 batch = self._batch(audio, batch_bounds)
@@ -247,11 +247,6 @@ class PerchModel:
         batch = np.zeros((len(bounds), self._width), dtype=np.float32)
         for row, (start, end) in zip(batch, bounds):
             window = _read_window_at_rate(audio, start, end, self._rate)
-            if len(window) > self._width:
-                raise ValueError(
-                    f"model perch/v8 read {len(window)} samples for the window at {start} s, "
-                    f"more than the {self._width} it takes"
-                )
             row[: len(window)] = window
         return batch
 
@@ -274,7 +269,7 @@ class PerchModel:
         if logits is None:
             score_rows = [()] * len(bounds)
         else:
-            _refuse_a_non_finite_logit(logits, bounds, self._labels)
+            _refuse_unusable_logits(logits, bounds, self._labels)
             score_rows = [self._scored(row) for row in sigmoid(logits).tolist()]
         embedding_rows = [None] * len(bounds) if embeddings is None else list(embeddings)
         for (start, end), scores, embedding in zip(
@@ -285,10 +280,8 @@ class PerchModel:
             yield WindowOutput(start=start, end=end, scores=scores, embedding=embedding)
 
     def _scored(self, scores: list[float]) -> tuple[ClassScore, ...]:
-        # strict refuses a model that gives the registry more or fewer scores.
         return tuple(
-            ClassScore(label=label, score=score)
-            for label, score in zip(self._labels, scores, strict=True)
+            ClassScore(label=label, score=score) for label, score in zip(self._labels, scores)
         )
 
     def after_recording(self) -> None:
@@ -321,9 +314,11 @@ def _read_window_at_rate(
     window = _mixed_down(_read_frames(audio, context_first, context_last))
     resampled = resample_poly(window, up, down)
     offset = context_first * up // down
-    return resampled[first * up // down - offset : -(-last * up // down) - offset].astype(
-        np.float32
-    )
+    # The grid check makes first and context_first multiples of down, so these are exact;
+    # -(-a // b) rounds up.
+    keep_from = first * up // down - offset
+    keep_to = -(-last * up // down) - offset
+    return resampled[keep_from:keep_to].astype(np.float32)
 
 
 def _first_frame_on_the_shared_grid(start: float, rate: int, g: int) -> int:
@@ -350,9 +345,10 @@ def _mixed_down(frames: "np.ndarray") -> "np.ndarray":
     return np.mean(frames, axis=1, dtype=np.float32)
 
 
-def _refuse_a_non_finite_logit(
+def _refuse_unusable_logits(
     logits: "np.ndarray", bounds: Sequence[tuple[float, float]], labels: Sequence[str]
 ) -> None:
+    """Refuse logits not shaped (windows, labels), or not finite."""
     if logits.shape != (len(bounds), len(labels)):
         raise ValueError(
             f"model perch/v8 gave logits of shape {logits.shape} for {len(bounds)} "

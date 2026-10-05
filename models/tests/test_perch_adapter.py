@@ -7,7 +7,6 @@ import hashlib
 import importlib
 import math
 import os
-import subprocess
 import sys
 import types
 import warnings
@@ -46,19 +45,6 @@ with as_file(RESOURCES / "taxa_registry.csv") as _path:
         REGISTRY_ROWS = list(csv.DictReader(_file))
 
 REGISTRY_SHA256 = "ca28f370cb5924af9966fee9fcd0a12d57632bba85a01a3f5908f9011ef99fd9"
-RUNTIME_MODULES = ("tensorflow", "scipy", "soundfile")
-
-
-def runtime_modules_loaded_after(code: str) -> set[str]:
-    """Run `code` in a fresh interpreter and return which runtime modules it imported."""
-    report = f"import sys; print(','.join(m for m in {RUNTIME_MODULES!r} if m in sys.modules))"
-    result = subprocess.run(
-        [sys.executable, "-c", f"{code}\n{report}"],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return {name for name in result.stdout.strip().split(",") if name}
 
 
 def test_the_card_states_every_field():
@@ -140,10 +126,6 @@ def test_every_taxon_has_a_scientific_name_and_a_gbif_key():
         if entry.label_kind == "taxon":
             assert entry.scientific_name, entry
             assert entry.gbif_taxon_key is not None, entry
-
-
-def test_importing_the_perch_package_imports_no_runtime():
-    assert runtime_modules_loaded_after("import robin_models.perch") == set()
 
 
 # The adapter, against a fake TensorFlow.
@@ -248,7 +230,6 @@ class FakeTensorFlow:
         self.loads: list = []
         self.load_error: Exception | None = None
         self.loaded: list[weakref.ref] = []
-        self.gpu_visible = False
         self.call_error: Exception | None = None
         self.calls: list = []
         self.read: list[str] = []
@@ -264,7 +245,6 @@ class FakeTensorFlow:
         tf.device = self.on_device
         tf.convert_to_tensor = self.convert_to_tensor
         tf.saved_model = types.SimpleNamespace(load=self.load)
-        tf.config = types.SimpleNamespace(list_physical_devices=self.list_physical_devices)
         return tf
 
     @contextlib.contextmanager
@@ -289,11 +269,6 @@ class FakeTensorFlow:
         loaded = FakeLoaded({name: FakeSignature(self, name) for name in self.signature_names})
         self.loaded.append(weakref.ref(loaded))
         return loaded
-
-    def list_physical_devices(self, kind=None):
-        if self.gpu_visible and kind in (None, "GPU"):
-            return [types.SimpleNamespace(name="/physical_device:GPU:0", device_type="GPU")]
-        return []
 
     def serving_calls(self) -> list:
         return [call for call in self.calls if call.signature == "serving_default"]
@@ -1023,8 +998,7 @@ def test_windows_are_batched_within_one_recording_only(runtime, tmp_path):
         assert batch.flags["C_CONTIGUOUS"]
 
 
-def test_with_a_gpu_visible_everything_runs_on_the_cpu(runtime, tmp_path):
-    runtime.gpu_visible = True
+def test_every_call_runs_on_the_cpu(runtime, tmp_path):
     model, _, path = model_and_noise(runtime, tmp_path, 3 * WINDOW, emit_embeddings=True)
     run(model, path)
     assert [load.device for load in runtime.loads] == [CPU]

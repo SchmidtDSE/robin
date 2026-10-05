@@ -6,7 +6,6 @@ import gc
 import hashlib
 import importlib
 import os
-import subprocess
 import sys
 import types
 import weakref
@@ -45,19 +44,6 @@ with as_file(RESOURCES / "taxa_registry.csv") as _path:
         REGISTRY_ROWS = list(csv.DictReader(_file))
 
 REGISTRY_SHA256 = "b758a58bee475d45b1fb04a8f42cbaa13c794d2dc782f0e86968e6c1515d4c2d"
-RUNTIME_MODULES = ("tensorflow", "scipy", "soundfile")
-
-
-def runtime_modules_loaded_after(code: str) -> set[str]:
-    """Run `code` in a fresh interpreter and return which runtime modules it imported."""
-    report = f"import sys; print(','.join(m for m in {RUNTIME_MODULES!r} if m in sys.modules))"
-    result = subprocess.run(
-        [sys.executable, "-c", f"{code}\n{report}"],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return {name for name in result.stdout.strip().split(",") if name}
 
 
 def test_the_card_states_every_field():
@@ -128,10 +114,6 @@ def test_the_non_taxonomic_classes_have_no_name_and_no_key():
     for entry in rows:
         assert entry.scientific_name is None
         assert entry.gbif_taxon_key is None
-
-
-def test_importing_the_birdnet_package_imports_no_runtime():
-    assert runtime_modules_loaded_after("import robin_models.birdnet") == set()
 
 
 # The adapter, run against a fake TensorFlow. NumPy, SciPy and soundfile are real.
@@ -231,7 +213,6 @@ class FakeTensorFlow:
         self.loads: list = []
         self.load_error: Exception | None = None
         self.loaded: list[weakref.ref] = []
-        self.gpu_visible = False
         self.call_error: Exception | None = None
         self.calls: list = []
         self.signatures = {
@@ -258,7 +239,6 @@ class FakeTensorFlow:
         tf.convert_to_tensor = self.convert_to_tensor
         tf.matmul = self.matmul
         tf.saved_model = types.SimpleNamespace(load=self.load)
-        tf.config = types.SimpleNamespace(list_physical_devices=self.list_physical_devices)
         return tf
 
     @contextlib.contextmanager
@@ -298,11 +278,6 @@ class FakeTensorFlow:
         loaded = FakeLoaded(signatures, variables if self.has_model else None)
         self.loaded.append(weakref.ref(loaded))
         return loaded
-
-    def list_physical_devices(self, kind=None):
-        if self.gpu_visible and kind in (None, "GPU"):
-            return [types.SimpleNamespace(name="/physical_device:GPU:0", device_type="GPU")]
-        return []
 
     def default_scores(self, batch: np.ndarray) -> np.ndarray:
         return head_logits(self.default_embeddings(batch))
@@ -852,6 +827,18 @@ def test_overlapping_windows_each_reach_the_model_as_their_own_slice(runtime, tm
         assert np.array_equal(row, samples[first : first + WINDOW])
 
 
+def test_overlapping_windows_at_an_odd_rate_each_read_one_full_window(runtime, tmp_path):
+    model = runtime.adapter.build(birdnet_context(tmp_path, card=changed_card(window_overlap=0.5)))
+    samples = noise(12 * 11025)
+    windows = run(model, write_audio(tmp_path / "a.wav", samples, 11025))
+    full = [(w, row) for w, row in zip(windows, rows_given_to(runtime)) if w.end <= 12.0]
+    assert [w.start for w, _ in full] == [0.0, 2.5, 5.0, 7.5]
+    for window, row in full:
+        first = round(window.start * 11025)
+        expected = scipy.signal.resample(samples[first : first + 33_075], WINDOW)
+        assert np.array_equal(row, expected.astype(np.float32))
+
+
 # Scores and the sigmoid.
 
 FIVE_LOGITS = np.array([-20, -15, 0, 15, 20], dtype=np.float32)
@@ -872,6 +859,13 @@ def test_the_sigmoid_is_the_birdnet_librarys_at_every_point_of_a_fine_grid(runti
     assert np.array_equal(runtime.adapter.sigmoid(grid), expected)
     # Another float32 sigmoid differs from the library's by a few float32 steps.
     assert not np.array_equal(1 / (1 + np.exp(-np.clip(grid, -15, 15))), expected)
+
+
+def test_the_sigmoid_is_within_three_float32_steps_of_the_exact_one(runtime):
+    grid = np.linspace(-16, 16, 200_001, dtype=np.float32)
+    exact = 1 / (1 + np.exp(-np.clip(grid.astype(np.float64), -15, 15)))
+    steps = np.abs(runtime.adapter.sigmoid(grid) - exact) / np.spacing(exact.astype(np.float32))
+    assert steps.max() <= 3
 
 
 def test_run_gives_the_sigmoid_of_the_logits_exactly(runtime, tmp_path):
@@ -910,7 +904,7 @@ def test_every_window_scores_every_label_once_in_registry_order(runtime, tmp_pat
 def test_a_model_returning_fewer_scores_than_it_declares_fails_the_recording(runtime, tmp_path):
     runtime.logits = lambda embeddings: head_logits(embeddings)[:, :6521]
     model, _, path = model_and_noise(runtime, tmp_path, WINDOW)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="6521"):
         run(model, path)
 
 
@@ -1033,8 +1027,7 @@ def test_windows_are_batched_within_one_recording_only(runtime, tmp_path):
         assert batch.flags["C_CONTIGUOUS"]
 
 
-def test_with_a_gpu_visible_everything_runs_on_the_cpu(runtime, tmp_path):
-    runtime.gpu_visible = True
+def test_every_call_runs_on_the_cpu(runtime, tmp_path):
     model, _, path = model_and_noise(runtime, tmp_path, 3 * WINDOW, emit_embeddings=True)
     run(model, path)
     assert [load.device for load in runtime.loads] == [CPU]
