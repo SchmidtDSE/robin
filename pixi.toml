@@ -16,11 +16,12 @@ robin-contracts = { path = "contracts", editable = true }
 robin-inference-engine = { path = "inference_engine", editable = true }
 robin-run-manager = { path = "run_manager", editable = true }
 robin-worker = { path = "worker", editable = true }
-robin-adapters = { path = "adapters", editable = true }
+robin-adapters = { path = "adapters", editable = true, extras = ["ondio"] }
 robin-bioacoustics = { path = "robin", editable = true }
 robin-models = { path = "models", editable = true }
 scipy = ">=1.17.1,<2"
 soundfile = ">=0.13.1,<0.14"
+moto = { version = ">=5.2.3,<5.3", extras = ["s3"] }
 
 [environments]
 test = ["test"]
