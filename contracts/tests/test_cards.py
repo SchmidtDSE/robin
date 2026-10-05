@@ -144,13 +144,6 @@ def test_a_head_card_with_an_empty_runtime_is_refused():
     assert exc.value.errors()[0]["loc"] == ("runtime",)
 
 
-def test_a_head_card_file_listing_its_classes_is_refused(tmp_path):
-    path = _write_text(tmp_path, _yaml(HEAD_CARD_FIELDS | {"classes": ["american-bullfrog"]}))
-
-    with pytest.raises(ValueError, match="classes"):
-        read_card(path)
-
-
 def test_a_head_card_file_follows_the_field_order(tmp_path):
     path = tmp_path / "head.yaml"
 

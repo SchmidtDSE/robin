@@ -7,7 +7,7 @@ only the file can tell what produced it.
 from collections.abc import Iterable, Mapping
 
 from robin_contracts.canonical import canonical_json_bytes
-from robin_contracts.cards import HeadCard, model_ref
+from robin_contracts.cards import model_ref
 from robin_contracts.output_contracts import DetectionPolicy, ScoresRequest
 from robin_contracts.results import ArtifactContractId
 from robin_contracts.specs import Recipe
@@ -100,9 +100,7 @@ def embedding_metadata(
     work: InferenceWork, *, dim: int, source_dtype: str, storage_dtype: str
 ) -> dict[bytes, bytes]:
     """The keys that make an opaque run of floats readable."""
-    # Written even when they repeat the model keys: a head's model is not its backbone.
-    card = work.model.card
-    backbone = card.backbone if isinstance(card, HeadCard) else model_ref(card)
+    backbone = model_ref(work.model.card)
     return _encode(
         {
             EMBEDDING_DIM_KEY: str(dim),

@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pytest
 
 from robin_contracts.canonical import checksum_file
@@ -690,6 +691,26 @@ def test_a_reader_reports_a_truncated_batch_as_a_typed_error(tmp_path):
     assert exc.value.code == errors.ARTIFACT_MALFORMED
     assert exc.value.stage == errors.READ_INPUT_ARTIFACT
     assert staged.path.name in exc.value.detail
+
+
+def test_a_reader_refuses_a_null_score(tmp_path):
+    staged = write_artifact(tmp_path / "scores.arrow", [build_window()])
+    with pa.ipc.open_stream(staged.path) as reader:
+        schema, [batch] = reader.schema, list(reader)
+    scores = batch.column("score")
+    nulled = pc.if_else(pa.array([True, False]), pa.nulls(2, scores.type), scores)
+    columns = [nulled if name == "score" else batch.column(name) for name in schema.names]
+    # The schema still declares the column not nullable; Arrow does not enforce it.
+    checksum = write_raw_stream(
+        staged.path, schema, (pa.RecordBatch.from_arrays(columns, schema=schema),)
+    )
+
+    with read_scores(staged.path, expected_checksum=checksum) as stream:
+        with pytest.raises(errors.EngineError) as exc:
+            list(stream.batches)
+
+    assert exc.value.code == errors.ARTIFACT_MALFORMED
+    assert "'score'" in exc.value.detail
 
 
 def test_a_reader_does_not_translate_errors_from_the_consumer(tmp_path):

@@ -445,17 +445,6 @@ HEAD = HeadCard(
 )
 
 
-def test_a_head_names_the_backbone_its_card_declares():
-    work = build_work(model=build_model(HEAD))
-
-    decoded = decode_metadata(
-        embedding_metadata(work, dim=8, source_dtype="float32", storage_dtype="float32")
-    )
-
-    assert decoded["robin.backbone_ref"] == "perch/8"
-    assert decoded["robin.backbone_card_digest"] == HEAD.backbone.digest
-
-
 @pytest.mark.parametrize("card", [CARD, HEAD], ids=["backbone", "head"])
 def test_the_model_keys_come_from_the_works_card(card):
     work = build_work(model=build_model(card))

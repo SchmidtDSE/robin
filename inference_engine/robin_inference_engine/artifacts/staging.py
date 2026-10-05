@@ -63,7 +63,8 @@ def open_stream(handle: pa.OSFile, name: str) -> pa.RecordBatchStreamReader:
 def read_batches(
     reader: pa.RecordBatchStreamReader, name: str
 ) -> Iterator[pa.RecordBatch]:
-    """Yield each batch as it is decoded, refusing one that cannot be read."""
+    """Yield each batch as it is decoded, refusing one that cannot be read or that holds
+    a null in a field its schema declares not nullable."""
     while True:
         try:
             batch = reader.read_next_batch()
@@ -71,7 +72,18 @@ def read_batches(
             return
         except (pa.ArrowInvalid, OSError) as exc:
             raise malformed(f"{name} has an unreadable Arrow batch: {exc}") from exc
+        _refuse_a_null(batch, name)
         yield batch
+
+
+def _refuse_a_null(batch: pa.RecordBatch, name: str) -> None:
+    # Arrow's IPC format does not enforce a field's nullable flag, so a file can break it.
+    for field, column in zip(batch.schema, batch.columns):
+        if not field.nullable and column.null_count:
+            raise malformed(
+                f"{name} has {column.null_count} null values in {field.name!r}, "
+                f"which its schema declares not nullable"
+            )
 
 
 def require_checksum(name: str, *, actual: str, expected: str) -> None:

@@ -86,12 +86,11 @@ def _read_device(resources: Mapping[str, JsonScalar]) -> None:
 
 
 def _require_roles(files: Mapping[str, Path], registry: TaxonRegistry | None) -> None:
-    for role in (GRAPH_ROLE, REGISTRY_ROLE):
-        if role not in files:
-            raise ValueError(
-                f"head runtime onnx needs a file under the role {role!r}, "
-                f"and got the roles {sorted(files)}"
-            )
+    if GRAPH_ROLE not in files:
+        raise ValueError(
+            f"head runtime onnx needs a file under the role {GRAPH_ROLE!r}, "
+            f"and got the roles {sorted(files)}"
+        )
     if registry is None:
         raise ValueError(
             f"head runtime onnx needs the registry loaded from the role {REGISTRY_ROLE!r}, "

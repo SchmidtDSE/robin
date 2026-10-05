@@ -281,7 +281,7 @@ def _recording_cleanup(
     path: Path | None,
     windows: Iterator[WindowOutput] | None,
 ) -> list[Callable[[], None]]:
-    """The model's hook runs before the audio is released: it may still hold the file."""
+    """The model's hook runs before the input is released: it may still hold the file."""
     steps = []
     # Close the run first: the adapter may keep files open until it is closed.
     close = getattr(windows, "close", None)

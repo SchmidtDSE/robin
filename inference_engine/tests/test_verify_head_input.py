@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pyarrow as pa
+import pyarrow.compute as pc
 import pytest
 
 from robin_contracts.canonical import checksum_file
@@ -277,6 +278,22 @@ def test_a_file_whose_header_names_no_recording_value_is_refused(tmp_path):
 
     assert error.code == errors.ARTIFACT_METADATA_INCOMPLETE
     assert "robin.recording_value" in error.detail
+
+
+def test_a_file_with_a_null_window_start_is_refused(tmp_path):
+    path = tmp_path / "embeddings.arrow"
+    write_embeddings(path)
+    with pa.ipc.open_stream(path) as reader:
+        schema, [batch] = reader.schema, list(reader)
+    starts = batch.column("window_start_s")
+    nulled = pc.if_else(pa.array([False, True, False]), pa.nulls(3, starts.type), starts)
+    columns = [nulled if name == "window_start_s" else batch.column(name) for name in schema.names]
+    with pa.OSFile(str(path), "wb") as sink, pa.ipc.new_stream(sink, schema) as writer:
+        writer.write_batch(pa.RecordBatch.from_arrays(columns, schema=schema))
+
+    error = refusal(path)
+
+    assert error.code == errors.ARTIFACT_MALFORMED
 
 
 # ---------------------------------------------------------------------------

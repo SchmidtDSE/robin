@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pyarrow as pa
+import pyarrow.compute as pc
 import pytest
 
 from robin_contracts.canonical import checksum_file
@@ -12,9 +13,7 @@ from robin_contracts.cards import (
     AudioGeometry,
     HeadCard,
     ModelCard,
-    ModelRef,
     RunnerResampled,
-    card_digest,
     model_ref,
 )
 from robin_contracts.output_contracts import EmbeddingsRequest
@@ -68,7 +67,7 @@ CARD = ModelCard(
     dtype="float32",
     embedding_dtype="float32",
 )
-BACKBONE_REF = ModelRef(name="backbone", version="2", digest=BACKBONE_DIGEST)
+
 
 def a_recording(namespace: str, value: str) -> RecordingRef:
     return RecordingRef(namespace=namespace, value=value, audio_uri=f"s3://b/{value}.wav")
@@ -588,9 +587,7 @@ def test_a_reader_refuses_a_header_carrying_half_a_registry_binding(tmp_path, pr
     assert any(key in exc.value.detail for key in REGISTRY_KEYS)
 
 
-def test_a_backbone_run_names_itself_and_a_head_names_its_backbone(tmp_path):
-    # Written in both cases rather than inferred: a head's own embeddings make the
-    # two pairs differ, and a reader cannot guess which run it is holding.
+def test_a_backbone_run_names_itself_as_its_backbone(tmp_path):
     own = write_artifact(tmp_path / "backbone.arrow", [build_window()])
 
     with read_embeddings(own.path, expected_checksum=own.checksum) as stream:
@@ -599,29 +596,6 @@ def test_a_backbone_run_names_itself_and_a_head_names_its_backbone(tmp_path):
             stream.metadata["robin.backbone_card_digest"]
             == stream.metadata["robin.model_card_digest"]
         )
-
-    head_card = HeadCard(
-        model_name="amy-head",
-        model_version="1",
-        runtime="onnx",
-        backbone=BACKBONE_REF,
-        embedding_dim=1280,
-        min_detection_threshold=0.0,
-        score_domain="probability",
-        taxa_registry_digest="sha256:" + "a" * 64,
-    )
-    head = build_work(model=build_model(head_card))
-    staged = write_artifact(
-        tmp_path / "head.arrow",
-        [build_window()],
-        metadata=build_metadata(work=head, recipe=build_recipe(model=model_ref(head_card))),
-    )
-
-    with read_embeddings(staged.path, expected_checksum=staged.checksum) as stream:
-        assert stream.metadata["robin.backbone_ref"] == "backbone/2"
-        assert stream.metadata["robin.backbone_card_digest"] == BACKBONE_DIGEST
-        assert stream.metadata["robin.model_ref"] == "amy-head/1"
-        assert stream.metadata["robin.model_card_digest"] == card_digest(head_card)
 
 
 def test_the_shipped_recipe_hashes_to_the_fingerprint_beside_it(tmp_path):
@@ -913,6 +887,28 @@ def test_a_reader_reports_a_truncated_batch_as_a_typed_error(tmp_path):
 
     assert exc.value.code == errors.ARTIFACT_MALFORMED
     assert staged.path.name in exc.value.detail
+
+
+def test_a_reader_refuses_a_null_embedding_row(tmp_path):
+    staged = write_artifact(
+        tmp_path / "embeddings.arrow", [build_window(5.0 * row) for row in range(3)]
+    )
+    with pa.ipc.open_stream(staged.path) as reader:
+        schema, [batch] = reader.schema, list(reader)
+    vectors = batch.column("embedding")
+    nulled = pc.if_else(pa.array([True, False, False]), pa.nulls(3, vectors.type), vectors)
+    columns = [nulled if name == "embedding" else batch.column(name) for name in schema.names]
+    # The schema still declares the column not nullable; Arrow does not enforce it.
+    checksum = write_raw_stream(
+        staged.path, schema, (pa.RecordBatch.from_arrays(columns, schema=schema),)
+    )
+
+    with read_embeddings(staged.path, expected_checksum=checksum) as stream:
+        with pytest.raises(errors.EngineError) as exc:
+            list(stream.batches)
+
+    assert exc.value.code == errors.ARTIFACT_MALFORMED
+    assert "'embedding'" in exc.value.detail
 
 
 def test_a_reader_refuses_another_contracts_artifact(tmp_path):

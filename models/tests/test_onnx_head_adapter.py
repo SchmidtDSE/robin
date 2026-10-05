@@ -241,7 +241,7 @@ def test_a_model_card_is_refused_naming_its_type(runtime, tmp_path):
 # The pinned files.
 
 
-@pytest.mark.parametrize("role", ["graph", "taxa_registry"])
+@pytest.mark.parametrize("role", ["graph"])
 def test_a_missing_role_is_refused_naming_it_and_the_roles_given(runtime, tmp_path, role):
     files = without(head_files(tmp_path), role)
     with pytest.raises(ValueError, match=f"'{role}'") as caught:
