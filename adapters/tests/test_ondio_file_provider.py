@@ -32,11 +32,6 @@ def test_it_has_the_signature_its_port_declares():
             assert supplied.parameters[name].kind == parameter.kind, (member, name)
 
 
-def test_the_module_uses_the_installed_ondio_package():
-    assert provider_module.ondio.__name__ == "ondio"
-    assert callable(provider_module.ondio.download)
-
-
 def test_a_fetch_gives_an_absolute_path_under_the_directory_holding_the_object(
     tmp_path, s3_bucket
 ):

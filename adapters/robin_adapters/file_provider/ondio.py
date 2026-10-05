@@ -1,4 +1,4 @@
-"""The `FileProvider` port over any storage ondio supports, such as S3."""
+"""The `FileProvider` port over S3, through ondio."""
 
 import shutil
 import uuid

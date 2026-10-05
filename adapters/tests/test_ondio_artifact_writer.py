@@ -257,6 +257,9 @@ def _must_not_be_called(*args, **kwargs):
         "s3://b/run?tag=1",
         "s3://b/run?",
         "s3://b/run#",
+        "s3://b/p//",
+        "gs://b",
+        "gs://b/runs/one",
     ],
 )
 def test_a_root_it_cannot_publish_under_is_refused(monkeypatch, root):
@@ -269,8 +272,8 @@ def test_a_root_it_cannot_publish_under_is_refused(monkeypatch, root):
     assert root in str(refused.value)
 
 
-@pytest.mark.parametrize("root", ["s3://b", "s3://b/runs/one", "gs://b", "gs://b/runs/one/"])
-def test_an_s3_or_gs_root_is_accepted(root):
+@pytest.mark.parametrize("root", ["s3://b", "s3://b/runs/one", "s3://b/runs/one/"])
+def test_an_s3_root_is_accepted(root):
     OndioArtifactWriter(root)
 
 

@@ -1,4 +1,4 @@
-"""The `ArtifactWriter` port over an `s3://` or `gs://` root, through ondio."""
+"""The `ArtifactWriter` port over an `s3://` root, through ondio."""
 
 import tempfile
 from pathlib import Path
@@ -9,11 +9,11 @@ from robin_contracts.canonical import checksum_file
 from robin_contracts.layout import artifact_path
 from robin_contracts.results import ArtifactContractId, ArtifactKind, ArtifactRecord
 
-_SCHEMES = ("s3", "gs")
+_SCHEMES = ("s3",)
 
 
 class OndioArtifactWriter:
-    """Publishes each file under an `s3://` or `gs://` root, uploading it from disk.
+    """Publishes each file under an `s3://` root, uploading it from disk.
 
     The file goes at the path its kind and recording give. The same bytes already there
     succeed without an upload, and different bytes raise `FileExistsError`. Two writers
@@ -68,11 +68,11 @@ class OndioArtifactWriter:
 
 
 def _checked_root(root: str) -> str:
-    """`root` without its trailing `/`, or `ValueError` if it is no `s3://` or `gs://` root.
+    """`root` without its trailing `/`, or `ValueError` if it is no `s3://` root.
 
     ondio cuts a uri at `?` or `#`, so neither may appear. Percent-encoding is kept.
     """
-    stripped = root.rstrip("/")
+    stripped = root.removesuffix("/")
     scheme, separator, rest = stripped.partition("://")
     if (
         not separator
@@ -81,5 +81,5 @@ def _checked_root(root: str) -> str:
         or "#" in root
         or "" in rest.split("/")
     ):
-        raise ValueError(f"{root!r} is not an s3:// or gs:// root with a bucket")
+        raise ValueError(f"{root!r} is not an s3:// root with a bucket")
     return stripped
