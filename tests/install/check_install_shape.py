@@ -62,6 +62,7 @@ _HEAVY_RUNTIMES = (
     "birdnet",
     "psycopg",
     "boto3",
+    "ondio",
     "duckdb",
     "pyarrow",
     "onnxruntime",
@@ -127,6 +128,19 @@ _register(
         "robin_adapters.artifact_writer.local",
         "robin_contracts",
     ),
+)
+_register(
+    "adapters-ondio",
+    install=("robin-adapters[ondio]",),
+    required=(
+        "robin_adapters",
+        "robin_adapters.file_provider.local",
+        "robin_adapters.artifact_writer.local",
+        "robin_adapters.file_provider.ondio",
+        "robin_adapters.artifact_writer.ondio",
+        "robin_contracts",
+    ),
+    runtimes=("boto3", "ondio"),
 )
 _register(
     "meta-all",

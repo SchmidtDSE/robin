@@ -38,7 +38,7 @@ jobs:
       matrix:
         os: [ubuntu-latest]
         python: ["3.11", "3.12", "3.13"]
-        shape: [contracts, inference-engine, run-manager, worker, adapters, meta-all, models, meta-owl, meta-birdnet, meta-perch, meta-onnx-head]
+        shape: [contracts, inference-engine, run-manager, worker, adapters, adapters-ondio, meta-all, models, meta-owl, meta-birdnet, meta-perch, meta-onnx-head]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -75,6 +75,11 @@ jobs:
           python -m pip download --only-binary=:all: --dest .wheelcheck/dist --find-links .wheelcheck/dist
           ".wheelcheck/dist/robin_bioacoustics-0.0.0-py3-none-any.whl[onnx-head]"
           ".wheelcheck/dist/robin_models-0.0.0-py3-none-any.whl[onnx-head]"
+      # The ondio extra's runtime, which the download above leaves out.
+      - if: matrix.shape == 'adapters-ondio'
+        run: >-
+          python -m pip download --only-binary=:all: --dest .wheelcheck/dist --find-links .wheelcheck/dist
+          ".wheelcheck/dist/robin_adapters-0.0.0-py3-none-any.whl[ondio]"
       - run: python tests/install/check_install_shape.py ${{ matrix.shape }} --wheels-dir .wheelcheck/dist --venv .venv-shape
 
   install-shape-main:
@@ -92,6 +97,7 @@ jobs:
           - { os: ubuntu-latest,    python: "3.11", shape: run-manager }
           - { os: ubuntu-latest,    python: "3.11", shape: worker }
           - { os: ubuntu-latest,    python: "3.11", shape: adapters }
+          - { os: ubuntu-latest,    python: "3.11", shape: adapters-ondio }
           - { os: ubuntu-latest,    python: "3.11", shape: meta-all }
           - { os: ubuntu-latest,    python: "3.11", shape: models }
           - { os: ubuntu-latest,    python: "3.11", shape: meta-owl }
@@ -103,6 +109,7 @@ jobs:
           - { os: ubuntu-latest,    python: "3.12", shape: run-manager }
           - { os: ubuntu-latest,    python: "3.12", shape: worker }
           - { os: ubuntu-latest,    python: "3.12", shape: adapters }
+          - { os: ubuntu-latest,    python: "3.12", shape: adapters-ondio }
           - { os: ubuntu-latest,    python: "3.12", shape: meta-all }
           - { os: ubuntu-latest,    python: "3.12", shape: models }
           - { os: ubuntu-latest,    python: "3.12", shape: meta-owl }
@@ -114,6 +121,7 @@ jobs:
           - { os: ubuntu-latest,    python: "3.13", shape: run-manager }
           - { os: ubuntu-latest,    python: "3.13", shape: worker }
           - { os: ubuntu-latest,    python: "3.13", shape: adapters }
+          - { os: ubuntu-latest,    python: "3.13", shape: adapters-ondio }
           - { os: ubuntu-latest,    python: "3.13", shape: meta-all }
           - { os: ubuntu-latest,    python: "3.13", shape: models }
           - { os: ubuntu-latest,    python: "3.13", shape: meta-owl }
@@ -191,4 +199,9 @@ jobs:
           python -m pip download --only-binary=:all: --dest .wheelcheck/dist --find-links .wheelcheck/dist
           ".wheelcheck/dist/robin_bioacoustics-0.0.0-py3-none-any.whl[onnx-head]"
           ".wheelcheck/dist/robin_models-0.0.0-py3-none-any.whl[onnx-head]"
+      # The ondio extra's runtime, which the download above leaves out.
+      - if: matrix.shape == 'adapters-ondio'
+        run: >-
+          python -m pip download --only-binary=:all: --dest .wheelcheck/dist --find-links .wheelcheck/dist
+          ".wheelcheck/dist/robin_adapters-0.0.0-py3-none-any.whl[ondio]"
       - run: python tests/install/check_install_shape.py ${{ matrix.shape }} --wheels-dir .wheelcheck/dist --venv .venv-shape
