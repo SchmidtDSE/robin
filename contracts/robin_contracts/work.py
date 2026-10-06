@@ -45,6 +45,14 @@ def _positive_duration(value: float) -> float:
     return value
 
 
+def _finite_values(value: Mapping[str, JsonScalar]) -> Mapping[str, JsonScalar]:
+    # Without this a caller can build a work whose own work_digest raises.
+    for key, item in value.items():
+        if isinstance(item, float) and not math.isfinite(item):
+            raise ValueError(f"{key!r} is {item}, which has no canonical encoding")
+    return value
+
+
 BytesDigest = Annotated[str, AfterValidator(_bytes_digest)]
 CanonicalDigest = Annotated[str, AfterValidator(_canonical_digest)]
 NonEmptyText = Annotated[str, AfterValidator(_non_empty)]
@@ -108,6 +116,15 @@ class EmbeddingArtifactInput(BaseModel, frozen=True, extra="forbid"):
     kind: Literal["embedding_artifact"] = "embedding_artifact"
     contract_id: EmbeddingsContractId
     backbone: ModelCard
+    # The settings the backbone's work ran with.
+    backbone_settings: Mapping[str, JsonScalar] = {}
+
+    @field_validator("backbone_settings")
+    @classmethod
+    def _values_have_a_canonical_encoding(
+        cls, value: Mapping[str, JsonScalar]
+    ) -> Mapping[str, JsonScalar]:
+        return _finite_values(value)
 
 
 class InferenceWork(BaseModel, frozen=True, extra="forbid"):
@@ -131,11 +148,7 @@ class InferenceWork(BaseModel, frozen=True, extra="forbid"):
     def _values_have_a_canonical_encoding(
         cls, value: Mapping[str, JsonScalar]
     ) -> Mapping[str, JsonScalar]:
-        # Without this a caller can build a work whose own work_digest raises.
-        for key, item in value.items():
-            if isinstance(item, float) and not math.isfinite(item):
-                raise ValueError(f"{key!r} is {item}, which has no canonical encoding")
-        return value
+        return _finite_values(value)
 
     @model_validator(mode="after")
     def _recordings_are_identified_once_each(self) -> "InferenceWork":

@@ -21,7 +21,7 @@ from robin_contracts.cards import HeadCard, ModelCard
 from robin_contracts.inputs import Embeddings, Input
 from robin_contracts.layout import artifact_path
 from robin_contracts.output_contracts import OutputRequest
-from robin_contracts.protocols import ModelContext
+from robin_contracts.protocols import JsonScalar, ModelContext
 from robin_contracts.records import ClassScore, WindowOutput
 from robin_contracts.results import (
     ArtifactContractId,
@@ -402,6 +402,7 @@ def head_work(
     head: WorkBuilder,
     *,
     outputs: Sequence[OutputRequest],
+    backbone_settings: Mapping[str, JsonScalar] | None = None,
 ) -> tuple[InferenceWork, dict[str, Path]]:
     """A work running `head` over the embeddings files the backbone published.
 
@@ -419,7 +420,9 @@ def head_work(
         named.append(RecordingRef(**(recording.model_dump() | {"embeddings": embeddings})))
         paths[record.uri] = Path(url2pathname(urlparse(record.uri).path))
     source = EmbeddingArtifactInput(
-        contract_id="robin.embeddings.arrow/1", backbone=backbone.model.card
+        contract_id="robin.embeddings.arrow/1",
+        backbone=backbone.model.card,
+        backbone_settings=backbone_settings or {},
     )
     work = head.work(named, input=source, settings={}, outputs=tuple(outputs))
     return work, paths

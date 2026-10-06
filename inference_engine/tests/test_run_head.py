@@ -29,6 +29,7 @@ from robin_contracts.canonical import checksum_file
 from robin_contracts.cards import (
     AudioGeometry,
     HeadCard,
+    InferenceParam,
     ModelCard,
     RunnerResampled,
     model_ref,
@@ -39,7 +40,7 @@ from robin_contracts.output_contracts import (
     ScoresRequest,
     ThresholdPolicy,
 )
-from robin_contracts.protocols import ModelContext
+from robin_contracts.protocols import JsonScalar, ModelContext
 from robin_contracts.inputs import Embeddings
 from robin_contracts.layout import artifact_path
 from robin_contracts.records import ClassScore, WindowOutput
@@ -102,6 +103,11 @@ def build_head(**overrides) -> HeadCard:
 
 HEAD = build_head()
 
+OVERLAPPING_BACKBONE = build_backbone(
+    inference_params=(InferenceParam(name="window_overlap", type="float"),)
+)
+OVERLAP = {"window_overlap": 1.0}
+
 # Rows each backbone recording writes.
 ROWS = (3, 2)
 
@@ -116,28 +122,34 @@ def detections_request() -> DetectionsRequest:
     )
 
 
-def backbone_window(recording: int, row: int, dim: int = DIM) -> WindowOutput:
-    start = HOP * row
+def backbone_window(
+    recording: int, row: int, dim: int = DIM, hop: float = HOP
+) -> WindowOutput:
+    start = hop * row
     embedding = np.arange(dim, dtype=np.float32) + 10.0 * recording + row / 8
     scores = (ClassScore(label="owl", score=0.25), ClassScore(label="rain", score=0.75))
     return WindowOutput(start=start, end=start + HOP, scores=scores, embedding=embedding)
 
 
 def run_backbone(
-    directory: Path, card: ModelCard = BACKBONE
+    directory: Path,
+    card: ModelCard = BACKBONE,
+    settings: Mapping[str, JsonScalar] | None = None,
 ) -> tuple[InferenceWork, InferenceSuccess]:
     """A backbone work that writes a scores and an embeddings file for each of ROWS'
     recordings."""
+    settings = settings or {}
     calls: CallLog = []
     build = WorkBuilder(directory / "inputs", card)
     recordings = tuple(build.recording(str(n)) for n in range(len(ROWS)))
     work = build.work(
         recordings,
-        settings={},
+        settings=settings,
         outputs=(scores_request(), EmbeddingsRequest(contract_id="robin.embeddings.arrow/1")),
     )
+    hop = HOP - settings.get("window_overlap", 0.0)
     script = [
-        [backbone_window(n, row, card.embedding_dim) for row in range(rows)]
+        [backbone_window(n, row, card.embedding_dim, hop) for row in range(rows)]
         for n, rows in enumerate(ROWS)
     ]
     model = ScriptedModel(script=script, calls=calls)
@@ -179,21 +191,31 @@ def stored_vectors(path: Path) -> np.ndarray:
 class HeadRig:
     """A backbone's published embeddings, a head's model files, and one call log."""
 
-    def __init__(self, tmp_path: Path, *, head: HeadCard = HEAD) -> None:
+    def __init__(
+        self,
+        tmp_path: Path,
+        *,
+        head: HeadCard = HEAD,
+        backbone: ModelCard = BACKBONE,
+        backbone_settings: Mapping[str, JsonScalar] | None = None,
+    ) -> None:
         self.tmp_path = tmp_path
         self.calls: CallLog = []
         self.contexts: list[ModelContext] = []
-        self.backbone_work, self.backbone_result = run_backbone(tmp_path / "backbone")
+        self.backbone_work, self.backbone_result = run_backbone(
+            tmp_path / "backbone", backbone, backbone_settings
+        )
         self.build = WorkBuilder(tmp_path / "head", head, registry_csv=HEAD_REGISTRY_CSV)
         self.destination = tmp_path / "head-published"
         self.input_paths: dict[str, Path] = {}
 
-    def work(self, *, outputs=None) -> InferenceWork:
+    def work(self, *, outputs=None, backbone_settings=None) -> InferenceWork:
         work, paths = head_work(
             self.backbone_work,
             self.backbone_result,
             self.build,
             outputs=outputs or (scores_request(),),
+            backbone_settings=backbone_settings,
         )
         self.input_paths |= paths
         return work
@@ -525,6 +547,48 @@ def test_each_header_names_the_head_its_files_and_its_registry(rig):
         assert header["robin.recipe_fingerprint"] == recipe(BACKBONE, {}).id
         assert header["robin.recording_namespace"] == record.namespace
         assert header["robin.recording_value"] == record.value
+
+
+@pytest.fixture
+def overlapping_rig(tmp_path) -> HeadRig:
+    """A head over the embeddings of a backbone run at OVERLAP."""
+    head = build_head(backbone=model_ref(OVERLAPPING_BACKBONE))
+    return HeadRig(
+        tmp_path, head=head, backbone=OVERLAPPING_BACKBONE, backbone_settings=OVERLAP
+    )
+
+
+def test_a_head_over_overlapping_embeddings_scores_the_backbones_windows(overlapping_rig):
+    rig = overlapping_rig
+    work = rig.work(backbone_settings=OVERLAP)
+
+    result = rig.run(work)
+
+    assert isinstance(result, InferenceSuccess), result
+    assert result.recipe == recipe(OVERLAPPING_BACKBONE, OVERLAP)
+    scores = [record for record in result.artifacts if record.kind == "scores"]
+    for position, (record, rows) in enumerate(zip(scores, ROWS, strict=True)):
+        with pa.ipc.open_stream(rig.input_path(work, position)) as reader:
+            backbone_starts = reader.read_all().column("window_start_s").to_pylist()
+        with pa.ipc.open_stream(published(record)) as reader:
+            head_starts = reader.read_all().column("window_start_s").to_pylist()
+        assert backbone_starts == [2.0 * row for row in range(rows)]
+        assert head_starts == backbone_starts
+
+
+def test_a_head_naming_other_backbone_settings_than_its_input_is_refused(overlapping_rig):
+    rig = overlapping_rig
+    work = rig.work(backbone_settings={})
+
+    result = rig.run(work)
+
+    failure = failure_of(
+        result, code=errors.HEAD_INPUT_RECIPE_DIFFERS, stage=errors.READ_INPUT_ARTIFACT
+    )
+    assert (failure.namespace, failure.value) == ("test", "0")
+    assert recipe(OVERLAPPING_BACKBONE, OVERLAP).id in failure.detail
+    assert recipe(OVERLAPPING_BACKBONE, {}).id in failure.detail
+    assert rig.runs() == []
 
 
 def detection_ids(result: InferenceSuccess) -> set[str]:

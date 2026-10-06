@@ -548,6 +548,46 @@ def test_any_setting_on_a_head_work_is_refused():
     assert_validate_request(error, errors.SETTING_UNDECLARED, "gain", "amy-head/1")
 
 
+OVERLAPPING_BACKBONE = build_embedding_card(
+    model_name="perch",
+    model_version="8",
+    embedding_dim=1280,
+    inference_params=(InferenceParam(name="window_overlap", type="float"),),
+)
+OVERLAPPING_HEAD = build_head(backbone=model_ref(OVERLAPPING_BACKBONE))
+
+
+def build_overlapping_head_work(backbone_settings) -> InferenceWork:
+    source = EmbeddingArtifactInput(
+        contract_id="robin.embeddings.arrow/1",
+        backbone=OVERLAPPING_BACKBONE,
+        backbone_settings=backbone_settings,
+    )
+    return build_head_work(OVERLAPPING_HEAD, backbone=OVERLAPPING_BACKBONE, input=source)
+
+
+def test_backbone_settings_the_backbone_declares_are_accepted():
+    assert accepted(build_overlapping_head_work({"window_overlap": 1.5}))
+
+
+def test_a_backbone_setting_the_backbone_does_not_declare_is_refused():
+    error = refused(build_overlapping_head_work({"gain": 1.0}))
+
+    assert_validate_request(error, errors.SETTING_UNDECLARED, "gain", "perch/8")
+
+
+def test_a_backbone_setting_of_the_wrong_type_is_refused():
+    error = refused(build_overlapping_head_work({"window_overlap": 1}))
+
+    assert_validate_request(error, errors.SETTING_TYPE_MISMATCH, "window_overlap", "perch/8")
+
+
+def test_a_backbone_overlap_that_does_not_let_windows_advance_is_refused():
+    error = refused(build_overlapping_head_work({"window_overlap": 3.0}))
+
+    assert_validate_request(error, errors.WINDOW_OVERLAP_INVALID, "3.0", "perch/8")
+
+
 def test_a_floor_below_the_heads_own_is_refused():
     head = build_head(min_detection_threshold=0.01)
     request_ = build_scores(retention="thresholded", min_score=0.001)

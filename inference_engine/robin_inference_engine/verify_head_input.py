@@ -18,6 +18,7 @@ from robin_inference_engine.artifacts.metadata import (
     BACKBONE_CARD_DIGEST_KEY,
     BACKBONE_REF_KEY,
     EMBEDDING_DIM_KEY,
+    RECIPE_FINGERPRINT_KEY,
     RECORDING_NAMESPACE_KEY,
     RECORDING_VALUE_KEY,
 )
@@ -26,10 +27,14 @@ T = TypeVar("T")
 
 
 def verify_head_input(
-    header: Mapping[str, str], card: HeadCard, recording: RecordingRef
+    header: Mapping[str, str],
+    card: HeadCard,
+    recording: RecordingRef,
+    recipe_fingerprint: str,
 ) -> None:
     """Refuse a file that another backbone than the head's wrote, that is not the width
-    the head takes, or that holds another recording than `recording`."""
+    the head takes, that another recipe than `recipe_fingerprint` made, or that holds
+    another recording than `recording`."""
     head = f"head {card.model_name}/{card.model_version}"
     _require(
         header,
@@ -57,6 +62,14 @@ def verify_head_input(
     )
     _require(
         header,
+        RECIPE_FINGERPRINT_KEY,
+        recipe_fingerprint,
+        "the work's backbone settings give the recipe",
+        errors.HEAD_INPUT_RECIPE_DIFFERS,
+        recording,
+    )
+    _require(
+        header,
         RECORDING_NAMESPACE_KEY,
         recording.namespace,
         "the work pairs it with namespace",
@@ -73,7 +86,9 @@ def verify_head_input(
     )
 
 
-def read_head_input(path: Path, *, card: HeadCard, recording: RecordingRef) -> Embeddings:
+def read_head_input(
+    path: Path, *, card: HeadCard, recording: RecordingRef, recipe_fingerprint: str
+) -> Embeddings:
     """The recording's vectors as stored, widened to float32, one row per window.
 
     The file's bytes, schema and header are checked before any row is read.
@@ -84,7 +99,7 @@ def read_head_input(path: Path, *, card: HeadCard, recording: RecordingRef) -> E
             lambda: files.enter_context(read_embeddings(path, expected_checksum=checksum)),
             recording,
         )
-        verify_head_input(stream.metadata, card, recording)
+        verify_head_input(stream.metadata, card, recording, recipe_fingerprint)
         batches = _attributed(lambda: list(stream.batches), recording)
     return _rows(batches, card.embedding_dim)
 

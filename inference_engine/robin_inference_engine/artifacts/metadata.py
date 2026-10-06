@@ -31,6 +31,7 @@ DETECTION_POLICY_KEY = "robin.detection_policy"
 SOURCE_ARTIFACTS_KEY = "robin.source_artifacts"
 RECORDING_NAMESPACE_KEY = "robin.recording_namespace"
 RECORDING_VALUE_KEY = "robin.recording_value"
+RECIPE_FINGERPRINT_KEY = "robin.recipe_fingerprint"
 
 # Every artifact carries these keys, whatever its contract.
 REQUIRED_KEYS: tuple[str, ...] = (
@@ -38,7 +39,7 @@ REQUIRED_KEYS: tuple[str, ...] = (
     "robin.recording_work_digest",
     RECORDING_NAMESPACE_KEY,
     RECORDING_VALUE_KEY,
-    "robin.recipe_fingerprint",
+    RECIPE_FINGERPRINT_KEY,
     "robin.recipe",
     "robin.model_ref",
     "robin.model_card_digest",
@@ -83,7 +84,7 @@ def required_metadata(
         RECORDING_NAMESPACE_KEY: recording.namespace,
         RECORDING_VALUE_KEY: recording.value,
         # Not a duplicate: one key holds the recipe, the other its digest.
-        "robin.recipe_fingerprint": recipe.id,
+        RECIPE_FINGERPRINT_KEY: recipe.id,
         "robin.recipe": canonical_json_bytes(recipe).decode("utf-8"),
         "robin.model_ref": model.id,
         "robin.model_card_digest": model.digest,

@@ -6,7 +6,7 @@ rather than degrading to something adjacent and publishing it, so every message 
 both sides of the disagreement.
 """
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 
 from robin_contracts.cards import HeadCard, ModelCard, model_ref
 from robin_contracts.output_contracts import ScoresRequest
@@ -31,14 +31,19 @@ def refuse_request(work: InferenceWork, *, registry: TaxonRegistry | None) -> No
     # First: whether the card is a head decides which of its fields the rest read.
     _refuse_an_input_the_card_does_not_read(work, card)
     if isinstance(card, HeadCard):
-        _refuse_a_backbone_the_head_does_not_read(work.input.backbone, card)
+        backbone = work.input.backbone
+        _refuse_a_backbone_the_head_does_not_read(backbone, card)
+        _refuse_settings_the_card_does_not_declare(work.input.backbone_settings, backbone)
+        _refuse_an_overlap_that_does_not_let_windows_advance(
+            work.input.backbone_settings, backbone
+        )
         _refuse_embeddings_from_a_head(work, card)
     _refuse_embeddings_the_card_forbids(work, card)
     _refuse_unlabelled_scores(work)
     _refuse_a_substituted_registry(work, registry)
     _refuse_a_registry_the_card_does_not_pin(work, card)
-    _refuse_settings_the_card_does_not_declare(work, card)
-    _refuse_an_overlap_that_does_not_let_windows_advance(work, card)
+    _refuse_settings_the_card_does_not_declare(work.settings, card)
+    _refuse_an_overlap_that_does_not_let_windows_advance(work.settings, card)
     scores = scores_request(work)
     if scores is not None:
         _refuse_scores_the_card_does_not_emit(card)
@@ -161,12 +166,12 @@ def _refuse_a_registry_the_card_does_not_pin(
 
 
 def _refuse_settings_the_card_does_not_declare(
-    work: InferenceWork, card: ModelCard | HeadCard
+    settings: Mapping[str, JsonScalar], card: ModelCard | HeadCard
 ) -> None:
     # A head card declares no settings.
     params = card.inference_params if isinstance(card, ModelCard) else ()
     declared = {param.name: param.type for param in params}
-    for name, value in work.settings.items():
+    for name, value in settings.items():
         if name not in declared:
             raise _refused(
                 errors.SETTING_UNDECLARED,
@@ -188,10 +193,10 @@ def _refuse_a_setting_of_another_type(
 
 
 def _refuse_an_overlap_that_does_not_let_windows_advance(
-    work: InferenceWork, card: ModelCard | HeadCard
+    settings: Mapping[str, JsonScalar], card: ModelCard | HeadCard
 ) -> None:
     # The checks above leave a float here only when a backbone card declares the setting.
-    overlap = work.settings.get("window_overlap")
+    overlap = settings.get("window_overlap")
     if type(overlap) is not float:
         return
     if not 0.0 <= overlap < card.window_duration:

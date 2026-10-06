@@ -132,7 +132,7 @@ def _run_model(run: _Run, *, fetched: list[Path], root: Path) -> InferenceResult
     # The refusals leave a head work only with an input naming that backbone's card.
     card = work.model.card
     stated = (
-        recipe(work.input.backbone, {})
+        recipe(work.input.backbone, work.input.backbone_settings)
         if isinstance(card, HeadCard)
         else recipe(card, work.settings)
     )
@@ -187,7 +187,7 @@ def _infer(
             position,
             recording,
             model=model,
-            geometry=recipe.audio.geometry,
+            recipe=recipe,
             boundary=boundary,
             coverage=coverage,
             outputs=outputs,
@@ -231,7 +231,7 @@ def _run_recording(
     recording: RecordingRef,
     *,
     model: Model,
-    geometry: WindowGeometry,
+    recipe: Recipe,
     boundary: AcceptanceBoundary,
     coverage: CoverageBuilder,
     outputs: RecordingOutputs,
@@ -251,7 +251,7 @@ def _run_recording(
         log=run.log,
     ):
         path = _fetch_input(run.inputs, recording)
-        given = _recording_input(run.work, recording, path, boundary)
+        given = _recording_input(run.work, recording, path, boundary, recipe.id)
         with outputs.open_window_writers(position, recording) as writers:
             windows = _start(model, recording, given)
             accepted = 0
@@ -270,7 +270,7 @@ def _run_recording(
         coverage.end_recording(
             zero_window_reason=None
             if accepted
-            else _zero_window_reason(recording, geometry),
+            else _zero_window_reason(recording, recipe.audio.geometry),
             detection_rows=detected.rows if detected is not None else 0,
         )
         run.log(f"recording {errors.named(recording)}: {accepted} windows accepted")
@@ -318,7 +318,11 @@ def _recording_cleanup(
 
 
 def _recording_input(
-    work: InferenceWork, recording: RecordingRef, path: Path, boundary: AcceptanceBoundary
+    work: InferenceWork,
+    recording: RecordingRef,
+    path: Path,
+    boundary: AcceptanceBoundary,
+    recipe_fingerprint: str,
 ) -> Input:
     """The audio as fetched, or for a head, the recording's embeddings, read and checked.
 
@@ -327,7 +331,9 @@ def _recording_input(
     card = work.model.card
     if not isinstance(card, HeadCard):
         return AudioClip(path=path)
-    embeddings = read_head_input(path, card=card, recording=recording)
+    embeddings = read_head_input(
+        path, card=card, recording=recording, recipe_fingerprint=recipe_fingerprint
+    )
     boundary.expect_windows(embeddings.starts, embeddings.ends)
     return embeddings
 

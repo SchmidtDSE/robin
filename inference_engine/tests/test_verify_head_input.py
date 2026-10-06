@@ -78,6 +78,9 @@ def head_reading(backbone: ModelCard) -> HeadCard:
 
 HEAD = head_reading(BACKBONE)
 
+# The recipe fingerprint every file write_embeddings writes for BACKBONE carries.
+FINGERPRINT = recipe(BACKBONE, {}).id
+
 # Holds a "/" and an "=", which a value differing only after either must not hide.
 RECORDING = RecordingRef(namespace="soundhub", value="site=a/42", audio_uri="s3://b/42.wav")
 
@@ -177,10 +180,16 @@ def naming(path: Path, recording: RecordingRef = RECORDING) -> RecordingRef:
     return RecordingRef(**(recording.model_dump() | {"embeddings": embeddings}))
 
 
-def refusal(path: Path, *, card: HeadCard = HEAD, recording: RecordingRef | None = None):
+def refusal(
+    path: Path,
+    *,
+    card: HeadCard = HEAD,
+    recording: RecordingRef | None = None,
+    fingerprint: str = FINGERPRINT,
+):
     recording = recording or naming(path)
     with pytest.raises(errors.EngineError) as caught:
-        read_head_input(path, card=card, recording=recording)
+        read_head_input(path, card=card, recording=recording, recipe_fingerprint=fingerprint)
     error = caught.value
     assert error.stage == errors.READ_INPUT_ARTIFACT
     assert error.recording == recording
@@ -230,6 +239,18 @@ def test_a_file_of_another_width_than_the_head_takes_is_refused(tmp_path):
     assert error.code == errors.HEAD_INPUT_WIDTH_MISMATCH
     assert str(DIM + 1) in error.detail
     assert str(DIM) in error.detail
+
+
+def test_a_file_made_at_other_backbone_settings_is_refused(tmp_path):
+    path = tmp_path / "embeddings.arrow"
+    write_embeddings(path)
+    expected = recipe(BACKBONE, {"window_overlap": 1.0}).id
+
+    error = refusal(path, fingerprint=expected)
+
+    assert error.code == errors.HEAD_INPUT_RECIPE_DIFFERS
+    assert FINGERPRINT in error.detail
+    assert expected in error.detail
 
 
 @pytest.mark.parametrize(
@@ -305,7 +326,9 @@ def test_a_float32_file_is_read_as_stored(tmp_path):
     write_embeddings(path)
     starts, ends, stored = read_stored(path)
 
-    given = read_head_input(path, card=HEAD, recording=naming(path))
+    given = read_head_input(
+        path, card=HEAD, recording=naming(path), recipe_fingerprint=FINGERPRINT
+    )
 
     assert given.kind == "embeddings"
     assert given.starts.dtype == np.float64 and given.ends.dtype == np.float64
@@ -325,7 +348,12 @@ def test_a_float16_file_is_widened_to_float32_exactly(tmp_path):
     assert stored.dtype == np.float16
     assert not np.array_equal(stored.astype(np.float32), written)
 
-    given = read_head_input(path, card=head_reading(narrow), recording=naming(path))
+    given = read_head_input(
+        path,
+        card=head_reading(narrow),
+        recording=naming(path),
+        recipe_fingerprint=recipe(narrow, {}).id,
+    )
 
     assert given.values.dtype == np.float32
     assert given.values.flags["C_CONTIGUOUS"]
@@ -342,7 +370,9 @@ def test_every_row_of_a_file_written_in_several_batches_is_read_in_order(
     with pa.ipc.open_stream(path) as reader:
         assert len(list(reader)) > 1
 
-    given = read_head_input(path, card=HEAD, recording=naming(path))
+    given = read_head_input(
+        path, card=HEAD, recording=naming(path), recipe_fingerprint=FINGERPRINT
+    )
 
     assert np.array_equal(given.values, written)
     assert np.array_equal(given.starts, 3.0 * np.arange(7))
@@ -353,6 +383,8 @@ def test_reading_leaves_the_file_unchanged(tmp_path):
     write_embeddings(path)
     before = checksum_file(path)
 
-    read_head_input(path, card=HEAD, recording=naming(path))
+    read_head_input(
+        path, card=HEAD, recording=naming(path), recipe_fingerprint=FINGERPRINT
+    )
 
     assert checksum_file(path) == before

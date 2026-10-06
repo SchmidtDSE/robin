@@ -251,6 +251,33 @@ def test_a_head_work_over_embeddings_round_trips_as_a_head():
     assert work_digest(rebuilt) == work_digest(work)
 
 
+def test_an_embeddings_input_names_no_backbone_settings_by_default():
+    assert EMBEDDINGS_INPUT.backbone_settings == {}
+
+
+def test_an_embeddings_input_with_backbone_settings_round_trips():
+    source = EmbeddingArtifactInput(
+        contract_id="robin.embeddings.arrow/1",
+        backbone=CARD,
+        backbone_settings={"window_overlap": 1.0},
+    )
+
+    rebuilt = EmbeddingArtifactInput.model_validate(source.model_dump(mode="json"))
+
+    assert rebuilt == source
+    assert rebuilt.backbone_settings == {"window_overlap": 1.0}
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_backbone_settings_reject_a_non_finite_float(value):
+    with pytest.raises(ValidationError):
+        EmbeddingArtifactInput(
+            contract_id="robin.embeddings.arrow/1",
+            backbone=CARD,
+            backbone_settings={"window_overlap": value},
+        )
+
+
 def test_a_recording_naming_its_embeddings_file_round_trips():
     recording = build_recording(embeddings=build_embeddings_file())
 

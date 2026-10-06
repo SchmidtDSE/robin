@@ -38,7 +38,7 @@ def test_every_declared_constant_is_a_stage_or_one_of_its_codes():
     assert len(set(errors.CONSTRUCT_MODEL_FAILURES)) == 5
     assert len(set(errors.ACQUIRE_INPUT_FAILURES)) == 1
     assert len(set(errors.INFER_FAILURES)) == 2
-    assert len(set(errors.READ_INPUT_ARTIFACT_FAILURES)) == 9
+    assert len(set(errors.READ_INPUT_ARTIFACT_FAILURES)) == 10
     assert len(set(errors.WRITE_ARTIFACT_FAILURES)) == 2
     assert len(set(errors.AGGREGATE_FAILURES)) == 2
     assert declared == {stage for stage, _ in FAMILIES} | {
