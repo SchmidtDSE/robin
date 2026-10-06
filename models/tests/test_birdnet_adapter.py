@@ -861,11 +861,13 @@ def test_the_sigmoid_is_the_birdnet_librarys_at_every_point_of_a_fine_grid(runti
     assert not np.array_equal(1 / (1 + np.exp(-np.clip(grid, -15, 15))), expected)
 
 
-def test_the_sigmoid_is_within_three_float32_steps_of_the_exact_one(runtime):
+def test_the_sigmoid_is_within_five_float32_epsilons_of_the_exact_one(runtime):
     grid = np.linspace(-16, 16, 200_001, dtype=np.float32)
     exact = 1 / (1 + np.exp(-np.clip(grid.astype(np.float64), -15, 15)))
-    steps = np.abs(runtime.adapter.sigmoid(grid) - exact) / np.spacing(exact.astype(np.float32))
-    assert steps.max() <= 3
+    relative_error = np.abs(runtime.adapter.sigmoid(grid) - exact) / exact
+    # On AVX-512 CPUs numpy's float32 exp may be off by 4 ULP. The addition and
+    # the division each add at most half an epsilon.
+    assert relative_error.max() <= 5 * np.finfo(np.float32).eps
 
 
 def test_run_gives_the_sigmoid_of_the_logits_exactly(runtime, tmp_path):
