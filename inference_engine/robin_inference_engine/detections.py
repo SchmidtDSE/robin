@@ -1,4 +1,7 @@
-"""One recording's detections: the scores a policy selects, ranked, and named by the registry."""
+"""One recording's detections: the scores a policy selects, ranked, and named by the registry.
+
+Detections are per label. Labels that share a GBIF key are not merged.
+"""
 
 from collections.abc import Iterator, Mapping
 from dataclasses import fields

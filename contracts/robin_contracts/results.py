@@ -56,7 +56,7 @@ class ArtifactRecord(BaseModel, frozen=True, extra="forbid"):
     uri: NonEmptyText
     checksum: BytesDigest
     size_bytes: _Count
-    rows: _Count  # zero is a real value
+    rows: _Count  # a result never holds a record with zero rows
 
 
 class RecordingCoverage(BaseModel, frozen=True, extra="forbid"):

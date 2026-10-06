@@ -49,6 +49,9 @@ Install `robin-models[birdnet]`. BirdNET runs on the CPU only. Each batch runs t
 `embeddings` signature once, and the scores are its output multiplied by the model's own
 classifier layer, which is what the `basic` signature computes.
 
+`full` score retention writes one row per label per window: about 7.8 million rows per hour of
+audio (1,200 windows × 6,522 labels). Use `thresholded` or `top_k` unless you need every score.
+
 ### Credit
 
 BirdNET is developed by the K. Lisa Yang Center for Conservation Bioacoustics at the Cornell Lab
@@ -113,6 +116,9 @@ with SciPy's polyphase resampler, as Perch's training data was, so a window equa
 of the whole recording resampled at once. Embeddings are stored as the model returns them, not
 normalised.
 
+`full` score retention writes one row per label per window: about 7.9 million rows per hour of
+audio (720 windows × 10,932 labels). Use `thresholded` or `top_k` unless you need every score.
+
 ### Credit
 
 Perch is developed by Google Research and Google DeepMind. Cite Ghani et al., "Global birdsong
@@ -123,6 +129,12 @@ Reports* 13, 22876 (2023).
 
 Kaggle states the licence of version 8 as Apache 2.0. It is not covered by robin's BSD-3-Clause
 licence.
+
+## Running more than one model
+
+Run one TensorFlow model per process. OWL needs legacy Keras, and TensorFlow chooses its Keras
+version once, when it is first imported. So a process that first imports BirdNET's or Perch's
+adapter can't then load OWL.
 
 ## Heads
 

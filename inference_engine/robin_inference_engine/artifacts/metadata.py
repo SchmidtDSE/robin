@@ -115,8 +115,8 @@ def embedding_metadata(
 def score_metadata(request: ScoresRequest, *, score_domain: str) -> dict[bytes, bytes]:
     """The keys recording how much of the label vocabulary a score stream kept.
 
-    The floor and k are taken from the request. A model whose own floor differs is
-    refused before inference, so they describe the rows written, not only the request.
+    The floor and k are taken from the request. The engine keeps exactly the rows the
+    request asks for, so these keys describe the rows written.
     """
     values: dict[str, str] = {
         SCORE_DOMAIN_KEY: score_domain,
