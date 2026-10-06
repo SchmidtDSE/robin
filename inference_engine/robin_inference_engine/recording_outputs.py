@@ -10,6 +10,7 @@ from robin_contracts.output_contracts import (
     EmbeddingsContractId,
     ScoresContractId,
 )
+from robin_contracts.layout import FILE_NAMES
 from robin_contracts.registry import TaxonRegistry
 from robin_contracts.results import ArtifactContractId
 from robin_contracts.specs import Recipe
@@ -104,7 +105,7 @@ class RecordingOutputs:
 
     def _scores_writer(self, folder: Path, recording: RecordingRef) -> ScoresWriter:
         return ScoresWriter(
-            folder / "scores.arrow",
+            folder / FILE_NAMES["scores"],
             recording=recording,
             metadata=self._header(SCORES_CONTRACT_ID, recording) | self._score_keys(),
         )
@@ -115,7 +116,7 @@ class RecordingOutputs:
         # was refused before inference.
         storage_dtype = self._recipe.dtype
         return EmbeddingsWriter(
-            folder / "embeddings.arrow",
+            folder / FILE_NAMES["embeddings"],
             recording=recording,
             dim=self._card.embedding_dim,
             storage_dtype=storage_dtype,

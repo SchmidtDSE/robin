@@ -1,9 +1,9 @@
-"""The score stream: one recording's rows, one per window and label, verified when it
-is read back.
+"""The scores file: one recording's rows in Parquet, one per window and label, verified
+when it is read back.
 
 The header carries the run's provenance, so the file can be interpreted on its own. The
 rows do not name their recording: the published path and the artifact record do.
-Rows are written in bounded batches, so the whole artifact is never held in memory,
+Rows are written one row group at a time, so the whole artifact is never held in memory,
 and the reader checks the whole file before returning any row.
 """
 
@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import get_args
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 
 from robin_contracts.canonical import checksum_file
 from robin_contracts.output_contracts import ScoresContractId
@@ -35,7 +36,7 @@ from robin_inference_engine.artifacts.metadata import (
 from robin_inference_engine.artifacts.staging import (
     StagedArtifact,
     invalid_schema,
-    open_stream,
+    open_parquet,
     read_batches,
     require_checksum,
     require_contract,
@@ -48,7 +49,9 @@ RETENTIONS: tuple[str, ...] = get_args(ScoreRetention)
 
 # Rows, not windows: one window is 51 rows for one model and 6,522 for another, so a
 # window count bounds memory differently for every model it is used with. A window is
-# never split across batches, so a batch can pass this by up to one window's rows.
+# never split across row groups, so a group can pass this by up to one window's rows.
+# Each flush is one row group, and when a flush happens depends only on the rows
+# written, so the file's bytes do too. The reader reads this many rows at a time.
 SCORE_BATCH_ROWS = 8192
 
 SCORES_SCHEMA = pa.schema(
@@ -62,7 +65,7 @@ SCORES_SCHEMA = pa.schema(
 
 
 class ScoresWriter:
-    """Writes one recording's accepted windows to an Arrow stream, a batch at a time.
+    """Writes one recording's accepted windows to a Parquet file, a row group at a time.
 
     It checks the header it is given, writes the windows it is given, and leaves
     the file on disk. The caller publishes the finished bytes and deletes the file.
@@ -74,9 +77,8 @@ class ScoresWriter:
         _require_writable_header(metadata)
         self._path = path
         self._recording = recording
-        self._file: pa.OSFile | None = pa.OSFile(str(path), "wb")
-        self._stream = pa.ipc.new_stream(
-            self._file, SCORES_SCHEMA.with_metadata(dict(metadata))
+        self._writer: pq.ParquetWriter | None = pq.ParquetWriter(
+            path, SCORES_SCHEMA.with_metadata(dict(metadata))
         )
         self._pending = _empty_columns()
         self._pending_rows = 0
@@ -85,7 +87,7 @@ class ScoresWriter:
 
     def write(self, window: AcceptedWindow) -> None:
         """Append one row per score in this window, and no rows if it has none."""
-        if self._closed or self._stream is None:
+        if self._closed or self._writer is None:
             raise RuntimeError(f"{self._path.name} is closed; no window can be added")
         for score in window.scores:
             self._pending["window_start_s"].append(window.start)
@@ -94,15 +96,15 @@ class ScoresWriter:
             self._pending["score"].append(score.score)
         self._pending_rows += len(window.scores)
         # The buffer is flushed at the first window boundary at or past the bound,
-        # so a window is never split across two batches.
+        # so a window is never split across two row groups.
         if self._pending_rows >= SCORE_BATCH_ROWS:
             self._flush()
 
     def close(self) -> StagedArtifact:
-        """Finish the stream and stage the file. The file stays on disk."""
+        """Finish the file and stage it. The file stays on disk."""
         if self._closed:
             raise RuntimeError(f"{self._path.name} has already been closed")
-        if self._stream is None:
+        if self._writer is None:
             # Releasing discards whatever was still pending, so the row count and
             # checksum staged here would describe a file that was never finished.
             raise RuntimeError(f"{self._path.name} was released before it was closed")
@@ -127,30 +129,28 @@ class ScoresWriter:
         self._release()
 
     def _flush(self) -> None:
-        if self._stream is None:
-            raise RuntimeError(f"{self._path.name} has no open stream to write to")
+        if self._writer is None:
+            raise RuntimeError(f"{self._path.name} has no open file to write to")
         if not self._pending_rows:
             return
-        self._stream.write_batch(
+        self._writer.write_batch(
             pa.RecordBatch.from_arrays(
                 [
                     pa.array(self._pending[field.name], type=field.type)
                     for field in SCORES_SCHEMA
                 ],
                 schema=SCORES_SCHEMA,
-            )
+            ),
+            row_group_size=self._pending_rows,
         )
         self._rows += self._pending_rows
         self._pending = _empty_columns()
         self._pending_rows = 0
 
     def _release(self) -> None:
-        if self._stream is not None:
-            self._stream.close()
-            self._stream = None
-        if self._file is not None:
-            self._file.close()
-            self._file = None
+        if self._writer is not None:
+            self._writer.close()
+            self._writer = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,11 +176,11 @@ def read_scores(path: Path, *, expected_checksum: str) -> Iterator[ScoresStream]
         raise unreadable(path.name, exc) from exc
     with handle:
         require_checksum(path.name, actual=actual, expected=expected_checksum)
-        with open_stream(handle, path.name) as reader:
-            yield ScoresStream(
-                metadata=_verified_header(reader.schema),
-                batches=read_batches(reader, path.name),
-            )
+        file = open_parquet(handle, path.name)
+        yield ScoresStream(
+            metadata=_verified_header(file.schema_arrow),
+            batches=read_batches(file, path.name, batch_rows=SCORE_BATCH_ROWS),
+        )
 
 
 def _empty_columns() -> dict[str, list[object]]:

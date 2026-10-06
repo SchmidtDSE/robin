@@ -22,7 +22,7 @@ MODEL_FLOOR = 0.01
 
 def build_scores_request(**overrides) -> ScoresRequest:
     fields = {
-        "contract_id": "robin.scores.arrow/1",
+        "contract_id": "robin.scores.parquet/1",
         "retention": "thresholded",
         "min_score": MODEL_FLOOR,
     }

@@ -100,14 +100,14 @@ def build_work(**overrides) -> InferenceWork:
         "input": AudioInput(),
         "settings": {},
         "resources": {},
-        "outputs": (ScoresRequest(contract_id="robin.scores.arrow/1", retention="full"),),
+        "outputs": (ScoresRequest(contract_id="robin.scores.parquet/1", retention="full"),),
     }
     return InferenceWork(**(fields | overrides))
 
 
 def build_metadata(**overrides) -> dict[bytes, bytes]:
     fields = {
-        "contract_id": "robin.scores.arrow/1",
+        "contract_id": "robin.scores.parquet/1",
         "work": build_work(),
         "recording": SOUNDHUB_42,
         "recipe": build_recipe(),
@@ -118,7 +118,7 @@ def build_metadata(**overrides) -> dict[bytes, bytes]:
 
 
 def build_scores_request(**overrides) -> ScoresRequest:
-    fields = {"contract_id": "robin.scores.arrow/1", "retention": "full"}
+    fields = {"contract_id": "robin.scores.parquet/1", "retention": "full"}
     return ScoresRequest(**(fields | overrides))
 
 
@@ -137,7 +137,7 @@ def test_a_work_with_no_registry_writes_every_key_required_of_every_artifact():
         build_metadata(registry_uri=None, registry_fingerprint=None)
     )
 
-    require_metadata_keys(decoded, REQUIRED_KEYS, contract_id="robin.scores.arrow/1")
+    require_metadata_keys(decoded, REQUIRED_KEYS, contract_id="robin.scores.parquet/1")
 
 
 def test_the_recipe_fingerprint_is_the_digest_of_the_recipe_it_ships_with():
@@ -252,7 +252,7 @@ def test_a_header_missing_its_recording_is_refused(key):
     decoded.pop(key, None)
 
     with pytest.raises(errors.EngineError) as exc:
-        require_metadata_keys(decoded, REQUIRED_KEYS, contract_id="robin.scores.arrow/1")
+        require_metadata_keys(decoded, REQUIRED_KEYS, contract_id="robin.scores.parquet/1")
 
     assert exc.value.code == errors.ARTIFACT_METADATA_INCOMPLETE
     assert key in exc.value.detail
@@ -309,7 +309,7 @@ def test_detection_metadata_records_the_policy_and_the_scores_file_it_selected_f
 
     decoded = decode_metadata(
         detection_metadata(
-            policy, source_contract_id="robin.scores.arrow/1", source_checksum=FILE_DIGEST
+            policy, source_contract_id="robin.scores.parquet/1", source_checksum=FILE_DIGEST
         )
     )
 
@@ -317,14 +317,14 @@ def test_detection_metadata_records_the_policy_and_the_scores_file_it_selected_f
     assert ThresholdPolicy.model_validate_json(decoded["robin.detection_policy"]) == policy
     # One scores file, named by its contract and bytes but not by where it was published.
     assert json.loads(decoded["robin.source_artifacts"]) == [
-        {"contract_id": "robin.scores.arrow/1", "checksum": FILE_DIGEST}
+        {"contract_id": "robin.scores.parquet/1", "checksum": FILE_DIGEST}
     ]
 
 
 def test_a_top_k_policy_with_no_floor_records_the_floor_as_null():
     decoded = decode_metadata(
         detection_metadata(
-            TopKPolicy(k=3), source_contract_id="robin.scores.arrow/1", source_checksum=FILE_DIGEST
+            TopKPolicy(k=3), source_contract_id="robin.scores.parquet/1", source_checksum=FILE_DIGEST
         )
     )
 
@@ -371,7 +371,7 @@ def test_a_missing_key_check_names_every_absent_key():
         del decoded[key]
 
     with pytest.raises(errors.EngineError) as exc:
-        require_metadata_keys(decoded, REQUIRED_KEYS, contract_id="robin.scores.arrow/1")
+        require_metadata_keys(decoded, REQUIRED_KEYS, contract_id="robin.scores.parquet/1")
 
     assert exc.value.code == errors.ARTIFACT_METADATA_INCOMPLETE
     assert exc.value.stage == errors.READ_INPUT_ARTIFACT

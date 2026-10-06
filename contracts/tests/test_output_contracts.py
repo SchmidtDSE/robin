@@ -36,8 +36,8 @@ def build_scores(**overrides) -> ScoresRequest:
 
 def test_each_alias_spells_its_specified_identifier():
     # Transcribed, not derived from the aliases under test, so a changed alias fails.
-    assert get_args(ScoresContractId)[0] == "robin.scores.arrow/1"
-    assert get_args(EmbeddingsContractId)[0] == "robin.embeddings.arrow/1"
+    assert get_args(ScoresContractId)[0] == "robin.scores.parquet/1"
+    assert get_args(EmbeddingsContractId)[0] == "robin.embeddings.parquet/1"
     assert get_args(DetectionsContractId)[0] == "robin.detections.parquet/1"
     assert get_args(WorkContractId)[0] == "robin.inference-work/1"
     assert get_args(ResultContractId)[0] == "robin.inference-result/1"

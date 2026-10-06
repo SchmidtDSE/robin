@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pyarrow as pa
-import pyarrow.compute as pc
+import pyarrow.parquet as pq
 import pytest
 
 from robin_contracts.canonical import checksum_file
@@ -147,24 +147,19 @@ def write_embeddings(
 
 
 def rewrite_header(path: Path, header: Mapping[str, str | None]) -> None:
-    with pa.ipc.open_stream(path) as reader:
-        schema, batches = reader.schema, list(reader)
-    metadata = {key.decode(): value.decode() for key, value in schema.metadata.items()}
+    table = pq.read_table(path)
+    metadata = {key.decode(): value.decode() for key, value in table.schema.metadata.items()}
     for key, value in header.items():
         if value is None:
             metadata.pop(key)
         else:
             metadata[key] = value
-    schema = schema.with_metadata(metadata)
-    with pa.OSFile(str(path), "wb") as sink, pa.ipc.new_stream(sink, schema) as writer:
-        for batch in batches:
-            writer.write_batch(batch.replace_schema_metadata(metadata))
+    pq.write_table(table.replace_schema_metadata(metadata), path)
 
 
 def read_stored(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """The file's starts, ends and vectors as stored, read with Arrow alone."""
-    with pa.ipc.open_stream(path) as reader:
-        table = reader.read_all()
+    """The file's starts, ends and vectors as stored, read with pyarrow alone."""
+    table = pq.read_table(path)
     vectors = table.column("embedding").combine_chunks()
     dim = vectors.type.list_size
     return (
@@ -210,7 +205,7 @@ def refusal(
     ],
 )
 def test_a_file_from_another_backbone_than_the_heads_is_refused(tmp_path, key, value):
-    path = tmp_path / "embeddings.arrow"
+    path = tmp_path / "embeddings.parquet"
     write_embeddings(path, header={key: value})
 
     error = refusal(path)
@@ -222,7 +217,7 @@ def test_a_file_from_another_backbone_than_the_heads_is_refused(tmp_path, key, v
 
 
 def test_a_file_of_another_width_than_the_head_takes_is_refused(tmp_path):
-    path = tmp_path / "embeddings.arrow"
+    path = tmp_path / "embeddings.parquet"
     wider = build_backbone(embedding_dim=DIM + 1)
     # Named as the head's backbone, so only the width disagrees.
     write_embeddings(
@@ -242,7 +237,7 @@ def test_a_file_of_another_width_than_the_head_takes_is_refused(tmp_path):
 
 
 def test_a_file_made_at_other_backbone_settings_is_refused(tmp_path):
-    path = tmp_path / "embeddings.arrow"
+    path = tmp_path / "embeddings.parquet"
     write_embeddings(path)
     expected = recipe(BACKBONE, {"window_overlap": 1.0}).id
 
@@ -263,7 +258,7 @@ def test_a_file_made_at_other_backbone_settings_is_refused(tmp_path):
     ids=["namespace", "value_after_a_slash", "value_after_an_equals_sign"],
 )
 def test_a_file_holding_another_recording_is_refused(tmp_path, key, value):
-    path = tmp_path / "embeddings.arrow"
+    path = tmp_path / "embeddings.parquet"
     write_embeddings(path, header={key: value})
 
     error = refusal(path)
@@ -280,7 +275,7 @@ def test_a_file_holding_another_recording_is_refused(tmp_path, key, value):
 
 
 def test_a_file_whose_checksum_is_not_the_recordings_is_refused(tmp_path):
-    path = tmp_path / "embeddings.arrow"
+    path = tmp_path / "embeddings.parquet"
     write_embeddings(path)
     embeddings = InputArtifact(uri=path.as_uri(), checksum="sha256:" + "1" * 64)
     recording = RecordingRef(**(RECORDING.model_dump() | {"embeddings": embeddings}))
@@ -291,7 +286,7 @@ def test_a_file_whose_checksum_is_not_the_recordings_is_refused(tmp_path):
 
 
 def test_a_file_whose_header_names_no_recording_value_is_refused(tmp_path):
-    path = tmp_path / "embeddings.arrow"
+    path = tmp_path / "embeddings.parquet"
     write_embeddings(path, header={"robin.recording_value": None})
 
     error = refusal(path)
@@ -300,20 +295,24 @@ def test_a_file_whose_header_names_no_recording_value_is_refused(tmp_path):
     assert "robin.recording_value" in error.detail
 
 
-def test_a_file_with_a_null_window_start_is_refused(tmp_path):
-    path = tmp_path / "embeddings.arrow"
+def test_a_file_with_a_nullable_window_start_holding_a_null_is_refused(tmp_path):
+    path = tmp_path / "embeddings.parquet"
     write_embeddings(path)
-    with pa.ipc.open_stream(path) as reader:
-        schema, [batch] = reader.schema, list(reader)
-    starts = batch.column("window_start_s")
-    nulled = pc.if_else(pa.array([False, True, False]), pa.nulls(3, starts.type), starts)
-    columns = [nulled if name == "window_start_s" else batch.column(name) for name in schema.names]
-    with pa.OSFile(str(path), "wb") as sink, pa.ipc.new_stream(sink, schema) as writer:
-        writer.write_batch(pa.RecordBatch.from_arrays(columns, schema=schema))
+    table = pq.read_table(path)
+    relaxed = pa.schema(
+        [
+            pa.field(field.name, field.type, nullable=field.name == "window_start_s")
+            for field in table.schema
+        ],
+        metadata=table.schema.metadata,
+    )
+    starts = pa.array([0.0, None, 6.0], pa.float64())
+    columns = [starts if name == "window_start_s" else table.column(name) for name in relaxed.names]
+    pq.write_table(pa.table(columns, schema=relaxed), path)
 
     error = refusal(path)
 
-    assert error.code == errors.ARTIFACT_MALFORMED
+    assert error.code == errors.ARTIFACT_SCHEMA_INVALID
 
 
 # ---------------------------------------------------------------------------
@@ -322,7 +321,7 @@ def test_a_file_with_a_null_window_start_is_refused(tmp_path):
 
 
 def test_a_float32_file_is_read_as_stored(tmp_path):
-    path = tmp_path / "embeddings.arrow"
+    path = tmp_path / "embeddings.parquet"
     write_embeddings(path)
     starts, ends, stored = read_stored(path)
 
@@ -341,7 +340,7 @@ def test_a_float32_file_is_read_as_stored(tmp_path):
 
 
 def test_a_float16_file_is_widened_to_float32_exactly(tmp_path):
-    path = tmp_path / "embeddings.arrow"
+    path = tmp_path / "embeddings.parquet"
     narrow = build_backbone(dtype="float16")
     written = write_embeddings(path, backbone=narrow)
     _, _, stored = read_stored(path)
@@ -365,10 +364,9 @@ def test_every_row_of_a_file_written_in_several_batches_is_read_in_order(
 ):
     # Two rows a batch.
     monkeypatch.setattr(embeddings_module, "EMBEDDING_BATCH_BYTES", 2 * DIM * 4)
-    path = tmp_path / "embeddings.arrow"
+    path = tmp_path / "embeddings.parquet"
     written = write_embeddings(path, rows=7)
-    with pa.ipc.open_stream(path) as reader:
-        assert len(list(reader)) > 1
+    assert pq.ParquetFile(path).num_row_groups > 1
 
     given = read_head_input(
         path, card=HEAD, recording=naming(path), recipe_fingerprint=FINGERPRINT
@@ -379,7 +377,7 @@ def test_every_row_of_a_file_written_in_several_batches_is_read_in_order(
 
 
 def test_reading_leaves_the_file_unchanged(tmp_path):
-    path = tmp_path / "embeddings.arrow"
+    path = tmp_path / "embeddings.parquet"
     write_embeddings(path)
     before = checksum_file(path)
 

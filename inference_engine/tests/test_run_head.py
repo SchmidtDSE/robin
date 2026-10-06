@@ -8,7 +8,6 @@ from urllib.parse import urlparse
 from urllib.request import url2pathname
 
 import numpy as np
-import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
@@ -113,7 +112,7 @@ ROWS = (3, 2)
 
 
 def scores_request() -> ScoresRequest:
-    return ScoresRequest(contract_id="robin.scores.arrow/1", retention="full")
+    return ScoresRequest(contract_id="robin.scores.parquet/1", retention="full")
 
 
 def detections_request() -> DetectionsRequest:
@@ -145,7 +144,7 @@ def run_backbone(
     work = build.work(
         recordings,
         settings=settings,
-        outputs=(scores_request(), EmbeddingsRequest(contract_id="robin.embeddings.arrow/1")),
+        outputs=(scores_request(), EmbeddingsRequest(contract_id="robin.embeddings.parquet/1")),
     )
     hop = HOP - settings.get("window_overlap", 0.0)
     script = [
@@ -165,26 +164,20 @@ def run_backbone(
 
 
 def rewrite_header(path: Path, header: Mapping[str, str | None]) -> None:
-    """Set (or, for None, drop) each `header` value of the Arrow stream at `path`."""
-    with pa.ipc.open_stream(path) as reader:
-        schema, batches = reader.schema, list(reader)
-    metadata = {key.decode(): value.decode() for key, value in schema.metadata.items()}
+    """Set (or, for None, drop) each `header` value of the Parquet file at `path`."""
+    table = pq.read_table(path)
+    metadata = {key.decode(): value.decode() for key, value in table.schema.metadata.items()}
     for key, value in header.items():
         if value is None:
             metadata.pop(key)
         else:
             metadata[key] = value
-    with pa.OSFile(str(path), "wb") as sink, pa.ipc.new_stream(
-        sink, schema.with_metadata(metadata)
-    ) as writer:
-        for batch in batches:
-            writer.write_batch(batch.replace_schema_metadata(metadata))
+    pq.write_table(table.replace_schema_metadata(metadata), path)
 
 
 def stored_vectors(path: Path) -> np.ndarray:
-    """The file's vectors as stored, read with Arrow alone."""
-    with pa.ipc.open_stream(path) as reader:
-        column = reader.read_all().column("embedding").combine_chunks()
+    """The file's vectors as stored, read with pyarrow alone."""
+    column = pq.read_table(path).column("embedding").combine_chunks()
     return column.flatten().to_numpy(zero_copy_only=False).reshape(-1, column.type.list_size)
 
 
@@ -299,7 +292,7 @@ def test_a_head_work_is_built_by_its_runtimes_factory(rig):
 
 
 def a_copy(rig: HeadRig, work: InferenceWork, position: int) -> Path:
-    path = rig.tmp_path / f"copy-of-{position}.arrow"
+    path = rig.tmp_path / f"copy-of-{position}.parquet"
     shutil.copyfile(rig.input_path(work, position), path)
     return path
 
@@ -313,7 +306,7 @@ def a_file_from_another_backbone(rig: HeadRig, work: InferenceWork) -> Inference
 def a_file_of_another_width(rig: HeadRig, work: InferenceWork) -> InferenceWork:
     wider = build_backbone(embedding_dim=DIM + 1)
     wider_work, wider_result = run_backbone(rig.tmp_path / "wider", wider)
-    path = rig.tmp_path / "wider.arrow"
+    path = rig.tmp_path / "wider.parquet"
     named, paths = head_work(wider_work, wider_result, rig.build, outputs=(scores_request(),))
     shutil.copyfile(paths[named.recordings[1].embeddings.uri], path)
     # Named as the head's backbone, so only the width disagrees.
@@ -484,10 +477,7 @@ def published(record) -> Path:
 
 
 def header_of(record) -> dict[str, str]:
-    if record.kind == "detections":
-        return decode_metadata(pq.read_schema(published(record)).metadata)
-    with pa.ipc.open_stream(published(record)) as reader:
-        return decode_metadata(reader.schema.metadata)
+    return decode_metadata(pq.read_schema(published(record)).metadata)
 
 
 def full_head_work(rig: HeadRig) -> InferenceWork:
@@ -503,8 +493,7 @@ def test_a_head_work_scores_every_window_of_its_input(rig):
     scores = [record for record in result.artifacts if record.kind == "scores"]
     assert [(record.value, record.namespace) for record in scores] == [("0", "test"), ("1", "test")]
     for record, rows in zip(scores, ROWS, strict=True):
-        with pa.ipc.open_stream(published(record)) as reader:
-            table = reader.read_all()
+        table = pq.read_table(published(record))
         assert table.num_rows == rows * len(HEAD_LABELS)
         assert table.column("window_start_s").to_pylist() == [HOP * row for row in range(rows)]
         assert set(table.column("label").to_pylist()) == set(HEAD_LABELS)
@@ -568,10 +557,10 @@ def test_a_head_over_overlapping_embeddings_scores_the_backbones_windows(overlap
     assert result.recipe == recipe(OVERLAPPING_BACKBONE, OVERLAP)
     scores = [record for record in result.artifacts if record.kind == "scores"]
     for position, (record, rows) in enumerate(zip(scores, ROWS, strict=True)):
-        with pa.ipc.open_stream(rig.input_path(work, position)) as reader:
-            backbone_starts = reader.read_all().column("window_start_s").to_pylist()
-        with pa.ipc.open_stream(published(record)) as reader:
-            head_starts = reader.read_all().column("window_start_s").to_pylist()
+        backbone_starts = pq.read_table(rig.input_path(work, position)).column(
+            "window_start_s"
+        ).to_pylist()
+        head_starts = pq.read_table(published(record)).column("window_start_s").to_pylist()
         assert backbone_starts == [2.0 * row for row in range(rows)]
         assert head_starts == backbone_starts
 

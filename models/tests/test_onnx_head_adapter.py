@@ -574,7 +574,7 @@ def test_a_head_work_runs_through_the_engine_to_scores_and_detections(runtime, t
     recordings = []
     for name, values in vectors.items():
         recording = RecordingRef(namespace="test", value=name, audio_uri=f"s3://b/{name}.wav")
-        path = tmp_path / f"{name}.arrow"
+        path = tmp_path / f"{name}.parquet"
         write_embeddings(path, recording, values)
         named = InputArtifact(uri=str(path), checksum=checksum_file(path))
         recordings.append(recording.model_copy(update={"embeddings": named}))
@@ -589,7 +589,7 @@ def test_a_head_work_runs_through_the_engine_to_scores_and_detections(runtime, t
         settings={},
         resources={"batch_size": 2},
         outputs=(
-            ScoresRequest(contract_id="robin.scores.arrow/1", retention="full"),
+            ScoresRequest(contract_id="robin.scores.parquet/1", retention="full"),
             DetectionsRequest(
                 contract_id="robin.detections.parquet/1", policy=ThresholdPolicy(min_score=0.0)
             ),

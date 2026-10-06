@@ -420,7 +420,7 @@ def head_work(
         named.append(RecordingRef(**(recording.model_dump() | {"embeddings": embeddings})))
         paths[record.uri] = Path(url2pathname(urlparse(record.uri).path))
     source = EmbeddingArtifactInput(
-        contract_id="robin.embeddings.arrow/1",
+        contract_id="robin.embeddings.parquet/1",
         backbone=backbone.model.card,
         backbone_settings=backbone_settings or {},
     )

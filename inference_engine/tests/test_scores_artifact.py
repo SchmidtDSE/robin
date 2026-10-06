@@ -3,11 +3,13 @@
 from pathlib import Path
 
 import pyarrow as pa
-import pyarrow.compute as pc
+import pyarrow.dataset as ds
+import pyarrow.parquet as pq
 import pytest
 
 from robin_contracts.canonical import checksum_file
 from robin_contracts.cards import AudioGeometry, ModelCard, RunnerResampled, model_ref
+from robin_contracts.layout import NAMESPACE_KEY, VALUE_KEY, artifact_path
 from robin_contracts.output_contracts import ScoresRequest
 from robin_contracts.records import ClassScore
 from robin_contracts.specs import AudioSpec, Recipe
@@ -109,12 +111,12 @@ def build_work() -> InferenceWork:
         input=AudioInput(),
         settings={},
         resources={},
-        outputs=(ScoresRequest(contract_id="robin.scores.arrow/1", retention="full"),),
+        outputs=(ScoresRequest(contract_id="robin.scores.parquet/1", retention="full"),),
     )
 
 
 def build_request(**overrides) -> ScoresRequest:
-    fields = {"contract_id": "robin.scores.arrow/1", "retention": "full"}
+    fields = {"contract_id": "robin.scores.parquet/1", "retention": "full"}
     return ScoresRequest(**(fields | overrides))
 
 
@@ -157,12 +159,15 @@ def write_artifact(path, windows, *, metadata=None):
         return writer.close()
 
 
-def write_raw_stream(path, schema, batches=()):
-    with pa.OSFile(str(path), "wb") as handle:
-        with pa.ipc.new_stream(handle, schema) as stream:
-            for batch in batches:
-                stream.write_batch(batch)
+def write_raw_file(path, schema, batches=()):
+    with pq.ParquetWriter(path, schema) as writer:
+        for batch in batches:
+            writer.write_batch(batch)
     return checksum_file(path)
+
+
+def robin_keys(metadata) -> set[str]:
+    return {key for key in metadata if key.startswith("robin.")}
 
 
 def read_rows(path, checksum):
@@ -174,7 +179,7 @@ def read_rows(path, checksum):
 
 
 def test_a_window_writes_one_row_per_label(tmp_path):
-    staged = write_artifact(tmp_path / "scores.arrow", [build_window(labels=("a", "b", "c"))])
+    staged = write_artifact(tmp_path / "scores.parquet", [build_window(labels=("a", "b", "c"))])
 
     assert staged.rows == 3
     assert staged.kind == "scores"
@@ -184,7 +189,7 @@ def test_a_window_writes_one_row_per_label(tmp_path):
 
 def test_a_window_with_no_scores_writes_no_rows(tmp_path):
     staged = write_artifact(
-        tmp_path / "scores.arrow", [build_window(0.0, labels=()), build_window(6.0, labels=())]
+        tmp_path / "scores.parquet", [build_window(0.0, labels=()), build_window(6.0, labels=())]
     )
 
     assert staged.rows == 0
@@ -192,7 +197,7 @@ def test_a_window_with_no_scores_writes_no_rows(tmp_path):
 
 
 def test_the_schema_is_the_declared_four_fields_with_declared_types(tmp_path):
-    staged = write_artifact(tmp_path / "scores.arrow", [build_window()])
+    staged = write_artifact(tmp_path / "scores.parquet", [build_window()])
 
     with read_scores(staged.path, expected_checksum=staged.checksum):
         pass
@@ -207,7 +212,7 @@ def test_the_schema_is_the_declared_four_fields_with_declared_types(tmp_path):
 def test_rows_survive_a_round_trip(tmp_path):
     window = build_window(6.0, labels=("owl", "wren"), scores=[0.0, 1.0])
 
-    staged = write_artifact(tmp_path / "scores.arrow", [window])
+    staged = write_artifact(tmp_path / "scores.parquet", [window])
 
     assert read_rows(staged.path, staged.checksum) == [
         [
@@ -223,7 +228,7 @@ def test_row_order_follows_the_windows_it_was_given(tmp_path):
         build_window(6.0, labels=("a", "b")),
     ]
 
-    staged = write_artifact(tmp_path / "scores.arrow", windows)
+    staged = write_artifact(tmp_path / "scores.parquet", windows)
 
     rows = [row for batch in read_rows(staged.path, staged.checksum) for row in batch]
     assert [(row["window_start_s"], row["label"]) for row in rows] == [
@@ -235,13 +240,83 @@ def test_the_stream_is_written_in_bounded_batches(tmp_path):
     labels = tuple(f"label-{index}" for index in range(100))
     windows = [build_window(float(n) * 12.0, labels=labels) for n in range(200)]
 
-    staged = write_artifact(tmp_path / "scores.arrow", windows)
+    staged = write_artifact(tmp_path / "scores.parquet", windows)
 
     batches = read_rows(staged.path, staged.checksum)
     assert len(batches) > 1
     assert sum(len(batch) for batch in batches) == staged.rows == 20000
     # A window is never split, so a batch overshoots the bound by less than one window.
     assert all(len(batch) <= SCORE_BATCH_ROWS + len(labels) for batch in batches)
+
+
+def test_each_flush_is_one_row_group_and_every_row_reads_back(tmp_path):
+    labels = tuple(f"label-{index}" for index in range(100))
+    windows = [build_window(float(n) * 12.0, labels=labels) for n in range(200)]
+
+    staged = write_artifact(tmp_path / "scores.parquet", windows)
+
+    # A flush happens at the first window that takes the buffer to the bound.
+    per_flush = -(-SCORE_BATCH_ROWS // len(labels)) * len(labels)
+    full_flushes, rest = divmod(20000, per_flush)
+    groups = pq.ParquetFile(staged.path).metadata
+    assert [groups.row_group(n).num_rows for n in range(groups.num_row_groups)] == (
+        [per_flush] * full_flushes + [rest]
+    )
+    rows = [row for batch in read_rows(staged.path, staged.checksum) for row in batch]
+    assert len(rows) == staged.rows == 20000
+    assert [(row["window_start_s"], row["label"]) for row in rows[:2]] == [
+        (0.0, "label-0"), (0.0, "label-1"),
+    ]
+    with read_scores(staged.path, expected_checksum=staged.checksum) as stream:
+        assert robin_keys(stream.metadata) == robin_keys(
+            {key.decode(): value for key, value in build_metadata().items()}
+        )
+
+
+def test_the_same_windows_give_the_same_bytes(tmp_path):
+    labels = tuple(f"label-{index}" for index in range(100))
+    windows = [build_window(float(n) * 12.0, labels=labels) for n in range(200)]
+
+    first = write_artifact(tmp_path / "first.parquet", windows)
+    second = write_artifact(tmp_path / "second.parquet", windows)
+
+    assert first.path.read_bytes() == second.path.read_bytes()
+
+
+def test_two_recordings_read_as_one_hive_dataset(tmp_path):
+    recordings = (a_recording("soundhub", "42"), a_recording("xeno canto", "7/b"))
+    work = build_work().model_copy(update={"recordings": recordings})
+    for position, recording in enumerate(recordings):
+        path = tmp_path / artifact_path("scores", recording.namespace, recording.value)
+        path.parent.mkdir(parents=True)
+        metadata = required_metadata(
+            contract_id=CONTRACT_ID,
+            work=work,
+            recording=recording,
+            recipe=build_recipe(),
+            registry_uri="s3://b/registry.csv",
+            registry_fingerprint=REGISTRY_FINGERPRINT,
+        ) | score_metadata(build_request(), score_domain="sigmoid")
+        with ScoresWriter(path, recording=recording, metadata=metadata) as writer:
+            writer.write(build_window(12.0 * position, recording=recording))
+            writer.close()
+
+    partitioning = ds.partitioning(
+        pa.schema([(NAMESPACE_KEY, pa.string()), (VALUE_KEY, pa.string())]), flavor="hive"
+    )
+    table = ds.dataset(tmp_path / "scores", format="parquet", partitioning=partitioning).to_table()
+
+    rows = sorted(
+        (row[NAMESPACE_KEY], row[VALUE_KEY], row["window_start_s"], row["label"])
+        for row in table.to_pylist()
+    )
+    # The layout percent-encodes each value, and the dataset reader decodes it.
+    assert rows == [
+        ("soundhub", "42", 0.0, "owl"),
+        ("soundhub", "42", 0.0, "wren"),
+        ("xeno canto", "7/b", 12.0, "owl"),
+        ("xeno canto", "7/b", 12.0, "wren"),
+    ]
 
 
 def test_the_writer_places_each_value_under_its_own_column_name(tmp_path, monkeypatch):
@@ -258,7 +333,7 @@ def test_the_writer_places_each_value_under_its_own_column_name(tmp_path, monkey
     )
     monkeypatch.setattr(scores_module, "SCORES_SCHEMA", swapped)
 
-    staged = write_artifact(tmp_path / "scores.arrow", [build_window(6.0)])
+    staged = write_artifact(tmp_path / "scores.parquet", [build_window(6.0)])
 
     row = read_rows(staged.path, staged.checksum)[0][0]
     assert row["window_start_s"] == 6.0
@@ -267,7 +342,7 @@ def test_the_writer_places_each_value_under_its_own_column_name(tmp_path, monkey
 
 def test_the_file_grows_before_close(tmp_path):
     labels = tuple(f"label-{index}" for index in range(100))
-    path = tmp_path / "scores.arrow"
+    path = tmp_path / "scores.parquet"
 
     with ScoresWriter(path, recording=SOUNDHUB_42, metadata=build_metadata()) as writer:
         for n in range(120):
@@ -279,12 +354,12 @@ def test_the_file_grows_before_close(tmp_path):
 def test_a_writer_refuses_a_header_declaring_another_contract(tmp_path):
     # The staged record names this contract unconditionally, so a header naming a
     # different one would produce a file whose header and staged record disagree.
-    path = tmp_path / "scores.arrow"
+    path = tmp_path / "scores.parquet"
 
     with pytest.raises(RuntimeError) as exc:
-        ScoresWriter(path, recording=SOUNDHUB_42, metadata=build_metadata(contract_id="robin.embeddings.arrow/1"))
+        ScoresWriter(path, recording=SOUNDHUB_42, metadata=build_metadata(contract_id="robin.embeddings.parquet/1"))
 
-    assert "robin.embeddings.arrow/1" in str(exc.value)
+    assert "robin.embeddings.parquet/1" in str(exc.value)
     assert not path.exists()
 
 
@@ -294,7 +369,7 @@ def test_a_writer_refuses_a_header_missing_a_required_key(tmp_path):
         for key, value in build_metadata().items()
         if key != b"robin.recipe"
     }
-    path = tmp_path / "scores.arrow"
+    path = tmp_path / "scores.parquet"
 
     with pytest.raises(RuntimeError) as exc:
         ScoresWriter(path, recording=SOUNDHUB_42, metadata=metadata)
@@ -310,7 +385,7 @@ def test_a_writer_refuses_a_header_missing_a_key_its_retention_requires(tmp_path
         for key, value in build_metadata(request).items()
         if key != b"robin.score_top_k"
     }
-    path = tmp_path / "scores.arrow"
+    path = tmp_path / "scores.parquet"
 
     with pytest.raises(RuntimeError) as exc:
         ScoresWriter(path, recording=SOUNDHUB_42, metadata=metadata)
@@ -321,7 +396,7 @@ def test_a_writer_refuses_a_header_missing_a_key_its_retention_requires(tmp_path
 
 def test_a_writer_refuses_a_retention_the_contract_does_not_declare(tmp_path):
     metadata = build_metadata() | {b"robin.score_retention": b"banana"}
-    path = tmp_path / "scores.arrow"
+    path = tmp_path / "scores.parquet"
 
     with pytest.raises(RuntimeError) as exc:
         ScoresWriter(path, recording=SOUNDHUB_42, metadata=metadata)
@@ -331,7 +406,7 @@ def test_a_writer_refuses_a_retention_the_contract_does_not_declare(tmp_path):
 
 
 def test_a_staged_artifact_reads_back_under_the_contract_it_was_staged_as(tmp_path):
-    staged = write_artifact(tmp_path / "scores.arrow", [build_window()])
+    staged = write_artifact(tmp_path / "scores.parquet", [build_window()])
 
     with read_scores(staged.path, expected_checksum=staged.checksum) as stream:
         assert stream.metadata["robin.contract"] == staged.contract_id
@@ -341,7 +416,7 @@ def test_a_staged_artifact_reads_back_under_the_contract_it_was_staged_as(tmp_pa
 
 
 def test_a_schema_only_stream_reads_back(tmp_path):
-    staged = write_artifact(tmp_path / "scores.arrow", [])
+    staged = write_artifact(tmp_path / "scores.parquet", [])
 
     assert staged.rows == 0
     with read_scores(staged.path, expected_checksum=staged.checksum) as stream:
@@ -350,7 +425,7 @@ def test_a_schema_only_stream_reads_back(tmp_path):
 
 
 def test_the_writer_leaves_its_file_for_the_caller(tmp_path):
-    path = tmp_path / "scores.arrow"
+    path = tmp_path / "scores.parquet"
 
     with ScoresWriter(path, recording=SOUNDHUB_42, metadata=build_metadata()) as writer:
         writer.write(build_window())
@@ -362,7 +437,7 @@ def test_the_writer_leaves_its_file_for_the_caller(tmp_path):
 
 
 def test_write_after_close_is_refused(tmp_path):
-    writer = ScoresWriter(tmp_path / "scores.arrow", recording=SOUNDHUB_42, metadata=build_metadata())
+    writer = ScoresWriter(tmp_path / "scores.parquet", recording=SOUNDHUB_42, metadata=build_metadata())
     writer.close()
 
     with pytest.raises(RuntimeError):
@@ -370,7 +445,7 @@ def test_write_after_close_is_refused(tmp_path):
 
 
 def test_close_twice_is_refused(tmp_path):
-    writer = ScoresWriter(tmp_path / "scores.arrow", recording=SOUNDHUB_42, metadata=build_metadata())
+    writer = ScoresWriter(tmp_path / "scores.parquet", recording=SOUNDHUB_42, metadata=build_metadata())
     writer.close()
 
     with pytest.raises(RuntimeError):
@@ -380,7 +455,7 @@ def test_close_twice_is_refused(tmp_path):
 def test_a_writer_released_before_close_refuses_to_stage(tmp_path):
     # Releasing discards whatever was still pending, so staging here would report
     # a row count and a checksum for a file that was never finished.
-    path = tmp_path / "scores.arrow"
+    path = tmp_path / "scores.parquet"
     with pytest.raises(ZeroDivisionError):
         with ScoresWriter(path, recording=SOUNDHUB_42, metadata=build_metadata()) as writer:
             writer.write(build_window())
@@ -396,7 +471,7 @@ def test_a_writer_released_before_close_refuses_to_stage(tmp_path):
 
 
 def test_the_artifact_declares_its_contract_identifier(tmp_path):
-    staged = write_artifact(tmp_path / "scores.arrow", [build_window()])
+    staged = write_artifact(tmp_path / "scores.parquet", [build_window()])
 
     with read_scores(staged.path, expected_checksum=staged.checksum) as stream:
         assert stream.metadata["robin.contract"] == CONTRACT_ID
@@ -414,11 +489,11 @@ def test_the_artifact_declares_its_contract_identifier(tmp_path):
 def test_every_required_metadata_key_is_present_on_the_stream(tmp_path):
     request = build_request(retention="top_k", min_score=0.005, top_k=5)
     staged = write_artifact(
-        tmp_path / "scores.arrow", [build_window()], metadata=build_metadata(request)
+        tmp_path / "scores.parquet", [build_window()], metadata=build_metadata(request)
     )
 
     with read_scores(staged.path, expected_checksum=staged.checksum) as stream:
-        assert set(stream.metadata) == set(TOP_K_KEYS)
+        assert robin_keys(stream.metadata) == set(TOP_K_KEYS)
         assert len(TOP_K_KEYS) == 15
 
 
@@ -430,8 +505,8 @@ def test_a_reader_refuses_an_artifact_missing_any_required_key(tmp_path, absent)
         for key, value in build_metadata(request).items()
         if key != absent.encode("utf-8")
     }
-    path = tmp_path / "scores.arrow"
-    checksum = write_raw_stream(path, SCORES_SCHEMA.with_metadata(metadata))
+    path = tmp_path / "scores.parquet"
+    checksum = write_raw_file(path, SCORES_SCHEMA.with_metadata(metadata))
 
     with pytest.raises(errors.EngineError) as exc:
         with read_scores(path, expected_checksum=checksum):
@@ -451,8 +526,8 @@ def test_a_reader_refuses_a_scores_artifact_that_names_no_registry(tmp_path):
         registry_uri=None,
         registry_fingerprint=None,
     ) | score_metadata(build_request(), score_domain="sigmoid")
-    path = tmp_path / "scores.arrow"
-    checksum = write_raw_stream(path, SCORES_SCHEMA.with_metadata(metadata))
+    path = tmp_path / "scores.parquet"
+    checksum = write_raw_file(path, SCORES_SCHEMA.with_metadata(metadata))
 
     with pytest.raises(errors.EngineError) as exc:
         with read_scores(path, expected_checksum=checksum):
@@ -467,8 +542,8 @@ def test_a_reader_refuses_a_header_that_is_not_utf8(tmp_path):
     # Bytes this engine did not write are refused by code like every other distrust
     # on this path, rather than escaping as a decoding error from the standard library.
     metadata = build_metadata() | {b"robin.recipe": b"\xff\xfe"}
-    path = tmp_path / "scores.arrow"
-    checksum = write_raw_stream(path, SCORES_SCHEMA.with_metadata(metadata))
+    path = tmp_path / "scores.parquet"
+    checksum = write_raw_file(path, SCORES_SCHEMA.with_metadata(metadata))
 
     with pytest.raises(errors.EngineError) as exc:
         with read_scores(path, expected_checksum=checksum):
@@ -481,8 +556,8 @@ def test_a_reader_refuses_a_header_that_is_not_utf8(tmp_path):
 def test_a_reader_refuses_a_stream_carrying_no_metadata_at_all(tmp_path):
     # The right four columns and an empty header is what every tool but this writer
     # produces, and Arrow reports that header as absent rather than as empty.
-    path = tmp_path / "scores.arrow"
-    checksum = write_raw_stream(path, SCORES_SCHEMA)
+    path = tmp_path / "scores.parquet"
+    checksum = write_raw_file(path, SCORES_SCHEMA)
 
     with pytest.raises(errors.EngineError) as exc:
         with read_scores(path, expected_checksum=checksum):
@@ -492,7 +567,7 @@ def test_a_reader_refuses_a_stream_carrying_no_metadata_at_all(tmp_path):
 
 
 def test_a_reader_refuses_a_checksum_mismatch(tmp_path):
-    staged = write_artifact(tmp_path / "scores.arrow", [build_window()])
+    staged = write_artifact(tmp_path / "scores.parquet", [build_window()])
     bytes_on_disk = bytearray(staged.path.read_bytes())
     bytes_on_disk[-4] ^= 0xFF
     staged.path.write_bytes(bytes(bytes_on_disk))
@@ -506,7 +581,7 @@ def test_a_reader_refuses_a_checksum_mismatch(tmp_path):
 
 def test_a_reader_refuses_a_file_that_is_not_there(tmp_path):
     with pytest.raises(errors.EngineError) as exc:
-        with read_scores(tmp_path / "absent.arrow", expected_checksum=FILE_DIGEST):
+        with read_scores(tmp_path / "absent.parquet", expected_checksum=FILE_DIGEST):
             pass
 
     assert exc.value.code == errors.ARTIFACT_UNREADABLE
@@ -517,8 +592,8 @@ def test_a_reader_refuses_a_missing_field(tmp_path):
     narrowed = pa.schema(
         [field for field in SCORES_SCHEMA if field.name != "window_end_s"]
     ).with_metadata(build_metadata())
-    path = tmp_path / "scores.arrow"
-    checksum = write_raw_stream(path, narrowed)
+    path = tmp_path / "scores.parquet"
+    checksum = write_raw_file(path, narrowed)
 
     with pytest.raises(errors.EngineError) as exc:
         with read_scores(path, expected_checksum=checksum):
@@ -537,8 +612,8 @@ def test_a_reader_refuses_a_label_stored_as_a_number(tmp_path):
             for field in SCORES_SCHEMA
         ]
     ).with_metadata(build_metadata())
-    path = tmp_path / "scores.arrow"
-    checksum = write_raw_stream(path, numbered)
+    path = tmp_path / "scores.parquet"
+    checksum = write_raw_file(path, numbered)
 
     with pytest.raises(errors.EngineError) as exc:
         with read_scores(path, expected_checksum=checksum):
@@ -556,8 +631,8 @@ def test_a_reader_refuses_a_narrowed_score_type(tmp_path):
             for field in SCORES_SCHEMA
         ]
     ).with_metadata(build_metadata())
-    path = tmp_path / "scores.arrow"
-    checksum = write_raw_stream(path, narrowed)
+    path = tmp_path / "scores.parquet"
+    checksum = write_raw_file(path, narrowed)
 
     with pytest.raises(errors.EngineError) as exc:
         with read_scores(path, expected_checksum=checksum):
@@ -569,30 +644,30 @@ def test_a_reader_refuses_a_narrowed_score_type(tmp_path):
 
 def test_a_reader_matches_fields_by_name_not_position(tmp_path):
     reordered = pa.schema(list(reversed(list(SCORES_SCHEMA)))).with_metadata(build_metadata())
-    path = tmp_path / "scores.arrow"
-    checksum = write_raw_stream(path, reordered)
+    path = tmp_path / "scores.parquet"
+    checksum = write_raw_file(path, reordered)
 
     with read_scores(path, expected_checksum=checksum) as stream:
         assert stream.metadata["robin.contract"] == CONTRACT_ID
 
 
 def test_a_reader_refuses_another_contracts_artifact(tmp_path):
-    metadata = build_metadata(contract_id="robin.embeddings.arrow/1")
-    path = tmp_path / "embeddings.arrow"
-    checksum = write_raw_stream(path, SCORES_SCHEMA.with_metadata(metadata))
+    metadata = build_metadata(contract_id="robin.embeddings.parquet/1")
+    path = tmp_path / "embeddings.parquet"
+    checksum = write_raw_file(path, SCORES_SCHEMA.with_metadata(metadata))
 
     with pytest.raises(errors.EngineError) as exc:
         with read_scores(path, expected_checksum=checksum):
             pass
 
     assert exc.value.code == errors.ARTIFACT_CONTRACT_UNEXPECTED
-    assert "robin.embeddings.arrow/1" in exc.value.detail
+    assert "robin.embeddings.parquet/1" in exc.value.detail
 
 
 def test_a_thresholded_artifact_declares_the_requested_floor(tmp_path):
     request = build_request(retention="thresholded", min_score=0.005)
     staged = write_artifact(
-        tmp_path / "thresholded.arrow", [build_window()], metadata=build_metadata(request)
+        tmp_path / "thresholded.parquet", [build_window()], metadata=build_metadata(request)
     )
 
     with read_scores(staged.path, expected_checksum=staged.checksum) as stream:
@@ -601,7 +676,7 @@ def test_a_thresholded_artifact_declares_the_requested_floor(tmp_path):
         assert "robin.score_top_k" not in stream.metadata
 
     full = write_artifact(
-        tmp_path / "full.arrow", [build_window()], metadata=build_metadata(build_request())
+        tmp_path / "full.parquet", [build_window()], metadata=build_metadata(build_request())
     )
     with read_scores(full.path, expected_checksum=full.checksum) as stream:
         assert stream.metadata["robin.score_retention"] == "full"
@@ -615,8 +690,8 @@ def test_a_reader_refuses_a_schema_that_names_one_column_twice(tmp_path):
     duplicated = pa.schema(
         list(SCORES_SCHEMA) + [pa.field("score", pa.string(), nullable=False)]
     ).with_metadata(build_metadata())
-    path = tmp_path / "scores.arrow"
-    checksum = write_raw_stream(path, duplicated)
+    path = tmp_path / "scores.parquet"
+    checksum = write_raw_file(path, duplicated)
 
     with pytest.raises(errors.EngineError) as exc:
         with read_scores(path, expected_checksum=checksum):
@@ -634,8 +709,8 @@ def test_a_reader_refuses_a_retention_the_contract_does_not_declare(tmp_path, de
     metadata = build_metadata() | {
         b"robin.score_retention": declared.encode("utf-8")
     }
-    path = tmp_path / "scores.arrow"
-    checksum = write_raw_stream(path, SCORES_SCHEMA.with_metadata(metadata))
+    path = tmp_path / "scores.parquet"
+    checksum = write_raw_file(path, SCORES_SCHEMA.with_metadata(metadata))
 
     with pytest.raises(errors.EngineError) as exc:
         with read_scores(path, expected_checksum=checksum):
@@ -651,7 +726,7 @@ def test_a_reader_accepts_every_retention_the_contract_declares(tmp_path, retent
               "top_k": {"min_score": 0.005, "top_k": 5}}[retention]
     request = build_request(retention=retention, **fields)
     staged = write_artifact(
-        tmp_path / f"{retention}.arrow", [build_window()],
+        tmp_path / f"{retention}.parquet", [build_window()],
         metadata=build_metadata(request),
     )
 
@@ -671,50 +746,65 @@ def test_a_reader_accepts_additional_columns(tmp_path):
         "provenance": "external producer",
     }]
     batch = pa.RecordBatch.from_pylist(rows, schema=widened)
-    path = tmp_path / "scores.arrow"
-    checksum = write_raw_stream(path, widened, (batch,))
+    path = tmp_path / "scores.parquet"
+    checksum = write_raw_file(path, widened, (batch,))
 
     with read_scores(path, expected_checksum=checksum) as stream:
         assert [row for batch in stream.batches for row in batch.to_pylist()] == rows
 
 
-def test_a_reader_reports_a_truncated_batch_as_a_typed_error(tmp_path):
-    staged = write_artifact(tmp_path / "scores.arrow", [build_window()])
-    # Remove the stream terminator and part of the batch body, leaving its header intact.
+def test_a_reader_refuses_a_truncated_file_when_it_opens(tmp_path):
+    staged = write_artifact(tmp_path / "scores.parquet", [build_window()])
+    # Remove the footer, leaving the row group intact.
     staged.path.write_bytes(staged.path.read_bytes()[:-20])
     checksum = checksum_file(staged.path)
 
-    with read_scores(staged.path, expected_checksum=checksum) as stream:
-        with pytest.raises(errors.EngineError) as exc:
-            list(stream.batches)
+    with pytest.raises(errors.EngineError) as exc:
+        with read_scores(staged.path, expected_checksum=checksum):
+            pass
 
     assert exc.value.code == errors.ARTIFACT_MALFORMED
     assert exc.value.stage == errors.READ_INPUT_ARTIFACT
     assert staged.path.name in exc.value.detail
+    assert "Parquet" in exc.value.detail
 
 
-def test_a_reader_refuses_a_null_score(tmp_path):
-    staged = write_artifact(tmp_path / "scores.arrow", [build_window()])
-    with pa.ipc.open_stream(staged.path) as reader:
-        schema, [batch] = reader.schema, list(reader)
-    scores = batch.column("score")
-    nulled = pc.if_else(pa.array([True, False]), pa.nulls(2, scores.type), scores)
-    columns = [nulled if name == "score" else batch.column(name) for name in schema.names]
-    # The schema still declares the column not nullable; Arrow does not enforce it.
-    checksum = write_raw_stream(
-        staged.path, schema, (pa.RecordBatch.from_arrays(columns, schema=schema),)
-    )
+def test_a_reader_refuses_bytes_that_are_not_parquet(tmp_path):
+    path = tmp_path / "scores.parquet"
+    path.write_bytes(b"not a parquet file")
 
-    with read_scores(staged.path, expected_checksum=checksum) as stream:
-        with pytest.raises(errors.EngineError) as exc:
-            list(stream.batches)
+    with pytest.raises(errors.EngineError) as exc:
+        with read_scores(path, expected_checksum=checksum_file(path)):
+            pass
 
     assert exc.value.code == errors.ARTIFACT_MALFORMED
+    assert exc.value.stage == errors.READ_INPUT_ARTIFACT
+
+
+@pytest.mark.parametrize("score", [0.5, None])
+def test_a_reader_refuses_a_nullable_score_column_before_any_row(tmp_path, score):
+    relaxed = pa.schema(
+        [
+            pa.field(field.name, field.type, nullable=field.name == "score")
+            for field in SCORES_SCHEMA
+        ]
+    ).with_metadata(build_metadata())
+    row = {"window_start_s": 0.0, "window_end_s": 12.0, "label": "owl", "score": score}
+    path = tmp_path / "scores.parquet"
+    checksum = write_raw_file(
+        path, relaxed, (pa.RecordBatch.from_pylist([row], schema=relaxed),)
+    )
+
+    with pytest.raises(errors.EngineError) as exc:
+        with read_scores(path, expected_checksum=checksum):
+            pass
+
+    assert exc.value.code == errors.ARTIFACT_SCHEMA_INVALID
     assert "'score'" in exc.value.detail
 
 
 def test_a_reader_does_not_translate_errors_from_the_consumer(tmp_path):
-    staged = write_artifact(tmp_path / "scores.arrow", [build_window()])
+    staged = write_artifact(tmp_path / "scores.parquet", [build_window()])
     failure = OSError("consumer failed")
 
     with pytest.raises(OSError) as exc:

@@ -99,12 +99,12 @@ def build_pinned_model(card: ModelCard | HeadCard | None = None, **overrides) ->
 
 
 def build_scores(**overrides) -> ScoresRequest:
-    fields = {"contract_id": "robin.scores.arrow/1", "retention": "full"}
+    fields = {"contract_id": "robin.scores.parquet/1", "retention": "full"}
     return ScoresRequest(**(fields | overrides))
 
 
 def build_embeddings(**overrides) -> EmbeddingsRequest:
-    fields = {"contract_id": "robin.embeddings.arrow/1"}
+    fields = {"contract_id": "robin.embeddings.parquet/1"}
     return EmbeddingsRequest(**(fields | overrides))
 
 
@@ -133,14 +133,14 @@ def build_head_work(
 ) -> InferenceWork:
     """A work over `backbone`'s saved embeddings, running the head build_head returns
     unless given another card."""
-    embeddings = InputArtifact(uri="s3://b/42/embeddings.arrow", checksum=FILE_DIGEST)
+    embeddings = InputArtifact(uri="s3://b/42/embeddings.parquet", checksum=FILE_DIGEST)
     fields = {
         "recordings": (
             RecordingRef(
                 namespace="soundhub", value="42", audio_uri="s3://b/4.wav", embeddings=embeddings
             ),
         ),
-        "input": EmbeddingArtifactInput(contract_id="robin.embeddings.arrow/1", backbone=backbone),
+        "input": EmbeddingArtifactInput(contract_id="robin.embeddings.parquet/1", backbone=backbone),
         "settings": {},
     }
     return build_work(card=build_head() if card is None else card, **(fields | overrides))
@@ -559,7 +559,7 @@ OVERLAPPING_HEAD = build_head(backbone=model_ref(OVERLAPPING_BACKBONE))
 
 def build_overlapping_head_work(backbone_settings) -> InferenceWork:
     source = EmbeddingArtifactInput(
-        contract_id="robin.embeddings.arrow/1",
+        contract_id="robin.embeddings.parquet/1",
         backbone=OVERLAPPING_BACKBONE,
         backbone_settings=backbone_settings,
     )

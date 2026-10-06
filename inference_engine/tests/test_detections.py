@@ -307,7 +307,7 @@ RECIPE = Recipe(
     dtype="float32",
     settings={},
 )
-SCORES_REQUEST = ScoresRequest(contract_id="robin.scores.arrow/1", retention="full")
+SCORES_REQUEST = ScoresRequest(contract_id="robin.scores.parquet/1", retention="full")
 REGISTRY_URI = "s3://b/registry.csv"
 OWLS = a_registry(BARRED_OWL, UNRESOLVED_OWL, RAIN)
 
@@ -355,8 +355,8 @@ def header(work, recording, contract_id):
 def stage_scores(folder: Path, work, recording, windows) -> StagedArtifact:
     """`windows` is a list of `(start, {label: score})`; each window lasts three seconds."""
     folder.mkdir(parents=True, exist_ok=True)
-    metadata = header(work, recording, "robin.scores.arrow/1")
-    with ScoresWriter(folder / "scores.arrow", recording=recording, metadata=metadata) as writer:
+    metadata = header(work, recording, "robin.scores.parquet/1")
+    with ScoresWriter(folder / "scores.parquet", recording=recording, metadata=metadata) as writer:
         for start, scores in windows:
             writer.write(
                 AcceptedWindow(
@@ -563,7 +563,7 @@ def test_a_batch_the_reader_refuses_keeps_the_readers_code(tmp_path, monkeypatch
     recording = a_recording()
     work = a_work(recording)
     staged = stage_scores(tmp_path, work, recording, many_windows_then({"STVA": 0.9}))
-    failing_after_one_batch(monkeypatch, malformed("scores.arrow has an unreadable batch"))
+    failing_after_one_batch(monkeypatch, malformed("scores.parquet has an unreadable batch"))
 
     error = refused(lambda: detect(tmp_path, work, staged))
 

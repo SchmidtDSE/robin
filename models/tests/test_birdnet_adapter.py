@@ -1163,8 +1163,8 @@ def test_a_work_runs_through_the_engine_to_scores_and_embeddings(runtime, tmp_pa
         settings={},
         resources={"batch_size": 2},
         outputs=(
-            ScoresRequest(contract_id="robin.scores.arrow/1", retention="full"),
-            EmbeddingsRequest(contract_id="robin.embeddings.arrow/1"),
+            ScoresRequest(contract_id="robin.scores.parquet/1", retention="full"),
+            EmbeddingsRequest(contract_id="robin.embeddings.parquet/1"),
         ),
     )
     root = tmp_path / "published"

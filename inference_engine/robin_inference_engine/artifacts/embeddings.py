@@ -1,4 +1,4 @@
-"""Read and write Arrow streams containing one recording's raw embeddings, one per window.
+"""Read and write Parquet files containing one recording's raw embeddings, one per window.
 
 The rows do not name their recording: the published path and the artifact record do.
 
@@ -15,6 +15,7 @@ from typing import get_args
 
 import numpy as np
 import pyarrow as pa
+import pyarrow.parquet as pq
 
 from robin_contracts.canonical import checksum_file
 from robin_contracts.output_contracts import EmbeddingsContractId
@@ -34,7 +35,7 @@ from robin_inference_engine.artifacts.metadata import (
 from robin_inference_engine.artifacts.staging import (
     StagedArtifact,
     invalid_schema,
-    open_stream,
+    open_parquet,
     read_batches,
     require_checksum,
     require_contract,
@@ -44,7 +45,7 @@ from robin_inference_engine.artifacts.staging import (
 CONTRACT_ID: EmbeddingsContractId = get_args(EmbeddingsContractId)[0]
 
 # In bytes, not rows: a row is a whole vector, so rows bound memory differently per model.
-# ~ 1 megabyte
+# ~ 1 megabyte. It sets the rows per row group when writing and per batch when reading.
 EMBEDDING_BATCH_BYTES = 1 << 20
 
 _ARROW_VALUE_TYPE: dict[str, pa.DataType] = {
@@ -64,6 +65,15 @@ _DTYPE_NAME: dict[pa.DataType, str] = {
 _EMBEDDING_FIELD = "embedding"
 
 
+def batch_rows(dim: int, storage_dtype: str) -> int:
+    """The rows of `dim` values of `storage_dtype` that fit in `EMBEDDING_BATCH_BYTES`.
+
+    The width and value type are fixed for a work, so row groups are cut by count and a
+    file's bytes depend only on its rows.
+    """
+    return max(1, EMBEDDING_BATCH_BYTES // (dim * _NUMPY_VALUE_TYPE[storage_dtype].itemsize))
+
+
 def embeddings_schema(dim: int, storage_dtype: str) -> pa.Schema:
     """The three declared fields, with the width and value type in the list type."""
     return pa.schema(
@@ -80,10 +90,10 @@ def embeddings_schema(dim: int, storage_dtype: str) -> pa.Schema:
 
 
 class EmbeddingsWriter:
-    """Writes one vector per accepted window of one recording to an Arrow stream, a
-    batch at a time.
+    """Writes one vector per accepted window of one recording to a Parquet file, a row
+    group at a time.
 
-    The caller supplies the width, so a stream holding no window is still correctly typed.
+    The caller supplies the width, so a file holding no window is still correctly typed.
     """
 
     def __init__(
@@ -100,12 +110,11 @@ class EmbeddingsWriter:
         self._dim = dim
         self._storage_dtype = storage_dtype
         self._value_dtype = _NUMPY_VALUE_TYPE[storage_dtype]
-        self._batch_rows = max(1, EMBEDDING_BATCH_BYTES // (dim * self._value_dtype.itemsize))
+        self._batch_rows = batch_rows(dim, storage_dtype)
         self._path = path
         self._recording = recording
-        self._file: pa.OSFile | None = pa.OSFile(str(path), "wb")
-        self._stream = pa.ipc.new_stream(
-            self._file, self._schema.with_metadata(dict(metadata))
+        self._writer: pq.ParquetWriter | None = pq.ParquetWriter(
+            path, self._schema.with_metadata(dict(metadata))
         )
         self._pending = self._empty_columns()
         self._pending_rows = 0
@@ -114,7 +123,7 @@ class EmbeddingsWriter:
 
     def write(self, window: AcceptedWindow) -> None:
         """Append this window's vector, and nothing at all if it carries none."""
-        if self._closed or self._stream is None:
+        if self._closed or self._writer is None:
             raise RuntimeError(f"{self._path.name} is closed; no window can be added")
         if window.embedding is None:
             return
@@ -128,10 +137,10 @@ class EmbeddingsWriter:
             self._flush()
 
     def close(self) -> StagedArtifact:
-        """Finish the stream and stage the file. The file stays on disk."""
+        """Finish the file and stage it. The file stays on disk."""
         if self._closed:
             raise RuntimeError(f"{self._path.name} has already been closed")
-        if self._stream is None:
+        if self._writer is None:
             # Releasing discards whatever was still pending, so the row count and
             # checksum staged here would describe a file that was never finished.
             raise RuntimeError(f"{self._path.name} was released before it was closed")
@@ -156,12 +165,9 @@ class EmbeddingsWriter:
         self._release()
 
     def _release(self) -> None:
-        if self._stream is not None:
-            self._stream.close()
-            self._stream = None
-        if self._file is not None:
-            self._file.close()
-            self._file = None
+        if self._writer is not None:
+            self._writer.close()
+            self._writer = None
 
     def _require_declared_width(self, window: AcceptedWindow) -> None:
         # The acceptance boundary refused every other width, so one arriving here is
@@ -191,14 +197,15 @@ class EmbeddingsWriter:
         )
 
     def _flush(self) -> None:
-        if self._stream is None:
-            raise RuntimeError(f"{self._path.name} has no open stream to write to")
+        if self._writer is None:
+            raise RuntimeError(f"{self._path.name} has no open file to write to")
         if not self._pending_rows:
             return
-        self._stream.write_batch(
+        self._writer.write_batch(
             pa.RecordBatch.from_arrays(
                 [self._column(field) for field in self._schema], schema=self._schema
-            )
+            ),
+            row_group_size=self._pending_rows,
         )
         self._rows += self._pending_rows
         self._pending = self._empty_columns()
@@ -237,11 +244,15 @@ def read_embeddings(path: Path, *, expected_checksum: str) -> Iterator[Embedding
         raise unreadable(path.name, exc) from exc
     with handle:
         require_checksum(path.name, actual=actual, expected=expected_checksum)
-        with open_stream(handle, path.name) as reader:
-            yield EmbeddingsStream(
-                metadata=_verified_header(reader.schema),
-                batches=read_batches(reader, path.name),
-            )
+        file = open_parquet(handle, path.name)
+        metadata = _verified_header(file.schema_arrow)
+        rows = batch_rows(
+            _declared_dim(metadata), _declared_storage_dtype(metadata)
+        )
+        yield EmbeddingsStream(
+            metadata=metadata,
+            batches=read_batches(file, path.name, batch_rows=rows),
+        )
 
 
 def _verified_header(schema: pa.Schema) -> dict[str, str]:

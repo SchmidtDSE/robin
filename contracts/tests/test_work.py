@@ -52,7 +52,7 @@ HEAD = HeadCard(
     taxa_registry_digest=REGISTRY_DIGEST,
 )
 
-EMBEDDINGS_INPUT = EmbeddingArtifactInput(contract_id="robin.embeddings.arrow/1", backbone=CARD)
+EMBEDDINGS_INPUT = EmbeddingArtifactInput(contract_id="robin.embeddings.parquet/1", backbone=CARD)
 
 
 def build_recording(**overrides) -> RecordingRef:
@@ -82,7 +82,7 @@ def build_pinned_model(**overrides) -> PinnedModel:
 
 
 def build_scores(**overrides) -> ScoresRequest:
-    fields = {"contract_id": "robin.scores.arrow/1", "retention": "full"}
+    fields = {"contract_id": "robin.scores.parquet/1", "retention": "full"}
     return ScoresRequest(**(fields | overrides))
 
 
@@ -228,7 +228,7 @@ def test_a_pinned_model_round_trips_as_the_kind_of_card_it_holds(card):
 
 
 def build_embeddings_file(**overrides) -> InputArtifact:
-    fields = {"uri": "s3://bucket/42/embeddings.arrow", "checksum": FILE_DIGEST}
+    fields = {"uri": "s3://bucket/42/embeddings.parquet", "checksum": FILE_DIGEST}
     return InputArtifact(**(fields | overrides))
 
 
@@ -257,7 +257,7 @@ def test_an_embeddings_input_names_no_backbone_settings_by_default():
 
 def test_an_embeddings_input_with_backbone_settings_round_trips():
     source = EmbeddingArtifactInput(
-        contract_id="robin.embeddings.arrow/1",
+        contract_id="robin.embeddings.parquet/1",
         backbone=CARD,
         backbone_settings={"window_overlap": 1.0},
     )
@@ -272,7 +272,7 @@ def test_an_embeddings_input_with_backbone_settings_round_trips():
 def test_backbone_settings_reject_a_non_finite_float(value):
     with pytest.raises(ValidationError):
         EmbeddingArtifactInput(
-            contract_id="robin.embeddings.arrow/1",
+            contract_id="robin.embeddings.parquet/1",
             backbone=CARD,
             backbone_settings={"window_overlap": value},
         )

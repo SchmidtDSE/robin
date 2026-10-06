@@ -70,7 +70,7 @@ def required_metadata(
     registry_uri: str | None,
     registry_fingerprint: str | None,
 ) -> dict[bytes, bytes]:
-    """The provenance keys every artifact carries, as Arrow metadata.
+    """The provenance keys every artifact carries, as schema metadata.
 
     The header names `recording`, the one recording the file holds, by its namespace
     and value as given. The work is identified narrowed to that recording, so the
@@ -146,9 +146,9 @@ def detection_metadata(
 
 
 def decode_metadata(raw: Mapping[bytes, bytes] | None) -> dict[str, str]:
-    """Arrow's byte keys and values, decoded to text.
+    """A schema's byte keys and values, decoded to text.
 
-    Arrow reports a missing header as `None`, which becomes an empty mapping for the
+    pyarrow reports a missing header as `None`, which becomes an empty mapping for the
     caller's key check to refuse. Bytes that are not valid UTF-8 raise a typed failure.
     """
     if raw is None:

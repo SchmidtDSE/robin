@@ -42,7 +42,7 @@ def _staged(directory: Path, data: bytes = DATA) -> Path:
 def _create(writer, source, *, checksum=None, namespace="soundhub", value="42"):
     return writer.create(
         kind="scores",
-        contract_id="robin.scores.arrow/1",
+        contract_id="robin.scores.parquet/1",
         namespace=namespace,
         value=value,
         source=source,
@@ -105,7 +105,7 @@ def test_a_file_is_published_at_its_recordings_key(s3_bucket, tmp_path, root, pr
     key = _key(prefix)
     assert _stored(s3_bucket, key) == DATA
     assert record.kind == "scores"
-    assert record.contract_id == "robin.scores.arrow/1"
+    assert record.contract_id == "robin.scores.parquet/1"
     assert record.namespace == "soundhub"
     assert record.value == "42"
     assert record.uri == f"s3://{s3_bucket}/{key}"

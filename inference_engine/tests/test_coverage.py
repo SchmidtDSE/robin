@@ -66,7 +66,7 @@ def build_window(**overrides) -> AcceptedWindow:
 
 
 def build_scores_request(**overrides) -> ScoresRequest:
-    fields = {"contract_id": "robin.scores.arrow/1", "retention": "full"}
+    fields = {"contract_id": "robin.scores.parquet/1", "retention": "full"}
     return ScoresRequest(**(fields | overrides))
 
 
@@ -112,10 +112,10 @@ def build_recipe() -> Recipe:
 def build_artifact(**overrides) -> ArtifactRecord:
     fields = {
         "kind": "scores",
-        "contract_id": "robin.scores.arrow/1",
+        "contract_id": "robin.scores.parquet/1",
         "namespace": "soundhub",
         "value": "0",
-        "uri": "s3://bucket/scores.arrow",
+        "uri": "s3://bucket/scores.parquet",
         "checksum": FILE_DIGEST,
         "size_bytes": 64,
         "rows": 1,
@@ -399,7 +399,7 @@ def test_no_artifact_has_a_kind_the_work_did_not_request():
         check_completion_evidence(work, unrequested)
 
     embedded = cover(work.recordings, embedding=np.zeros(4, dtype=np.float32))
-    embeddings = build_artifact(kind="embeddings", contract_id="robin.embeddings.arrow/1")
+    embeddings = build_artifact(kind="embeddings", contract_id="robin.embeddings.parquet/1")
     with pytest.raises(RuntimeError, match="embeddings"):
         check_completion_evidence(
             work,
@@ -409,7 +409,7 @@ def test_no_artifact_has_a_kind_the_work_did_not_request():
         )
 
     embeddings_only = build_work(
-        outputs=(EmbeddingsRequest(contract_id="robin.embeddings.arrow/1"),)
+        outputs=(EmbeddingsRequest(contract_id="robin.embeddings.parquet/1"),)
     )
     check_completion_evidence(
         embeddings_only,

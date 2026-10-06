@@ -86,10 +86,10 @@ def build_pinned_model() -> PinnedModel:
 def build_artifact(**overrides) -> ArtifactRecord:
     fields = {
         "kind": "scores",
-        "contract_id": "robin.scores.arrow/1",
+        "contract_id": "robin.scores.parquet/1",
         "namespace": "soundhub",
         "value": "42",
-        "uri": "s3://bucket/scores.arrow",
+        "uri": "s3://bucket/scores.parquet",
         "checksum": FILE_DIGEST,
         "size_bytes": 1024,
         "rows": 0,
@@ -112,7 +112,7 @@ def build_coverage(**overrides) -> RecordingCoverage:
 
 
 def build_scores_request(**overrides) -> ScoresRequest:
-    fields = {"contract_id": "robin.scores.arrow/1", "retention": "full"}
+    fields = {"contract_id": "robin.scores.parquet/1", "retention": "full"}
     return ScoresRequest(**(fields | overrides))
 
 
@@ -156,7 +156,7 @@ def test_an_artifact_record_round_trips():
     assert ArtifactRecord(**record.model_dump(mode="json")) == record
 
 
-@pytest.mark.parametrize("contract_id", ["robin.inference-work/1", "robin.scores.arrow/2"])
+@pytest.mark.parametrize("contract_id", ["robin.inference-work/1", "robin.scores.parquet/2"])
 def test_an_artifact_record_refuses_an_unknown_contract_id(contract_id):
     with pytest.raises(ValidationError):
         build_artifact(contract_id=contract_id)
@@ -365,7 +365,7 @@ def test_a_coverage_refusal_names_the_recording():
 
 def build_embeddings_artifact(**overrides) -> ArtifactRecord:
     return build_artifact(
-        **({"kind": "embeddings", "contract_id": "robin.embeddings.arrow/1"} | overrides)
+        **({"kind": "embeddings", "contract_id": "robin.embeddings.parquet/1"} | overrides)
     )
 
 

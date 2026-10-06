@@ -26,9 +26,9 @@ RECORDING = RecordingRef(namespace="soundhub", value="42", audio_uri="s3://b/42.
 def build_staged(tmp_path) -> StagedArtifact:
     return StagedArtifact(
         kind="scores",
-        contract_id="robin.scores.arrow/1",
+        contract_id="robin.scores.parquet/1",
         recording=RECORDING,
-        path=tmp_path / "scores.arrow",
+        path=tmp_path / "scores.parquet",
         checksum="sha256:" + "0" * 64,
         rows=3,
     )
@@ -57,16 +57,16 @@ def test_a_checksum_that_does_not_match_is_refused():
 
 
 def test_the_contract_being_read_is_accepted():
-    require_contract("robin.scores.arrow/1", expected="robin.scores.arrow/1")
+    require_contract("robin.scores.parquet/1", expected="robin.scores.parquet/1")
 
 
 def test_any_other_declared_contract_is_refused():
     with pytest.raises(errors.EngineError) as exc:
-        require_contract(None, expected="robin.scores.arrow/1")
+        require_contract(None, expected="robin.scores.parquet/1")
 
     assert exc.value.code == errors.ARTIFACT_CONTRACT_UNEXPECTED
     assert exc.value.stage == errors.READ_INPUT_ARTIFACT
-    assert "robin.scores.arrow/1" in exc.value.detail
+    assert "robin.scores.parquet/1" in exc.value.detail
 
 
 def test_a_readers_failures_name_their_code_and_the_stage_that_raised_them():

@@ -122,11 +122,11 @@ DROPPING_CARD = build_card(pad="drop")
 
 
 def scores_request() -> ScoresRequest:
-    return ScoresRequest(contract_id="robin.scores.arrow/1", retention="full")
+    return ScoresRequest(contract_id="robin.scores.parquet/1", retention="full")
 
 
 def embeddings_request() -> EmbeddingsRequest:
-    return EmbeddingsRequest(contract_id="robin.embeddings.arrow/1")
+    return EmbeddingsRequest(contract_id="robin.embeddings.parquet/1")
 
 
 class Rig:
@@ -213,8 +213,8 @@ def assert_nothing_constructed(rig: Rig) -> None:
 
 
 def test_a_backbone_given_saved_embeddings_is_refused_before_any_input_is_fetched(rig):
-    source = EmbeddingArtifactInput(contract_id="robin.embeddings.arrow/1", backbone=CARD)
-    embeddings = InputArtifact(uri="file:///embeddings.arrow", checksum="sha256:" + "1" * 64)
+    source = EmbeddingArtifactInput(contract_id="robin.embeddings.parquet/1", backbone=CARD)
+    embeddings = InputArtifact(uri="file:///embeddings.parquet", checksum="sha256:" + "1" * 64)
     recording = rig.build.recording("0", embeddings=embeddings)
     work = rig.work(recordings=(recording,), input=source)
 
@@ -439,7 +439,7 @@ def test_a_setting_the_card_does_not_declare_is_refused_before_construction(rig)
 
 
 def test_an_explicit_storage_width_the_card_does_not_declare_is_refused_before_construction(rig):
-    request = EmbeddingsRequest(contract_id="robin.embeddings.arrow/1", storage_dtype="float16")
+    request = EmbeddingsRequest(contract_id="robin.embeddings.parquet/1", storage_dtype="float16")
     work = rig.work(outputs=(request,))
 
     result = rig.run(work)
@@ -679,7 +679,7 @@ def test_the_model_is_built_from_the_verified_files_and_the_work(rig):
 def test_a_top_k_request_publishes_the_first_k_of_a_full_stream_per_window(taxa_rig):
     rig = taxa_rig
     request = ScoresRequest(
-        contract_id="robin.scores.arrow/1", retention="top_k", min_score=0.0, top_k=2
+        contract_id="robin.scores.parquet/1", retention="top_k", min_score=0.0, top_k=2
     )
     work = rig.work(outputs=(request,))
     # The model emits every label in output order; owl and spotted tie in the first.
@@ -705,7 +705,7 @@ def test_a_top_k_request_publishes_the_first_k_of_a_full_stream_per_window(taxa_
 
 def test_a_thresholded_request_above_the_models_floor_publishes_only_what_reaches_it(rig):
     request = ScoresRequest(
-        contract_id="robin.scores.arrow/1", retention="thresholded", min_score=0.5
+        contract_id="robin.scores.parquet/1", retention="thresholded", min_score=0.5
     )
     work = rig.work(outputs=(request,))
     scores = (ClassScore("owl", 0.4), ClassScore("rain", 0.5))
@@ -720,7 +720,7 @@ def test_a_thresholded_request_above_the_models_floor_publishes_only_what_reache
 
 def test_a_full_stream_missing_a_label_fails_the_work_under_a_reduced_request(rig):
     request = ScoresRequest(
-        contract_id="robin.scores.arrow/1", retention="top_k", min_score=0.0, top_k=1
+        contract_id="robin.scores.parquet/1", retention="top_k", min_score=0.0, top_k=1
     )
     work = rig.work(outputs=(request,))
     short = WindowOutput(start=0.0, end=3.0, scores=(ClassScore("owl", 0.9),))
@@ -873,7 +873,7 @@ def test_a_value_holding_a_slash_publishes_inside_its_own_folder(rig):
         "scores",
         "recording_namespace=test",
         "recording_value=a%2Fb",
-        "scores.arrow",
+        "scores.parquet",
     ]
     assert record.uri == (rig.destination / relative).as_uri()
 
@@ -1159,7 +1159,7 @@ def test_works_differing_only_in_overlap_publish_different_fingerprints(tmp_path
 def thresholded_rig(tmp_path: Path, floor: float = 0.5) -> tuple[Rig, ScoresRequest]:
     """A rig whose model emits only the scores at or above `floor`, and a request for them."""
     request = ScoresRequest(
-        contract_id="robin.scores.arrow/1", retention="thresholded", min_score=floor
+        contract_id="robin.scores.parquet/1", retention="thresholded", min_score=floor
     )
     return Rig(tmp_path, card=build_card(min_detection_threshold=floor)), request
 

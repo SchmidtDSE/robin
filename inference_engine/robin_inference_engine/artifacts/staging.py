@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 
 from robin_contracts.results import ArtifactContractId, ArtifactKind
 from robin_contracts.work import RecordingRef
@@ -52,32 +53,34 @@ def unreadable(name: str, exc: OSError) -> errors.EngineError:
     )
 
 
-def open_stream(handle: pa.OSFile, name: str) -> pa.RecordBatchStreamReader:
-    """Open an Arrow stream, refusing bytes that are not one."""
+def open_parquet(handle: pa.NativeFile, name: str) -> pq.ParquetFile:
+    """Open a Parquet file, refusing bytes that are not one."""
     try:
-        return pa.ipc.open_stream(handle)
+        return pq.ParquetFile(handle)
     except pa.ArrowInvalid as exc:
-        raise malformed(f"{name} does not open as an Arrow stream: {exc}") from exc
+        raise malformed(f"{name} does not open as Parquet: {exc}") from exc
 
 
 def read_batches(
-    reader: pa.RecordBatchStreamReader, name: str
+    file: pq.ParquetFile, name: str, *, batch_rows: int
 ) -> Iterator[pa.RecordBatch]:
-    """Yield each batch as it is decoded, refusing one that cannot be read or that holds
-    a null in a field its schema declares not nullable."""
+    """Yield at most `batch_rows` rows at a time as they are decoded, refusing a batch
+    that cannot be read or that holds a null in a field its schema declares not nullable."""
+    batches = file.iter_batches(batch_size=batch_rows)
     while True:
         try:
-            batch = reader.read_next_batch()
+            batch = next(batches)
         except StopIteration:
             return
         except (pa.ArrowInvalid, OSError) as exc:
-            raise malformed(f"{name} has an unreadable Arrow batch: {exc}") from exc
+            raise malformed(f"{name} has an unreadable Parquet row group: {exc}") from exc
         _refuse_a_null(batch, name)
         yield batch
 
 
 def _refuse_a_null(batch: pa.RecordBatch, name: str) -> None:
-    # Arrow's IPC format does not enforce a field's nullable flag, so a file can break it.
+    # Each reader refuses a nullable schema before any row is read, so a null here
+    # means the file breaks its own schema.
     for field, column in zip(batch.schema, batch.columns):
         if not field.nullable and column.null_count:
             raise malformed(

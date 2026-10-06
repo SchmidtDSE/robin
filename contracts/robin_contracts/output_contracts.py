@@ -7,8 +7,8 @@ from pydantic import AfterValidator, BaseModel, Field, model_validator
 
 from robin_contracts.protocols import ScoreRetention
 
-ScoresContractId = Literal["robin.scores.arrow/1"]
-EmbeddingsContractId = Literal["robin.embeddings.arrow/1"]
+ScoresContractId = Literal["robin.scores.parquet/1"]
+EmbeddingsContractId = Literal["robin.embeddings.parquet/1"]
 DetectionsContractId = Literal["robin.detections.parquet/1"]
 WorkContractId = Literal["robin.inference-work/1"]
 ResultContractId = Literal["robin.inference-result/1"]

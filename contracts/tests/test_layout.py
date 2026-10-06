@@ -12,7 +12,11 @@ from robin_contracts.results import ArtifactKind
 def test_the_path_names_the_kind_the_recording_and_the_file():
     assert (
         artifact_path("scores", "soundhub", "42")
-        == "scores/recording_namespace=soundhub/recording_value=42/scores.arrow"
+        == "scores/recording_namespace=soundhub/recording_value=42/scores.parquet"
+    )
+    assert (
+        artifact_path("embeddings", "soundhub", "42")
+        == "embeddings/recording_namespace=soundhub/recording_value=42/embeddings.parquet"
     )
 
 

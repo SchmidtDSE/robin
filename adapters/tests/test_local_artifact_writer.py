@@ -40,7 +40,7 @@ def _staged(directory: Path, data: bytes = DATA) -> Path:
 def _create(writer, source, *, checksum=None, namespace="soundhub", value="42"):
     return writer.create(
         kind="scores",
-        contract_id="robin.scores.arrow/1",
+        contract_id="robin.scores.parquet/1",
         namespace=namespace,
         value=value,
         source=source,
@@ -62,7 +62,7 @@ def test_a_file_is_published_at_its_recordings_location(tmp_path):
     published = _location(root)
     assert published.read_bytes() == DATA
     assert record.kind == "scores"
-    assert record.contract_id == "robin.scores.arrow/1"
+    assert record.contract_id == "robin.scores.parquet/1"
     assert record.namespace == "soundhub"
     assert record.value == "42"
     assert record.uri == published.as_uri()

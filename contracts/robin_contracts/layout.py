@@ -12,8 +12,8 @@ NAMESPACE_KEY = "recording_namespace"
 VALUE_KEY = "recording_value"
 
 FILE_NAMES: dict[ArtifactKind, str] = {
-    "scores": "scores.arrow",
-    "embeddings": "embeddings.arrow",
+    "scores": "scores.parquet",
+    "embeddings": "embeddings.parquet",
     "detections": "detections.parquet",
 }
 

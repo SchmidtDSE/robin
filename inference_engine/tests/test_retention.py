@@ -4,7 +4,7 @@ from robin_contracts.output_contracts import ScoresRequest
 from robin_contracts.records import ClassScore
 from robin_inference_engine.retention import retain_scores
 
-CONTRACT = "robin.scores.arrow/1"
+CONTRACT = "robin.scores.parquet/1"
 
 
 def scored(*pairs: tuple[str, float]) -> tuple[ClassScore, ...]:
