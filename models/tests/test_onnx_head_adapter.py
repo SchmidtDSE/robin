@@ -58,7 +58,6 @@ def build_backbone() -> ModelCard:
         model_version="1",
         runtime="none",
         window_duration=3.0,
-        window_overlap=0.0,
         sample_rate=16000,
         min_detection_threshold=0.0,
         score_domain=None,
@@ -553,7 +552,7 @@ def write_embeddings(path: Path, recording: RecordingRef, values: np.ndarray) ->
         contract_id=CONTRACT_ID,
         work=work,
         recording=recording,
-        recipe=recipe(BACKBONE),
+        recipe=recipe(BACKBONE, work.settings),
         registry_uri=None,
         registry_fingerprint=None,
     ) | embedding_metadata(work, dim=DIM, source_dtype="float32", storage_dtype="float32")

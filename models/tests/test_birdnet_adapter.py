@@ -52,7 +52,6 @@ def test_the_card_states_every_field():
         "model_version": "v2p4",
         "runtime": "tensorflow",
         "window_duration": 3.0,
-        "window_overlap": 0.0,
         "sample_rate": 48000,
         "min_detection_threshold": 0.0,
         "score_domain": "sigmoid",
@@ -65,7 +64,7 @@ def test_the_card_states_every_field():
         },
         "backend": "pb-fp32",
         "dtype": "float32",
-        "inference_params": (),
+        "inference_params": ({"name": "window_overlap", "type": "float"},),
         "can_emit_embeddings": True,
         "embedding_dim": 1024,
         "embedding_dtype": "float32",
@@ -425,7 +424,7 @@ def test_a_card_stating_what_birdnet_does_not_do_is_refused_before_the_model_loa
 
 
 def test_overlapping_windows_build(runtime, tmp_path):
-    runtime.adapter.build(birdnet_context(tmp_path, card=changed_card(window_overlap=1.0)))
+    runtime.adapter.build(birdnet_context(tmp_path, settings={"window_overlap": 1.0}))
 
 
 # Resources.
@@ -817,7 +816,7 @@ def test_a_window_that_would_resample_to_nothing_is_refused_before_scipy_runs(
 
 
 def test_overlapping_windows_each_reach_the_model_as_their_own_slice(runtime, tmp_path):
-    model = runtime.adapter.build(birdnet_context(tmp_path, card=changed_card(window_overlap=1.0)))
+    model = runtime.adapter.build(birdnet_context(tmp_path, settings={"window_overlap": 1.0}))
     n = 9 * 48000
     samples = np.arange(n, dtype=np.float32) / n
     windows = run(model, write_audio(tmp_path / "a.wav", samples, 48000))
@@ -828,7 +827,7 @@ def test_overlapping_windows_each_reach_the_model_as_their_own_slice(runtime, tm
 
 
 def test_overlapping_windows_at_an_odd_rate_each_read_one_full_window(runtime, tmp_path):
-    model = runtime.adapter.build(birdnet_context(tmp_path, card=changed_card(window_overlap=0.5)))
+    model = runtime.adapter.build(birdnet_context(tmp_path, settings={"window_overlap": 0.5}))
     samples = noise(12 * 11025)
     windows = run(model, write_audio(tmp_path / "a.wav", samples, 11025))
     full = [(w, row) for w, row in zip(windows, rows_given_to(runtime)) if w.end <= 12.0]

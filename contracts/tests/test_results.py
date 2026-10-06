@@ -32,7 +32,6 @@ CARD = ModelCard(
     model_version="1",
     runtime="tensorflow",
     window_duration=3.0,
-    window_overlap=0.0,
     sample_rate=48000,
     min_detection_threshold=0.0,
     score_domain="sigmoid",
@@ -73,6 +72,7 @@ def build_recipe() -> Recipe:
             pad="drop",
         ),
         dtype="float32",
+        settings={},
     )
 
 

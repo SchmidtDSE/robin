@@ -66,6 +66,7 @@ def build(context: ModelContext) -> "OwlModel":
     _refuse_a_spectrogram_shape_the_network_does_not_take(card, network)
     return OwlModel(
         card=card,
+        settings=context.settings,
         batch_size=batch_size,
         labels=tuple(entry.label for entry in context.registry.entries),
         network=network,
@@ -107,6 +108,7 @@ class OwlModel:
         self,
         *,
         card: ModelCard,
+        settings: Mapping[str, JsonScalar],
         batch_size: int,
         labels: tuple[str, ...],
         network: object,
@@ -114,7 +116,7 @@ class OwlModel:
         log: Log,
     ) -> None:
         self._card = card
-        self._geometry = recipe(card).audio.geometry
+        self._geometry = recipe(card, settings).audio.geometry
         self._batch_size = batch_size
         self._labels = labels
         self._network = network

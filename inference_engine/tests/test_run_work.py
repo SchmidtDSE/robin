@@ -97,7 +97,6 @@ def build_card(*, pad: str = "centre_crop_end_pad", **overrides) -> ModelCard:
         "model_version": "1",
         "runtime": "none",
         "window_duration": 3.0,
-        "window_overlap": 0.0,
         "sample_rate": 16000,
         "min_detection_threshold": 0.0,
         "score_domain": "sigmoid",
@@ -575,8 +574,8 @@ def test_a_scores_only_work_writes_every_score(rig):
     assert result.registry_uri == rig.build.files[REGISTRY_ROLE].uri
     assert result.registry_fingerprint == rig.build.files[REGISTRY_ROLE].digest
     assert result.model == work.model
-    assert result.recipe == recipe(CARD)
-    assert result.window_geometry == recipe(CARD).audio.geometry
+    assert result.recipe == recipe(CARD, work.settings)
+    assert result.window_geometry == recipe(CARD, work.settings).audio.geometry
     rows = rows_of(rig, artifact(result, "scores"))
     assert [(row["window_start_s"], row["label"]) for row in rows[:2]] == [
         (0.0, "owl"),
@@ -1100,6 +1099,56 @@ def test_scores_embeddings_and_detections_are_published_together(taxa_rig):
     assert [one.kind for one in result.artifacts] == ["scores", "embeddings", "detections"]
     row = result.coverage[0]
     assert (row.score_rows, row.embedding_rows, row.detection_rows) == (6, 2, 3)
+
+
+# ---------------------------------------------------------------------------
+# Window overlap, which a work asks for in its settings.
+# ---------------------------------------------------------------------------
+
+
+def overlap_rig(tmp_path: Path) -> Rig:
+    """A rig whose card declares a window overlap among its settings."""
+    card = build_card(
+        taxa_registry_digest=registry_digest(TAXA_CSV),
+        inference_params=(
+            InferenceParam(name="gain", type="float"),
+            InferenceParam(name="window_overlap", type="float"),
+        ),
+    )
+    return Rig(tmp_path, card=card, registry_csv=TAXA_CSV)
+
+
+def test_a_work_with_an_overlap_accepts_windows_one_hop_apart(tmp_path):
+    rig = overlap_rig(tmp_path)
+    settings = {"gain": 1.0, "window_overlap": 1.0}
+    work = rig.work(settings=settings)
+    # A 3-second window that overlaps the next by 1 second starts every 2 seconds.
+    windows = [taxa_window(start, 0.9, 0.1, 0.1) for start in (0.0, 2.0, 4.0)]
+
+    result = success_of(rig, rig.run(work, rig.model([windows])), work)
+
+    assert result.coverage[0].windows_completed == 3
+    assert result.recipe.settings == settings
+    assert result.window_geometry.hop == 2.0
+
+
+def test_works_differing_only_in_overlap_publish_different_fingerprints(tmp_path):
+    outputs = (scores_request(), detections_request())
+    published_by_overlap = []
+    for overlap in (1.0, 0.5):
+        rig = overlap_rig(tmp_path / str(overlap))
+        work = rig.work(settings={"gain": 1.0, "window_overlap": overlap}, outputs=outputs)
+        result = success_of(
+            rig, rig.run(work, rig.model([[taxa_window(0.0, 0.9, 0.1, 0.1)]])), work
+        )
+        path = published(rig, artifact(result, "detections"))
+        header = decode_metadata(pq.read_schema(path).metadata)
+        ids = pq.read_table(path).column("detection_id").to_pylist()
+        published_by_overlap.append((header["robin.recipe_fingerprint"], ids))
+
+    (first_fingerprint, first_ids), (second_fingerprint, second_ids) = published_by_overlap
+    assert first_fingerprint != second_fingerprint
+    assert set(first_ids).isdisjoint(second_ids)
 
 
 # ---------------------------------------------------------------------------

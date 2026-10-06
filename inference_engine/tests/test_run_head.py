@@ -60,7 +60,6 @@ def build_backbone(**overrides) -> ModelCard:
         "model_version": "1",
         "runtime": "none",
         "window_duration": HOP,
-        "window_overlap": 0.0,
         "sample_rate": 16000,
         "min_detection_threshold": 0.0,
         "score_domain": "sigmoid",
@@ -495,7 +494,7 @@ def test_a_head_works_result_carries_its_backbones_recipe_and_names_the_head(rig
     result = rig.run(work)
 
     assert isinstance(result, InferenceSuccess), result
-    stated = recipe(BACKBONE)
+    stated = recipe(BACKBONE, {})
     assert result.recipe == stated
     assert result.window_geometry == stated.audio.geometry
     assert result.model == work.model
@@ -523,7 +522,7 @@ def test_each_header_names_the_head_its_files_and_its_registry(rig):
         assert json.loads(header["robin.model_file_digests"]) == files
         assert header["robin.registry_fingerprint"] == registry_digest(HEAD_REGISTRY_CSV)
         assert header["robin.score_domain"] == "sigmoid"
-        assert header["robin.recipe_fingerprint"] == recipe(BACKBONE).id
+        assert header["robin.recipe_fingerprint"] == recipe(BACKBONE, {}).id
         assert header["robin.recording_namespace"] == record.namespace
         assert header["robin.recording_value"] == record.value
 

@@ -285,7 +285,6 @@ CARD = ModelCard(
     window_duration=3.0,
     sample_rate=16000,
     min_detection_threshold=0.0,
-    window_overlap=0.0,
     score_domain="sigmoid",
     taxa_registry_digest=REGISTRY_FINGERPRINT,
     audio=AudioGeometry(
@@ -306,6 +305,7 @@ RECIPE = Recipe(
         pad="drop",
     ),
     dtype="float32",
+    settings={},
 )
 SCORES_REQUEST = ScoresRequest(contract_id="robin.scores.arrow/1", retention="full")
 REGISTRY_URI = "s3://b/registry.csv"

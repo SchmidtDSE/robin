@@ -84,6 +84,7 @@ def build(context: ModelContext) -> "BirdnetModel":
         labels = _labels_matching_the_registry(context.files["labels"], context.registry)
     return BirdnetModel(
         card=card,
+        settings=context.settings,
         batch_size=batch_size,
         labels=labels,
         loaded=loaded,
@@ -233,6 +234,7 @@ class BirdnetModel:
         self,
         *,
         card: ModelCard,
+        settings: Mapping[str, JsonScalar],
         batch_size: int,
         labels: tuple[str, ...] | None,
         loaded: object,
@@ -242,7 +244,7 @@ class BirdnetModel:
         emit_embeddings: bool,
         log: Log,
     ) -> None:
-        self._geometry = recipe(card).audio.geometry
+        self._geometry = recipe(card, settings).audio.geometry
         self._rate = card.sample_rate
         self._width = round(card.window_duration * card.sample_rate)
         self._batch_size = batch_size

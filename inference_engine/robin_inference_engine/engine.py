@@ -131,7 +131,11 @@ def _run_model(run: _Run, *, fetched: list[Path], root: Path) -> InferenceResult
     # A head's windows are its backbone's, so a head work's recipe is its backbone's.
     # The refusals leave a head work only with an input naming that backbone's card.
     card = work.model.card
-    stated = recipe(work.input.backbone if isinstance(card, HeadCard) else card)
+    stated = (
+        recipe(work.input.backbone, {})
+        if isinstance(card, HeadCard)
+        else recipe(card, work.settings)
+    )
 
     scratch_dir = root / "scratch"
     scratch_dir.mkdir()

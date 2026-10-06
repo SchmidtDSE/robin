@@ -32,7 +32,7 @@ def test_every_declared_constant_is_a_stage_or_one_of_its_codes():
     }
 
     assert len(set(errors.ACCEPT_WINDOW_FAILURES)) == 14
-    assert len(set(errors.VALIDATE_REQUEST_FAILURES)) == 14
+    assert len(set(errors.VALIDATE_REQUEST_FAILURES)) == 15
     assert len(set(errors.ACQUIRE_MODEL_FAILURES)) == 2
     assert len(set(errors.LOAD_REGISTRY_FAILURES)) == 2
     assert len(set(errors.CONSTRUCT_MODEL_FAILURES)) == 5

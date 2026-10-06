@@ -1,6 +1,7 @@
 """What a run did to the audio, and what that makes a window mean."""
 
 import math
+from collections.abc import Mapping
 from typing import Literal, NewType
 
 from pydantic import BaseModel, Field, model_validator
@@ -15,6 +16,7 @@ from robin_contracts.cards import (
     model_ref,
     refuse_windows_that_do_not_advance,
 )
+from robin_contracts.protocols import JsonScalar
 
 RecipeFingerprint = NewType("RecipeFingerprint", str)
 
@@ -70,26 +72,28 @@ class Recipe(BaseModel, frozen=True):
     backend: str
     audio: AudioSpec
     dtype: EmbeddingDtype
+    settings: Mapping[str, JsonScalar]
 
     @property
     def id(self) -> RecipeFingerprint:
         return RecipeFingerprint(sha256_v1(self))
 
 
-def recipe(card: ModelCard) -> Recipe:
-    """The recipe a model card states. Every fact in it is the card's."""
+def recipe(card: ModelCard, settings: Mapping[str, JsonScalar]) -> Recipe:
+    """The card's facts plus the work's settings, which can ask for overlapping windows."""
     return Recipe(
         model=model_ref(card),
         backend=card.backend,
         audio=AudioSpec(
             sample_rate=card.sample_rate,
             window_duration=card.window_duration,
-            window_overlap=card.window_overlap,
+            window_overlap=settings.get("window_overlap", 0.0),
             downmix=card.audio.downmix,
             resampler=card.audio.resampler,
             pad=card.audio.pad,
         ),
         dtype=card.dtype,
+        settings=settings,
     )
 
 

@@ -27,7 +27,6 @@ MODEL_CARD_FIELDS = {
     "model_version": "v8",
     "runtime": "tf-saved-model",
     "window_duration": 5.0,
-    "window_overlap": 0.0,
     "sample_rate": 32000,
     "min_detection_threshold": 0.01,
     "score_domain": "sigmoid",
@@ -329,9 +328,7 @@ def test_a_card_file_naming_a_runner_algorithm_the_contract_does_not_is_refused(
     assert str(path) in str(exc.value)
 
 
-@pytest.mark.parametrize(
-    "field", ["window_overlap", "dtype", "audio", "backend"]
-)
+@pytest.mark.parametrize("field", ["dtype", "audio", "backend"])
 def test_a_card_file_missing_a_recipe_fact_is_refused_when_read(tmp_path, field):
     fields = {key: value for key, value in MODEL_CARD_FIELDS.items() if key != field}
     path = _write_text(tmp_path, _yaml(fields))
@@ -358,30 +355,20 @@ def test_a_card_file_with_audio_handling_no_recipe_names_is_refused_when_read(
     assert str(path) in str(exc.value)
 
 
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [("window_duration", 0.0), ("window_duration", -1.0), ("window_overlap", -1.0)],
-)
-def test_a_card_whose_window_is_not_positive_or_overlap_is_negative_is_refused(field, value):
+@pytest.mark.parametrize("value", [0.0, -1.0])
+def test_a_card_whose_window_is_not_positive_is_refused(value):
     with pytest.raises(ValidationError) as exc:
-        _model_card(**{field: value})
+        _model_card(window_duration=value)
 
-    assert exc.value.errors()[0]["loc"] == (field,)
+    assert exc.value.errors()[0]["loc"] == ("window_duration",)
 
 
-@pytest.mark.parametrize("field", ["window_duration", "window_overlap"])
 @pytest.mark.parametrize("value", [float("nan"), float("inf")])
-def test_a_card_whose_window_or_overlap_is_not_finite_is_refused(field, value):
+def test_a_card_whose_window_is_not_finite_is_refused(value):
     with pytest.raises(ValidationError) as exc:
-        _model_card(**{field: value})
+        _model_card(window_duration=value)
 
-    assert exc.value.errors()[0]["loc"] == (field,)
-
-
-@pytest.mark.parametrize("overlap", [5.0, 6.0])
-def test_a_card_whose_windows_would_not_advance_is_refused(overlap):
-    with pytest.raises(ValidationError, match="must be less than window_duration"):
-        _model_card(window_duration=5.0, window_overlap=overlap)
+    assert exc.value.errors()[0]["loc"] == ("window_duration",)
 
 
 def test_a_storage_precision_the_engine_does_not_store_is_refused():
@@ -458,7 +445,6 @@ def test_reading_a_card_keeps_comments_and_layout_out_of_its_digest(tmp_path):
         "model_name: perch\n"
         "runtime: tf-saved-model\n"
         "window_duration: 5.0\n"
-        "window_overlap: 0.0\n"
         "min_detection_threshold: 0.01\n"
         "score_domain: sigmoid\n"
         f"taxa_registry_digest: {REGISTRY_DIGEST}\n"

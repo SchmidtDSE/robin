@@ -51,7 +51,6 @@ def build_card(*, geometry: WindowGeometry | None = None, **overrides) -> ModelC
         "model_version": "1",
         "runtime": "none",
         "window_duration": geometry.window_duration,
-        "window_overlap": geometry.window_overlap,
         "sample_rate": 16000,
         "min_detection_threshold": MODEL_FLOOR,
         "score_domain": "sigmoid",

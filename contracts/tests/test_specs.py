@@ -35,6 +35,7 @@ def build_recipe(**overrides) -> Recipe:
         "backend": "tensorflow",
         "audio": build_audio(),
         "dtype": "float32",
+        "settings": {},
     }
     return Recipe(**(fields | overrides))
 
@@ -45,7 +46,6 @@ def build_card(**overrides) -> ModelCard:
         "model_version": "1",
         "runtime": "tensorflow",
         "window_duration": 3.0,
-        "window_overlap": 1.5,
         "sample_rate": 32000,
         "min_detection_threshold": 0.0,
         "score_domain": "sigmoid",
@@ -61,10 +61,10 @@ def build_card(**overrides) -> ModelCard:
     return ModelCard.model_validate(fields | overrides)
 
 
-def test_the_recipe_a_card_states_takes_every_fact_from_the_card():
+def test_the_recipe_takes_every_fact_from_the_card_and_the_settings():
     card = build_card()
 
-    assert recipe(card) == Recipe(
+    assert recipe(card, {"window_overlap": 1.5, "gain": 2.0}) == Recipe(
         model=model_ref(card),
         backend="tensorflow",
         audio=AudioSpec(
@@ -76,6 +76,7 @@ def test_the_recipe_a_card_states_takes_every_fact_from_the_card():
             pad="drop",
         ),
         dtype="float16",
+        settings={"window_overlap": 1.5, "gain": 2.0},
     )
 
 
@@ -83,11 +84,37 @@ def test_the_recipe_of_a_card_whose_library_resamples_says_so():
     resampler = {"by": "backend", "library": "birdnet", "version": "2.4"}
     card = build_card(audio={"downmix": "mean", "resampler": resampler, "pad": "drop"})
 
-    assert recipe(card).audio.resampler == BackendResampled(library="birdnet", version="2.4")
+    assert recipe(card, {}).audio.resampler == BackendResampled(library="birdnet", version="2.4")
 
 
 def test_two_cards_that_differ_have_recipes_that_differ():
-    assert recipe(build_card()).id != recipe(build_card(window_overlap=0.0)).id
+    assert recipe(build_card(), {}).id != recipe(build_card(window_duration=2.0), {}).id
+
+
+def test_the_recipe_takes_its_overlap_from_the_settings_and_holds_them():
+    stated = recipe(build_card(), {"window_overlap": 1.5})
+
+    assert stated.audio.window_overlap == 1.5
+    assert stated.settings == {"window_overlap": 1.5}
+
+
+def test_a_recipe_without_an_overlap_setting_has_windows_that_do_not_overlap():
+    assert recipe(build_card(), {}).audio.window_overlap == 0.0
+
+
+def test_recipes_at_different_overlaps_have_different_fingerprints():
+    card = build_card()
+
+    assert recipe(card, {"window_overlap": 1.5}).id != recipe(card, {}).id
+
+
+def test_recipes_from_the_same_card_and_settings_are_equal():
+    card = build_card()
+    one = recipe(card, {"window_overlap": 1.5})
+    other = recipe(card, {"window_overlap": 1.5})
+
+    assert one == other
+    assert one.id == other.id
 
 
 def test_recipe_fingerprint_is_a_full_length_versioned_digest():

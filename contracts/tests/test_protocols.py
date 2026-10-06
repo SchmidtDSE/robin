@@ -15,7 +15,6 @@ CARD = ModelCard.model_validate({
     "model_version": "1",
     "runtime": "tensorflow",
     "window_duration": 3.0,
-    "window_overlap": 0.0,
     "sample_rate": 32000,
     "min_detection_threshold": 0.0,
     "score_domain": "sigmoid",

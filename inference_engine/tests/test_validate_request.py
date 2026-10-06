@@ -47,7 +47,6 @@ def build_card(**overrides) -> ModelCard:
         "model_version": "1",
         "runtime": "tensorflow",
         "window_duration": 3.0,
-        "window_overlap": 0.0,
         "sample_rate": 32000,
         "min_detection_threshold": 0.0,
         "score_domain": "sigmoid",
@@ -374,6 +373,34 @@ def test_no_settings_are_accepted_by_any_card():
     assert accepted(build_work(card=build_card(), settings={}))
 
 
+OVERLAPPING_CARD = build_card(
+    inference_params=(InferenceParam(name="window_overlap", type="float"),)
+)
+
+
+def test_an_overlap_shorter_than_the_window_is_accepted():
+    assert accepted(build_work(card=OVERLAPPING_CARD, settings={"window_overlap": 1.5}))
+
+
+@pytest.mark.parametrize("overlap", [3.0, 4.5, -0.5], ids=["the_window", "longer", "negative"])
+def test_an_overlap_that_does_not_let_windows_advance_is_refused(overlap):
+    error = refused(build_work(card=OVERLAPPING_CARD, settings={"window_overlap": overlap}))
+
+    assert_validate_request(error, errors.WINDOW_OVERLAP_INVALID, repr(overlap), "3.0")
+
+
+def test_an_overlap_on_a_card_that_does_not_declare_it_is_refused():
+    error = refused(build_work(card=build_card(), settings={"window_overlap": 1.5}))
+
+    assert_validate_request(error, errors.SETTING_UNDECLARED, "window_overlap")
+
+
+def test_an_int_overlap_is_refused_as_the_wrong_type():
+    error = refused(build_work(card=OVERLAPPING_CARD, settings={"window_overlap": 0}))
+
+    assert_validate_request(error, errors.SETTING_TYPE_MISMATCH, "window_overlap")
+
+
 # ---------------------------------------------------------------------------
 # The registry, and heads.
 # ---------------------------------------------------------------------------
@@ -580,6 +607,9 @@ REFUSING_CALLS = {
     "setting_undeclared": lambda: refused(build_work(settings={"top_k": 5})),
     "setting_type_mismatch": lambda: refused(
         build_work(card=TUNABLE_CARD, settings={"top_n": True})
+    ),
+    "window_overlap_invalid": lambda: refused(
+        build_work(card=OVERLAPPING_CARD, settings={"window_overlap": 3.0})
     ),
     "registry_required": lambda: refused(
         build_work(model=build_pinned_model(**UNLABELLED)), registry=None

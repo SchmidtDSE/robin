@@ -57,7 +57,6 @@ CARD = ModelCard(
     min_detection_threshold=0.0,
     can_emit_embeddings=True,
     embedding_dim=4,
-    window_overlap=0.0,
     score_domain="sigmoid",
     taxa_registry_digest=REGISTRY_FINGERPRINT,
     audio=AudioGeometry(
@@ -105,6 +104,7 @@ def build_recipe(**overrides) -> Recipe:
             pad="centre_crop_end_pad",
         ),
         "dtype": "float32",
+        "settings": {},
     }
     return Recipe(**(fields | overrides))
 

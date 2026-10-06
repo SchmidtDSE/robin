@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 
 import robin_models.owl
-from robin_contracts.cards import ModelCard, read_card
+from robin_contracts.cards import InferenceParam, ModelCard, read_card
 from robin_contracts.inputs import AudioClip, Embeddings
 from robin_contracts.protocols import Model, ModelContext
 from robin_contracts.records import ClassScore
@@ -29,7 +29,7 @@ with as_file(RESOURCES / "taxa_registry.csv") as _path:
     with _path.open(newline="", encoding="utf-8") as _file:
         REGISTRY_ROWS = list(csv.DictReader(_file))
 
-GEOMETRY = recipe(CARD).audio.geometry
+GEOMETRY = recipe(CARD, {}).audio.geometry
 AUDIO = CARD.audio.model_dump()
 RATES = (8000, 16000, 22050, 32000, 44100, 48000, 96000)
 
@@ -69,13 +69,13 @@ def test_the_non_taxonomic_rows_have_no_name_and_no_key():
         assert entry.gbif_taxon_key is None
 
 
-def test_the_card_declares_sigmoid_scores_no_embeddings_and_no_settings():
+def test_the_card_declares_sigmoid_scores_no_embeddings_and_an_overlap_setting():
     assert CARD.score_domain == "sigmoid"
     assert CARD.min_detection_threshold == 0.0
     assert CARD.can_emit_embeddings is False
     assert CARD.embedding_dim is None
     assert CARD.embedding_dtype is None
-    assert CARD.inference_params == ()
+    assert CARD.inference_params == (InferenceParam(name="window_overlap", type="float"),)
 
 
 def test_the_card_names_the_bundled_registry_by_its_digest():
@@ -97,17 +97,18 @@ RECIPE_BEFORE_THE_CARD_STATED_IT = {
     },
     "backend": "h5-fp32",
     "dtype": "float32",
+    "settings": {},
     "version": 1,
 }
 
 
 def test_the_recipe_the_card_states_is_the_one_the_adapter_built():
-    stated = recipe(CARD).model_dump(mode="json")
+    stated = recipe(CARD, {}).model_dump(mode="json")
 
     assert stated.pop("model") == {
         "name": "owl",
         "version": "v4",
-        "digest": recipe(CARD).model.digest,
+        "digest": recipe(CARD, {}).model.digest,
     }
     assert stated == RECIPE_BEFORE_THE_CARD_STATED_IT
 
@@ -407,8 +408,7 @@ def test_run_yields_every_window_with_every_label_scored_in_output_order(runtime
 
 
 def test_overlapping_windows_are_rendered_from_where_each_one_starts(runtime, tmp_path):
-    card = changed_card(window_overlap=6.0)
-    model = runtime.adapter.build(owl_context(tmp_path, card=card))
+    model = runtime.adapter.build(owl_context(tmp_path, settings={"window_overlap": 6.0}))
     windows = list(model.run(AudioClip(path=tmp_path / "a.flac")))
     assert runtime.rendered == [0.0, 6.0, 12.0, 18.0]
     assert [window.start for window in windows] == runtime.rendered

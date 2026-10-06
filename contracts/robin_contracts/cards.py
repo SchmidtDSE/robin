@@ -117,7 +117,7 @@ class AudioGeometry(BaseModel):
 
 
 class ModelCard(BaseModel):
-    """Serializable backbone facts, including every fact its recipe is built from.
+    """Serializable backbone facts. A recipe is built from them and a work's settings.
 
     `score_domain` is `sigmoid` when each class's score is a sigmoid output: between 0
     and 1, independent of the other classes, and not calibrated.
@@ -133,7 +133,6 @@ class ModelCard(BaseModel):
     model_version: str
     runtime: str
     window_duration: float = Field(gt=0, allow_inf_nan=False)
-    window_overlap: float = Field(ge=0, allow_inf_nan=False)  # seconds shared with the next
     sample_rate: int
     min_detection_threshold: float
     score_domain: Literal["sigmoid"] | None  # None: the model emits no scores
@@ -175,11 +174,6 @@ class ModelCard(BaseModel):
     @classmethod
     def _positive_embedding_dim(cls, value: int | None) -> int | None:
         return _refuse_a_width_that_is_not_positive(value)
-
-    @model_validator(mode="after")
-    def _windows_advance(self) -> "ModelCard":
-        refuse_windows_that_do_not_advance(self.window_duration, self.window_overlap)
-        return self
 
     @model_validator(mode="after")
     def _registry_is_pinned_exactly_when_scores_are_emitted(self) -> "ModelCard":

@@ -5,9 +5,8 @@ model_version: v2p4
 runtime: tensorflow
 
 # The network takes 3 seconds of raw audio at 48 kHz, 144,000 samples, and makes its own
-# spectrogram. Windows do not overlap: each starts where the last one ended.
+# spectrogram. Windows do not overlap unless a work sets window_overlap.
 window_duration: 3.0
-window_overlap: 0.0
 sample_rate: 48000
 
 # Scores are per-class sigmoid outputs, between 0 and 1, and not calibrated. Every class
@@ -26,6 +25,12 @@ audio:
   resampler: {by: runner, algorithm: scipy_fft_per_window}
   pad: centre_crop_end_pad
 backend: pb-fp32
+
+# Under window_overlap, robin starts no window after one reaches the end of the file. The
+# birdnet library starts windows while the start is inside the file, so it can add one more,
+# mostly padded, window at the end.
+inference_params:
+  - {name: window_overlap, type: float}
 
 # Each window's embedding is the 1,024 float32 values the classifier reads, stored as they are.
 dtype: float32

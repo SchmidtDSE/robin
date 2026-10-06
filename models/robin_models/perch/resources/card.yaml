@@ -6,9 +6,8 @@ model_version: v8
 runtime: tensorflow
 
 # The network takes 5 seconds of raw audio at 32 kHz, 160,000 samples, and makes its own
-# spectrogram. Windows do not overlap: each starts where the last one ended.
+# spectrogram. Windows do not overlap unless a work sets window_overlap.
 window_duration: 5.0
-window_overlap: 0.0
 sample_rate: 32000
 
 # The network returns logits. Scores are their per-class sigmoid outputs, between 0 and 1,
@@ -29,6 +28,12 @@ audio:
   resampler: {by: runner, algorithm: scipy_polyphase_with_context}
   pad: centre_crop_end_pad
 backend: pb-fp32
+
+# Under window_overlap, each window must start on a whole number of 1/g s steps, where g is
+# the greatest common divisor of the file's rate and 32 kHz. An overlap such as 2.5 s fits
+# every common rate. An overlap that does not fit fails the work when the window is read.
+inference_params:
+  - {name: window_overlap, type: float}
 
 # Each window's embedding is the 1,280 float32 values the network returns, stored as they
 # are. They are not normalised.

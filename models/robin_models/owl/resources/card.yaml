@@ -6,9 +6,8 @@ model_version: v4
 runtime: tf-legacy-keras
 
 # The network sees one 12-second window at a time, rendered at 8 kHz as a 257 x 1000
-# grayscale spectrogram. Windows do not overlap: each starts where the last one ended.
+# grayscale spectrogram. Windows do not overlap unless a work sets window_overlap.
 window_duration: 12.0
-window_overlap: 0.0
 sample_rate: 8000
 spectrogram_shape: [257, 1000]
 
@@ -28,6 +27,10 @@ audio:
   resampler: {by: runner, algorithm: soxr_hq}
   pad: time_scaled
 backend: h5-fp32
+
+# A work can set window_overlap, in seconds. Each window is then rendered from where it starts.
+inference_params:
+  - {name: window_overlap, type: float}
 
 dtype: float32
 can_emit_embeddings: false

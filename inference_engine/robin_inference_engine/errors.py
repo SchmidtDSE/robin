@@ -58,6 +58,7 @@ REGISTRY_FINGERPRINT_MISMATCH = "registry_fingerprint_mismatch"
 REGISTRY_DISAGREES_WITH_CARD = "registry_disagrees_with_card"
 SETTING_UNDECLARED = "setting_undeclared"
 SETTING_TYPE_MISMATCH = "setting_type_mismatch"
+WINDOW_OVERLAP_INVALID = "window_overlap_invalid"
 INPUT_KIND_DISAGREES_WITH_CARD = "input_kind_disagrees_with_card"
 HEAD_BACKBONE_DISAGREES = "head_backbone_disagrees"
 HEAD_EMITS_NO_EMBEDDINGS = "head_emits_no_embeddings"
@@ -74,6 +75,7 @@ VALIDATE_REQUEST_FAILURES = (
     REGISTRY_DISAGREES_WITH_CARD,
     SETTING_UNDECLARED,
     SETTING_TYPE_MISMATCH,
+    WINDOW_OVERLAP_INVALID,
     INPUT_KIND_DISAGREES_WITH_CARD,
     HEAD_BACKBONE_DISAGREES,
     HEAD_EMITS_NO_EMBEDDINGS,

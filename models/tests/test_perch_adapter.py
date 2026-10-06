@@ -53,7 +53,6 @@ def test_the_card_states_every_field():
         "model_version": "v8",
         "runtime": "tensorflow",
         "window_duration": 5.0,
-        "window_overlap": 0.0,
         "sample_rate": 32000,
         "min_detection_threshold": 0.0,
         "score_domain": "sigmoid",
@@ -66,7 +65,7 @@ def test_the_card_states_every_field():
         },
         "backend": "pb-fp32",
         "dtype": "float32",
-        "inference_params": (),
+        "inference_params": ({"name": "window_overlap", "type": "float"},),
         "can_emit_embeddings": True,
         "embedding_dim": 1280,
         "embedding_dtype": "float32",
@@ -429,7 +428,7 @@ def test_a_card_stating_what_perch_does_not_do_is_refused_before_the_model_loads
 
 
 def test_overlapping_windows_build(runtime, tmp_path):
-    runtime.adapter.build(perch_context(tmp_path, card=changed_card(window_overlap=2.5)))
+    runtime.adapter.build(perch_context(tmp_path, settings={"window_overlap": 2.5}))
 
 
 # Resources.
@@ -782,8 +781,8 @@ def test_a_window_resampled_without_context_differs_from_the_whole_recording(rat
 def test_overlapping_windows_at_another_rate_each_equal_the_whole_recording_resampled(
     runtime, tmp_path
 ):
-    card = changed_card(window_overlap=2.5)
-    model = runtime.adapter.build(perch_context(tmp_path, card=card))
+    settings = {"window_overlap": 2.5}
+    model = runtime.adapter.build(perch_context(tmp_path, settings=settings))
     samples = noise(12 * 48000)
     windows = run(model, write_audio(tmp_path / "a.wav", samples, 48000))
     assert [w.start for w in windows] == [0.0, 2.5, 5.0, 7.5]
@@ -793,8 +792,8 @@ def test_overlapping_windows_at_another_rate_each_equal_the_whole_recording_resa
 
 
 def test_a_start_between_32khz_samples_is_refused_when_its_window_is_read(runtime, tmp_path):
-    card = changed_card(window_overlap=2.4999847412109375)
-    model = runtime.adapter.build(perch_context(tmp_path, card=card))
+    settings = {"window_overlap": 2.4999847412109375}
+    model = runtime.adapter.build(perch_context(tmp_path, settings=settings))
     windows = model.run(AudioClip(path=write_audio(tmp_path / "a.wav", noise(8 * 32000), 32000)))
     with pytest.raises(ValueError, match=r"2\.5000152587890625") as caught:
         list(windows)
@@ -805,8 +804,8 @@ def test_a_start_between_32khz_samples_is_refused_when_its_window_is_read(runtim
 def test_a_start_on_the_grid_the_rates_share_runs_and_one_off_it_is_refused(
     runtime, tmp_path, rate, runs
 ):
-    card = changed_card(window_overlap=4.9375)
-    model = runtime.adapter.build(perch_context(tmp_path, card=card))
+    settings = {"window_overlap": 4.9375}
+    model = runtime.adapter.build(perch_context(tmp_path, settings=settings))
     samples = noise(6 * rate)
     path = write_audio(tmp_path / "a.wav", samples, rate)
     if runs:

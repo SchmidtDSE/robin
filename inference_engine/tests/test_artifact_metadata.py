@@ -50,7 +50,6 @@ CARD = ModelCard(
     window_duration=12.0,
     sample_rate=32000,
     min_detection_threshold=0.0,
-    window_overlap=0.0,
     score_domain="sigmoid",
     taxa_registry_digest=REGISTRY_FINGERPRINT,
     audio=AudioGeometry(
@@ -84,6 +83,7 @@ def build_recipe(**overrides) -> Recipe:
             pad="centre_crop_end_pad",
         ),
         "dtype": "float32",
+        "settings": {"window_overlap": 6.0},
     }
     return Recipe(**(fields | overrides))
 

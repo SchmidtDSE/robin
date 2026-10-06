@@ -38,6 +38,7 @@ def refuse_request(work: InferenceWork, *, registry: TaxonRegistry | None) -> No
     _refuse_a_substituted_registry(work, registry)
     _refuse_a_registry_the_card_does_not_pin(work, card)
     _refuse_settings_the_card_does_not_declare(work, card)
+    _refuse_an_overlap_that_does_not_let_windows_advance(work, card)
     scores = scores_request(work)
     if scores is not None:
         _refuse_scores_the_card_does_not_emit(card)
@@ -183,6 +184,21 @@ def _refuse_a_setting_of_another_type(
             errors.SETTING_TYPE_MISMATCH,
             f"setting {name!r} is {value!r}, but card {_card_id(card)} declares it "
             f"{declared}",
+        )
+
+
+def _refuse_an_overlap_that_does_not_let_windows_advance(
+    work: InferenceWork, card: ModelCard | HeadCard
+) -> None:
+    # The checks above leave a float here only when a backbone card declares the setting.
+    overlap = work.settings.get("window_overlap")
+    if type(overlap) is not float:
+        return
+    if not 0.0 <= overlap < card.window_duration:
+        raise _refused(
+            errors.WINDOW_OVERLAP_INVALID,
+            f"setting 'window_overlap' is {overlap!r}, but card {_card_id(card)} needs it "
+            f"at least 0.0 and less than its window_duration {card.window_duration}",
         )
 
 
