@@ -87,7 +87,7 @@ def build_head(**overrides) -> HeadCard:
         "backbone": model_ref(BACKBONE),
         "embedding_dim": DIM,
         "min_detection_threshold": 0.0,
-        "score_domain": "probability",
+        "score_domain": "sigmoid",
         "taxa_registry_digest": "sha256:" + hashlib.sha256(REGISTRY_CSV).hexdigest(),
     }
     return HeadCard(**(fields | overrides))

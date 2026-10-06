@@ -11,11 +11,11 @@ window_duration: 5.0
 window_overlap: 0.0
 sample_rate: 32000
 
-# The network returns logits; scores are their sigmoid, between 0 and 1, not calibrated
-# probabilities. Every class is scored for every window, and a floor of 0.0 excludes none
-# of them.
+# The network returns logits. Scores are their per-class sigmoid outputs, between 0 and 1,
+# and not calibrated. Every class is scored for every window, and a floor of 0.0 excludes
+# none of them.
 min_detection_threshold: 0.0
-score_domain: probability
+score_domain: sigmoid
 # The registry these scores are labelled by: the bundled taxa_registry.csv, copied
 # byte for byte from taxa_bureau commit 1213658, taxa_registries/perch-v8_taxa_registry.csv.
 taxa_registry_digest: sha256:ca28f370cb5924af9966fee9fcd0a12d57632bba85a01a3f5908f9011ef99fd9

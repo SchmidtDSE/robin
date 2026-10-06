@@ -50,7 +50,7 @@ def build_card(**overrides) -> ModelCard:
         "window_overlap": 0.0,
         "sample_rate": 32000,
         "min_detection_threshold": 0.0,
-        "score_domain": "probability",
+        "score_domain": "sigmoid",
         "taxa_registry_digest": REGISTRY_FINGERPRINT,
         "audio": AudioGeometry(
             downmix="mean",
@@ -85,7 +85,7 @@ def build_head(**overrides) -> HeadCard:
         "backbone": model_ref(BACKBONE_CARD),
         "embedding_dim": 1280,
         "min_detection_threshold": 0.0,
-        "score_domain": "probability",
+        "score_domain": "sigmoid",
         "taxa_registry_digest": REGISTRY_FINGERPRINT,
     }
     return HeadCard(**(fields | overrides))

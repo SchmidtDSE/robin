@@ -36,15 +36,15 @@ DEFAULT_BATCH_SIZE = 64
 
 # What OWL does whatever its card says. sox_tensorflow renders at 8 kHz from the first
 # channel, resampled by soxr at its high-quality setting, and stretches a short last clip
-# to the full image width. The network was trained on 12-second clips, outputs
-# probabilities, and has no embedding output.
+# to the full image width. The network was trained on 12-second clips, ends in a sigmoid
+# for each class, and has no embedding output.
 BEHAVIOUR = {
     "window_duration": 12.0,
     "sample_rate": 8000,
     "audio": AudioGeometry(
         downmix="first", resampler=RunnerResampled(algorithm="soxr_hq"), pad="time_scaled"
     ),
-    "score_domain": "probability",
+    "score_domain": "sigmoid",
     "can_emit_embeddings": False,
 }
 

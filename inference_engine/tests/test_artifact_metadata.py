@@ -51,7 +51,7 @@ CARD = ModelCard(
     sample_rate=32000,
     min_detection_threshold=0.0,
     window_overlap=0.0,
-    score_domain="probability",
+    score_domain="sigmoid",
     taxa_registry_digest=REGISTRY_FINGERPRINT,
     audio=AudioGeometry(
         downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad="drop"
@@ -268,9 +268,9 @@ def test_an_absent_registry_omits_its_keys():
 def test_score_metadata_records_the_requests_floor():
     request = build_scores_request(retention="thresholded", min_score=0.005)
 
-    decoded = decode_metadata(score_metadata(request, score_domain="probability"))
+    decoded = decode_metadata(score_metadata(request, score_domain="sigmoid"))
 
-    assert decoded["robin.score_domain"] == "probability"
+    assert decoded["robin.score_domain"] == "sigmoid"
     assert decoded["robin.score_retention"] == "thresholded"
     assert decoded["robin.score_floor"] == "0.005"
     assert "robin.score_top_k" not in decoded
@@ -279,7 +279,7 @@ def test_score_metadata_records_the_requests_floor():
 def test_score_metadata_records_the_requests_top_k():
     request = build_scores_request(retention="top_k", min_score=0.005, top_k=5)
 
-    decoded = decode_metadata(score_metadata(request, score_domain="probability"))
+    decoded = decode_metadata(score_metadata(request, score_domain="sigmoid"))
 
     assert decoded["robin.score_retention"] == "top_k"
     assert decoded["robin.score_floor"] == "0.005"
@@ -288,7 +288,7 @@ def test_score_metadata_records_the_requests_top_k():
 
 def test_full_retention_carries_no_floor_and_no_top_k():
     decoded = decode_metadata(
-        score_metadata(build_scores_request(), score_domain="probability")
+        score_metadata(build_scores_request(), score_domain="sigmoid")
     )
 
     assert set(decoded) == {"robin.score_domain", "robin.score_retention"}
@@ -299,7 +299,7 @@ def test_a_floor_round_trips_through_its_repr():
     floor = 0.1 + 0.2
     request = build_scores_request(retention="thresholded", min_score=floor)
 
-    stored = decode_metadata(score_metadata(request, score_domain="probability"))
+    stored = decode_metadata(score_metadata(request, score_domain="sigmoid"))
 
     assert float(stored["robin.score_floor"]) == floor
 
@@ -440,7 +440,7 @@ HEAD = HeadCard(
     backbone=ModelRef(name="perch", version="8", digest="sha256:v1:" + "d" * 64),
     embedding_dim=1280,
     min_detection_threshold=0.0,
-    score_domain="probability",
+    score_domain="sigmoid",
     taxa_registry_digest="sha256:" + "a" * 64,
 )
 

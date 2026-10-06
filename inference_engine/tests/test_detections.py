@@ -286,7 +286,7 @@ CARD = ModelCard(
     sample_rate=16000,
     min_detection_threshold=0.0,
     window_overlap=0.0,
-    score_domain="probability",
+    score_domain="sigmoid",
     taxa_registry_digest=REGISTRY_FINGERPRINT,
     audio=AudioGeometry(
         downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad="drop"
@@ -349,7 +349,7 @@ def header(work, recording, contract_id):
         recipe=RECIPE,
         registry_uri=REGISTRY_URI,
         registry_fingerprint=REGISTRY_FINGERPRINT,
-    ) | score_metadata(SCORES_REQUEST, score_domain="probability")
+    ) | score_metadata(SCORES_REQUEST, score_domain="sigmoid")
 
 
 def stage_scores(folder: Path, work, recording, windows) -> StagedArtifact:

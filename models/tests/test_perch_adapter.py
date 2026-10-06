@@ -56,7 +56,7 @@ def test_the_card_states_every_field():
         "window_overlap": 0.0,
         "sample_rate": 32000,
         "min_detection_threshold": 0.0,
-        "score_domain": "probability",
+        "score_domain": "sigmoid",
         "taxa_registry_digest": "sha256:" + REGISTRY_SHA256,
         "spectrogram_shape": None,
         "audio": {

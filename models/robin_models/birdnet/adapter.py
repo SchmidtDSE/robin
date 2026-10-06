@@ -53,7 +53,7 @@ BEHAVIOUR = {
         resampler=RunnerResampled(algorithm="scipy_fft_per_window"),
         pad="centre_crop_end_pad",
     ),
-    "score_domain": "probability",
+    "score_domain": "sigmoid",
     "min_detection_threshold": 0.0,
     "spectrogram_shape": None,
     "can_emit_embeddings": True,

@@ -42,7 +42,7 @@ CARD = ModelCard(
     sample_rate=48000,
     min_detection_threshold=0.0,
     window_overlap=0.0,
-    score_domain="probability",
+    score_domain="sigmoid",
     taxa_registry_digest=REGISTRY_DIGEST,
     audio=AudioGeometry(
         downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad="drop"

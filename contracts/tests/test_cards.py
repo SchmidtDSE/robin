@@ -30,7 +30,7 @@ MODEL_CARD_FIELDS = {
     "window_overlap": 0.0,
     "sample_rate": 32000,
     "min_detection_threshold": 0.01,
-    "score_domain": "probability",
+    "score_domain": "sigmoid",
     "taxa_registry_digest": REGISTRY_DIGEST,
     "audio": {
         "downmix": "mean",
@@ -49,7 +49,7 @@ HEAD_CARD_FIELDS = {
     "backbone": {"name": "perch", "version": "v8", "digest": CARD_DIGEST},
     "embedding_dim": 1280,
     "min_detection_threshold": 0.0,
-    "score_domain": "probability",
+    "score_domain": "sigmoid",
     "taxa_registry_digest": REGISTRY_DIGEST,
 }
 
@@ -161,7 +161,7 @@ def test_model_card_rejects_unknown_fields():
 # --- What a model emits -------------------------------------------------------
 
 
-@pytest.mark.parametrize("domain", ["probability", None])
+@pytest.mark.parametrize("domain", ["sigmoid", None])
 def test_a_card_states_its_score_domain_or_that_it_emits_no_scores(domain):
     digest = REGISTRY_DIGEST if domain else None
     card = _model_card(score_domain=domain, taxa_registry_digest=digest)
@@ -460,7 +460,7 @@ def test_reading_a_card_keeps_comments_and_layout_out_of_its_digest(tmp_path):
         "window_duration: 5.0\n"
         "window_overlap: 0.0\n"
         "min_detection_threshold: 0.01\n"
-        "score_domain: probability\n"
+        "score_domain: sigmoid\n"
         f"taxa_registry_digest: {REGISTRY_DIGEST}\n"
         "audio:\n"
         "  pad: centre_crop_end_pad   # keys in any order\n"

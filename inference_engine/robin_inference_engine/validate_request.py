@@ -14,7 +14,7 @@ from robin_contracts.protocols import JsonScalar
 from robin_contracts.registry import TaxonRegistry
 from robin_contracts.work import REGISTRY_ROLE, InferenceWork
 from robin_inference_engine import errors
-from robin_inference_engine.accept_window import PROBABILITY_RANGE
+from robin_inference_engine.accept_window import SCORE_RANGE
 from robin_inference_engine.requested_outputs import (
     detections_request,
     embeddings_request,
@@ -200,7 +200,7 @@ def _refuse_a_full_request_from_a_thresholded_stream(
 ) -> None:
     # A floor at or below the domain minimum excludes nothing, so such a model emits
     # every label. Above it, the scores under the floor were never produced.
-    minimum = PROBABILITY_RANGE[0]
+    minimum = SCORE_RANGE[0]
     floor = card.min_detection_threshold
     if scores.retention == "full" and floor > minimum:
         raise _refused(
@@ -235,13 +235,13 @@ def _declared_floors(work: InferenceWork) -> Iterator[tuple[str, float | None]]:
 
 def _refuse_a_floor_outside_the_score_domain(work: InferenceWork) -> None:
     # A floor exists only beside a scores request, whose card was checked to emit
-    # probabilities, so the probability range is the domain here.
-    low, high = PROBABILITY_RANGE
+    # scores, so the score range bounds it.
+    low, high = SCORE_RANGE
     for source, floor in _declared_floors(work):
         if floor is not None and not low <= floor <= high:
             raise _refused(
                 errors.MIN_SCORE_OUT_OF_DOMAIN,
-                f"{source} declares min_score {floor}, outside the probability domain "
+                f"{source} declares min_score {floor}, outside the score range "
                 f"[{low}, {high}]",
             )
 

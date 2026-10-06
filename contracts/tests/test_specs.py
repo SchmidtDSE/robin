@@ -48,7 +48,7 @@ def build_card(**overrides) -> ModelCard:
         "window_overlap": 1.5,
         "sample_rate": 32000,
         "min_detection_threshold": 0.0,
-        "score_domain": "probability",
+        "score_domain": "sigmoid",
         "taxa_registry_digest": REGISTRY_DIGEST,
         "audio": {
             "downmix": "first",

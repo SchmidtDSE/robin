@@ -167,7 +167,7 @@ def test_constructing_an_onnx_head_without_onnxruntime_is_an_unloadable_entry_po
         backbone=model_ref(bundled_card()),
         embedding_dim=4,
         min_detection_threshold=0.0,
-        score_domain="probability",
+        score_domain="sigmoid",
         taxa_registry_digest="sha256:" + "a" * 64,
     )
     context = ModelContext(

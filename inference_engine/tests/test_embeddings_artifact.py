@@ -58,7 +58,7 @@ CARD = ModelCard(
     can_emit_embeddings=True,
     embedding_dim=4,
     window_overlap=0.0,
-    score_domain="probability",
+    score_domain="sigmoid",
     taxa_registry_digest=REGISTRY_FINGERPRINT,
     audio=AudioGeometry(
         downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad="drop"

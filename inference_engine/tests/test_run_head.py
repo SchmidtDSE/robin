@@ -63,7 +63,7 @@ def build_backbone(**overrides) -> ModelCard:
         "window_overlap": 0.0,
         "sample_rate": 16000,
         "min_detection_threshold": 0.0,
-        "score_domain": "probability",
+        "score_domain": "sigmoid",
         "taxa_registry_digest": registry_digest(REGISTRY_CSV),
         "audio": AudioGeometry(
             downmix="mean",
@@ -95,7 +95,7 @@ def build_head(**overrides) -> HeadCard:
         "backbone": model_ref(BACKBONE),
         "embedding_dim": DIM,
         "min_detection_threshold": 0.0,
-        "score_domain": "probability",
+        "score_domain": "sigmoid",
         "taxa_registry_digest": registry_digest(HEAD_REGISTRY_CSV),
     }
     return HeadCard(**(fields | overrides))
@@ -522,7 +522,7 @@ def test_each_header_names_the_head_its_files_and_its_registry(rig):
         assert header["robin.model_card_digest"] == head.digest
         assert json.loads(header["robin.model_file_digests"]) == files
         assert header["robin.registry_fingerprint"] == registry_digest(HEAD_REGISTRY_CSV)
-        assert header["robin.score_domain"] == "probability"
+        assert header["robin.score_domain"] == "sigmoid"
         assert header["robin.recipe_fingerprint"] == recipe(BACKBONE).id
         assert header["robin.recording_namespace"] == record.namespace
         assert header["robin.recording_value"] == record.value

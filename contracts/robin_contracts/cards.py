@@ -119,6 +119,8 @@ class AudioGeometry(BaseModel):
 class ModelCard(BaseModel):
     """Serializable backbone facts, including every fact its recipe is built from.
 
+    `score_domain` is `sigmoid` when each class's score is a sigmoid output: between 0
+    and 1, independent of the other classes, and not calibrated.
     `min_detection_threshold` is the lowest score the model emits. At or below the
     score domain's minimum, the model emits every label for every window.
     `taxa_registry_digest` is the digest of the registry file the model's scores are
@@ -134,7 +136,7 @@ class ModelCard(BaseModel):
     window_overlap: float = Field(ge=0, allow_inf_nan=False)  # seconds shared with the next
     sample_rate: int
     min_detection_threshold: float
-    score_domain: Literal["probability"] | None  # None: the model emits no scores
+    score_domain: Literal["sigmoid"] | None  # None: the model emits no scores
     taxa_registry_digest: str | None = None  # sha256 of the registry file that labels the scores
     spectrogram_shape: tuple[int, int] | None = None
     audio: AudioGeometry
@@ -220,7 +222,7 @@ class HeadCard(BaseModel):
     backbone: ModelRef
     embedding_dim: int
     min_detection_threshold: float
-    score_domain: Literal["probability"]
+    score_domain: Literal["sigmoid"]
     taxa_registry_digest: str  # sha256 of the registry file that labels the scores
 
     @field_validator("model_name", "model_version", "runtime")

@@ -54,7 +54,7 @@ def build_card(*, geometry: WindowGeometry | None = None, **overrides) -> ModelC
         "window_overlap": geometry.window_overlap,
         "sample_rate": 16000,
         "min_detection_threshold": MODEL_FLOOR,
-        "score_domain": "probability",
+        "score_domain": "sigmoid",
         "taxa_registry_digest": REGISTRY_DIGEST,
         "audio": AudioGeometry(
             downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad=geometry.pad

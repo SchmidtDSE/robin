@@ -72,7 +72,7 @@ def head_reading(backbone: ModelCard) -> HeadCard:
         backbone=model_ref(backbone),
         embedding_dim=backbone.embedding_dim,
         min_detection_threshold=0.0,
-        score_domain="probability",
+        score_domain="sigmoid",
         taxa_registry_digest=REGISTRY_DIGEST,
     )
 

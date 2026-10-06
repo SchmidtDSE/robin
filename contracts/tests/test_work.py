@@ -33,7 +33,7 @@ CARD = ModelCard(
     window_overlap=0.0,
     sample_rate=32000,
     min_detection_threshold=0.0,
-    score_domain="probability",
+    score_domain="sigmoid",
     taxa_registry_digest=REGISTRY_DIGEST,
     audio=AudioGeometry(
         downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad="drop"
@@ -49,7 +49,7 @@ HEAD = HeadCard(
     backbone=ModelRef(name="perch", version="8", digest=RECORD_DIGEST),
     embedding_dim=1280,
     min_detection_threshold=0.0,
-    score_domain="probability",
+    score_domain="sigmoid",
     taxa_registry_digest=REGISTRY_DIGEST,
 )
 

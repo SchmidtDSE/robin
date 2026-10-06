@@ -69,8 +69,8 @@ def test_the_non_taxonomic_rows_have_no_name_and_no_key():
         assert entry.gbif_taxon_key is None
 
 
-def test_the_card_declares_probability_scores_no_embeddings_and_no_settings():
-    assert CARD.score_domain == "probability"
+def test_the_card_declares_sigmoid_scores_no_embeddings_and_no_settings():
+    assert CARD.score_domain == "sigmoid"
     assert CARD.min_detection_threshold == 0.0
     assert CARD.can_emit_embeddings is False
     assert CARD.embedding_dim is None

@@ -48,7 +48,7 @@ CARD = ModelCard(
     sample_rate=32000,
     min_detection_threshold=0.0,
     window_overlap=0.0,
-    score_domain="probability",
+    score_domain="sigmoid",
     taxa_registry_digest=REGISTRY_FINGERPRINT,
     audio=AudioGeometry(
         downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad="drop"
@@ -127,7 +127,7 @@ def build_metadata(request: ScoresRequest | None = None, **overrides) -> dict[by
         registry_uri="s3://b/registry.csv",
         registry_fingerprint=REGISTRY_FINGERPRINT,
     )
-    scores = score_metadata(request or build_request(), score_domain="probability")
+    scores = score_metadata(request or build_request(), score_domain="sigmoid")
     return shared | scores
 
 
@@ -450,7 +450,7 @@ def test_a_reader_refuses_a_scores_artifact_that_names_no_registry(tmp_path):
         recipe=build_recipe(),
         registry_uri=None,
         registry_fingerprint=None,
-    ) | score_metadata(build_request(), score_domain="probability")
+    ) | score_metadata(build_request(), score_domain="sigmoid")
     path = tmp_path / "scores.arrow"
     checksum = write_raw_stream(path, SCORES_SCHEMA.with_metadata(metadata))
 

@@ -12,10 +12,10 @@ window_overlap: 0.0
 sample_rate: 8000
 spectrogram_shape: [257, 1000]
 
-# Outputs are probabilities, and the network scores all 51 classes for every window.
-# A floor of 0.0 excludes none of them.
+# Scores are per-class sigmoid outputs, between 0 and 1, and not calibrated. The network
+# scores all 51 classes for every window, and a floor of 0.0 excludes none of them.
 min_detection_threshold: 0.0
-score_domain: probability
+score_domain: sigmoid
 # The registry these scores are labelled by: the bundled taxa_registry.csv, copied
 # byte for byte from taxa_bureau commit 1213658, taxa_registries/owl_taxa_registry.csv.
 taxa_registry_digest: sha256:bb172a45a873cada2a0bd5a2846f12053b1cf249eb58eab5eacdbb0efa6b19ed

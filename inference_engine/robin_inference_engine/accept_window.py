@@ -17,7 +17,7 @@ from robin_inference_engine import errors
 # Relative to the hop or window. Covers binary rounding in i * hop, nothing more.
 GRID_ALLOWANCE = 1e-9
 
-PROBABILITY_RANGE = (0.0, 1.0)
+SCORE_RANGE = (0.0, 1.0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +57,7 @@ class AcceptanceBoundary:
         self._geometry = geometry
         # At or below the domain minimum the floor excludes nothing, so the model emits
         # every label for every window.
-        self._full_stream = card.min_detection_threshold <= PROBABILITY_RANGE[0]
+        self._full_stream = card.min_detection_threshold <= SCORE_RANGE[0]
         self._recordings = tuple(recordings)
         self._registry = registry
         self._scores = scores
@@ -256,13 +256,13 @@ class AcceptanceBoundary:
         self._check_every_label_is_present(window, len(scores))
 
     def _check_score_value(self, window: WindowOutput, score: ClassScore) -> None:
-        low, high = PROBABILITY_RANGE
+        low, high = SCORE_RANGE
         if not math.isfinite(score.score) or not low <= score.score <= high:
             raise self._refuse(
                 errors.SCORE_OUT_OF_DOMAIN,
                 window,
-                f"score {score.score} for {score.label!r} is outside the probability "
-                f"domain [{low}, {high}]",
+                f"score {score.score} for {score.label!r} is outside the score range "
+                f"[{low}, {high}]",
             )
 
     def _check_label(self, window: WindowOutput, score: ClassScore) -> None:

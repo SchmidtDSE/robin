@@ -100,7 +100,7 @@ def build_card(*, pad: str = "centre_crop_end_pad", **overrides) -> ModelCard:
         "window_overlap": 0.0,
         "sample_rate": 16000,
         "min_detection_threshold": 0.0,
-        "score_domain": "probability",
+        "score_domain": "sigmoid",
         "taxa_registry_digest": registry_digest(REGISTRY_CSV),
         "audio": AudioGeometry(
             downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad=pad
@@ -457,7 +457,7 @@ def test_a_head_given_audio_is_refused_before_construction(tmp_path):
         backbone=REF,
         embedding_dim=1280,
         min_detection_threshold=0.0,
-        score_domain="probability",
+        score_domain="sigmoid",
         taxa_registry_digest=registry_digest(REGISTRY_CSV),
     )
     rig = Rig(tmp_path, card=head)

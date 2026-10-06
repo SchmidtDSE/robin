@@ -152,7 +152,7 @@ runtime: onnx
 backbone: {name: perch, version: v8, digest: 'sha256:v1:<the backbone card digest>'}
 embedding_dim: 1280
 min_detection_threshold: 0.0
-score_domain: probability
+score_domain: sigmoid
 taxa_registry_digest: sha256:<the registry file's sha256>
 ```
 
@@ -162,7 +162,7 @@ taxa_registry_digest: sha256:<the registry file's sha256>
   `digest`.
 - `embedding_dim` is the width the graph takes. It must equal the backbone's.
 - `min_detection_threshold` means what it means on a model card.
-- `score_domain` means what it means on a model card, and is `probability`.
+- `score_domain` means what it means on a model card, and is `sigmoid`.
 - `taxa_registry_digest` is the sha256 of the registry file that labels the head's scores.
 
 ### The input

@@ -10,10 +10,10 @@ window_duration: 3.0
 window_overlap: 0.0
 sample_rate: 48000
 
-# Outputs are scores between 0 and 1, not calibrated probabilities. Every class is scored
-# for every window, and a floor of 0.0 excludes none of them.
+# Scores are per-class sigmoid outputs, between 0 and 1, and not calibrated. Every class
+# is scored for every window, and a floor of 0.0 excludes none of them.
 min_detection_threshold: 0.0
-score_domain: probability
+score_domain: sigmoid
 # The registry these scores are labelled by: the bundled taxa_registry.csv, copied
 # byte for byte from taxa_bureau commit 1213658, taxa_registries/birdnet_taxa_registry.csv.
 taxa_registry_digest: sha256:b758a58bee475d45b1fb04a8f42cbaa13c794d2dc782f0e86968e6c1515d4c2d
