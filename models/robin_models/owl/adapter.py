@@ -35,14 +35,14 @@ except ModuleNotFoundError as error:
 DEFAULT_BATCH_SIZE = 64
 
 # What OWL does whatever its card says. sox_tensorflow renders at 8 kHz from the first
-# channel, resampled by soxr at its high-quality setting, and stretches a short last clip
-# to the full image width. The network was trained on 12-second clips, ends in a sigmoid
-# for each class, and has no embedding output.
+# channel, resampled by soxr at its high-quality setting, and renders only full windows.
+# The network was trained on 12-second clips, ends in a sigmoid for each class, and has no
+# embedding output.
 BEHAVIOUR = {
     "window_duration": 12.0,
     "sample_rate": 8000,
     "audio": AudioGeometry(
-        downmix="first", resampler=RunnerResampled(algorithm="soxr_hq"), pad="time_scaled"
+        downmix="first", resampler=RunnerResampled(algorithm="soxr_hq"), pad="drop"
     ),
     "score_domain": "sigmoid",
     "can_emit_embeddings": False,
@@ -133,6 +133,9 @@ class OwlModel:
     def _windows(self, audio: Path) -> Iterator[WindowOutput]:
         geometry = self._geometry
         bounds = window_bounds(sf.info(str(audio)).duration, geometry)
+        # An empty path list would reach TensorFlow as a float32 dataset, which it cannot read.
+        if not bounds:
+            return
         # Set before rendering, so after_recording removes a partly rendered recording.
         self._png_dir = Path(tempfile.mkdtemp(prefix="owl-spectrograms-", dir=self._scratch_dir))
         self._log(f"rendering {len(bounds)} spectrograms for {audio.name}")

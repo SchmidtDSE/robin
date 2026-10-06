@@ -20,12 +20,13 @@ score_domain: sigmoid
 taxa_registry_digest: sha256:bb172a45a873cada2a0bd5a2846f12053b1cf249eb58eab5eacdbb0efa6b19ed
 
 # The first channel is read, and resampled to 8 kHz by the runner with soxr at its
-# high-quality setting. A last window shorter than 12 seconds is stretched to the full
-# image width.
+# high-quality setting. Only full 12-second windows are scored: the audio after the last
+# one, and a recording shorter than 12 seconds, is not scored. The renderer matches sox,
+# which made the training images, only on full windows.
 audio:
   downmix: first
   resampler: {by: runner, algorithm: soxr_hq}
-  pad: time_scaled
+  pad: drop
 backend: h5-fp32
 
 # A work can set window_overlap, in seconds. Each window is then rendered from where it starts.

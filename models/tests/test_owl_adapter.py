@@ -89,7 +89,7 @@ def test_the_card_names_the_bundled_registry_by_its_digest():
 RECIPE_BEFORE_THE_CARD_STATED_IT = {
     "audio": {
         "downmix": "first",
-        "pad": "time_scaled",
+        "pad": "drop",
         "resampler": {"algorithm": "soxr_hq", "by": "runner"},
         "sample_rate": 8000,
         "window_duration": 12.0,
@@ -131,9 +131,9 @@ def soundfile_duration(frames: int, rate: int) -> float:
 
 
 @pytest.mark.parametrize("rate", RATES)
-def test_a_file_one_frame_short_of_three_windows_yields_three(rate):
+def test_a_file_one_frame_short_of_three_windows_yields_two(rate):
     bounds = window_bounds(soundfile_duration(36 * rate - 1, rate), GEOMETRY)
-    assert len(bounds) == 3
+    assert len(bounds) == 2
 
 
 @pytest.mark.parametrize("rate", RATES)
@@ -143,10 +143,9 @@ def test_a_file_of_exactly_three_windows_yields_three(rate):
 
 
 @pytest.mark.parametrize("rate", RATES)
-def test_one_extra_sample_adds_a_window(rate):
+def test_one_extra_sample_adds_no_window(rate):
     bounds = window_bounds(soundfile_duration(36 * rate + 1, rate), GEOMETRY)
-    assert len(bounds) == 4
-    assert bounds[3][0] == 36.0
+    assert len(bounds) == 3
 
 
 @pytest.mark.parametrize("rate", RATES)
@@ -157,11 +156,11 @@ def test_each_window_starts_on_a_whole_frame_at_the_files_rate(rate, extra_frame
     assert [round(start * rate) for start in starts] == [
         i * 12 * rate for i in range(len(starts))
     ]
-    assert len(starts) >= 3
+    assert len(starts) == {-1: 2, 0: 3, 1: 3}[extra_frames]
 
 
-def test_a_recording_shorter_than_one_window_yields_one_window():
-    assert window_bounds(5.0, GEOMETRY) == [(0.0, 12.0)]
+def test_a_recording_shorter_than_one_window_yields_no_windows():
+    assert window_bounds(5.0, GEOMETRY) == []
 
 
 # The adapter, run against stand-ins for its runtime.
@@ -173,7 +172,7 @@ class FakeRuntime:
     """Records what the adapter asked of its runtime, and fails where told to."""
 
     def __init__(self) -> None:
-        self.duration = 30.0
+        self.duration = 36.0
         self.loaded: list[str] = []
         self.load_error: Exception | None = None
         self.inspected: list[str] = []
@@ -326,7 +325,7 @@ def changed_card(**changes) -> ModelCard:
             {"audio": {**AUDIO, "resampler": {"by": "runner", "algorithm": "librosa"}}},
             id="resampler",
         ),
-        pytest.param("audio", {"audio": {**AUDIO, "pad": "drop"}}, id="pad"),
+        pytest.param("audio", {"audio": {**AUDIO, "pad": "time_scaled"}}, id="pad"),
         pytest.param(
             "score_domain",
             {"score_domain": None, "taxa_registry_digest": None},
@@ -410,7 +409,7 @@ def test_run_yields_every_window_with_every_label_scored_in_output_order(runtime
 def test_overlapping_windows_are_rendered_from_where_each_one_starts(runtime, tmp_path):
     model = runtime.adapter.build(owl_context(tmp_path, settings={"window_overlap": 6.0}))
     windows = list(model.run(AudioClip(path=tmp_path / "a.flac")))
-    assert runtime.rendered == [0.0, 6.0, 12.0, 18.0]
+    assert runtime.rendered == [0.0, 6.0, 12.0, 18.0, 24.0]
     assert [window.start for window in windows] == runtime.rendered
 
 
@@ -452,6 +451,22 @@ def test_after_a_rendering_failure_the_recordings_spectrograms_are_removed(runti
     assert list(context.scratch_dir.rglob("*.png")) != []
     model.after_recording()
     assert list(context.scratch_dir.iterdir()) == [unrelated]
+    model.after_recording()
+
+
+def test_a_recording_shorter_than_one_window_is_not_rendered_or_scored(
+    runtime, tmp_path, monkeypatch
+):
+    def fail(*args, **kwargs):
+        raise AssertionError("called for a recording with no windows")
+
+    runtime.duration = 5.0
+    monkeypatch.setattr(runtime.adapter, "spectrogram_from_flac", fail)
+    monkeypatch.setattr(runtime.adapter, "_predict", fail)
+    context = owl_context(tmp_path)
+    model = runtime.adapter.build(context)
+    assert list(model.run(AudioClip(path=tmp_path / "a.flac"))) == []
+    assert list(context.scratch_dir.iterdir()) == []
     model.after_recording()
 
 
