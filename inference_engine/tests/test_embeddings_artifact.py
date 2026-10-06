@@ -198,6 +198,14 @@ def robin_keys(metadata) -> set[str]:
     return {key for key in metadata if key.startswith("robin.")}
 
 
+def damage_the_footer(path: Path) -> None:
+    """Overwrite the footer's bytes, keeping its length and the closing magic."""
+    data = bytearray(path.read_bytes())
+    length = int.from_bytes(data[-8:-4], "little")
+    data[-8 - length : -8] = b"\xff" * length
+    path.write_bytes(bytes(data))
+
+
 def read_rows(path, checksum):
     with read_embeddings(path, expected_checksum=checksum) as stream:
         return [batch.to_pylist() for batch in stream.batches]
@@ -932,6 +940,20 @@ def test_a_reader_refuses_a_truncated_file_when_it_opens(tmp_path):
     assert "Parquet" in exc.value.detail
 
 
+def test_a_reader_refuses_a_file_whose_footer_does_not_decode(tmp_path):
+    staged = write_artifact(tmp_path / "embeddings.parquet", [build_window()])
+    damage_the_footer(staged.path)
+    checksum = checksum_file(staged.path)
+
+    with pytest.raises(errors.EngineError) as exc:
+        with read_embeddings(staged.path, expected_checksum=checksum):
+            pass
+
+    assert exc.value.code == errors.ARTIFACT_MALFORMED
+    assert staged.path.name in exc.value.detail
+    assert "Parquet" in exc.value.detail
+
+
 def test_a_reader_refuses_another_contracts_artifact(tmp_path):
     path = tmp_path / "embeddings.parquet"
     checksum = write_raw_file(
@@ -974,6 +996,18 @@ def test_a_reader_refuses_a_header_that_is_not_utf8(tmp_path):
             pass
 
     assert exc.value.code == errors.ARTIFACT_MALFORMED
+
+
+def test_a_reader_ignores_binary_metadata_outside_its_own_keys(tmp_path):
+    metadata = build_metadata() | {b"foreign.binary": b"\xff"}
+    path = tmp_path / "embeddings.parquet"
+    checksum = write_raw_file(
+        path, embeddings_schema(DIM, "float32").with_metadata(metadata)
+    )
+
+    with read_embeddings(path, expected_checksum=checksum) as stream:
+        assert "foreign.binary" not in stream.metadata
+        assert list(stream.batches) == []
 
 
 def test_a_reader_refuses_a_storage_dtype_the_contract_does_not_declare(tmp_path):

@@ -170,6 +170,14 @@ def robin_keys(metadata) -> set[str]:
     return {key for key in metadata if key.startswith("robin.")}
 
 
+def damage_the_footer(path: Path) -> None:
+    """Overwrite the footer's bytes, keeping its length and the closing magic."""
+    data = bytearray(path.read_bytes())
+    length = int.from_bytes(data[-8:-4], "little")
+    data[-8 - length : -8] = b"\xff" * length
+    path.write_bytes(bytes(data))
+
+
 def read_rows(path, checksum):
     with read_scores(path, expected_checksum=checksum) as stream:
         return [batch.to_pylist() for batch in stream.batches]
@@ -765,6 +773,20 @@ def test_a_reader_refuses_a_truncated_file_when_it_opens(tmp_path):
 
     assert exc.value.code == errors.ARTIFACT_MALFORMED
     assert exc.value.stage == errors.READ_INPUT_ARTIFACT
+    assert staged.path.name in exc.value.detail
+    assert "Parquet" in exc.value.detail
+
+
+def test_a_reader_refuses_a_file_whose_footer_does_not_decode(tmp_path):
+    staged = write_artifact(tmp_path / "scores.parquet", [build_window()])
+    damage_the_footer(staged.path)
+    checksum = checksum_file(staged.path)
+
+    with pytest.raises(errors.EngineError) as exc:
+        with read_scores(staged.path, expected_checksum=checksum):
+            pass
+
+    assert exc.value.code == errors.ARTIFACT_MALFORMED
     assert staged.path.name in exc.value.detail
     assert "Parquet" in exc.value.detail
 

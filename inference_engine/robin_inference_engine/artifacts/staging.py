@@ -57,7 +57,8 @@ def open_parquet(handle: pa.NativeFile, name: str) -> pq.ParquetFile:
     """Open a Parquet file, refusing bytes that are not one."""
     try:
         return pq.ParquetFile(handle)
-    except pa.ArrowInvalid as exc:
+    # pyarrow raises OSError for a footer that does not decode.
+    except (pa.ArrowInvalid, OSError) as exc:
         raise malformed(f"{name} does not open as Parquet: {exc}") from exc
 
 

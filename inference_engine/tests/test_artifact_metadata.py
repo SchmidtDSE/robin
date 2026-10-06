@@ -356,12 +356,19 @@ def test_a_value_that_is_not_utf8_is_refused_as_a_malformed_artifact():
     assert "robin.recipe" in exc.value.detail
 
 
-def test_a_key_that_is_not_utf8_is_refused_as_a_malformed_artifact():
+def test_a_robin_key_that_is_not_utf8_is_refused_as_a_malformed_artifact():
     with pytest.raises(errors.EngineError) as exc:
-        decode_metadata({b"\xff\xfe": b"anything"})
+        decode_metadata({b"robin.\xff": b"anything"})
 
     assert exc.value.code == errors.ARTIFACT_MALFORMED
     assert exc.value.stage == errors.READ_INPUT_ARTIFACT
+
+
+def test_keys_outside_robins_own_are_not_decoded():
+    raw = build_metadata()
+    decoded = decode_metadata(raw | {b"foreign.binary": b"\xff", b"\xff\xfe": b"anything"})
+
+    assert decoded == decode_metadata(raw)
 
 
 def test_a_missing_key_check_names_every_absent_key():

@@ -334,9 +334,20 @@ def a_file_naming_no_recording_value(rig: HeadRig, work: InferenceWork) -> Infer
     return rig.with_input(work, 1, path)
 
 
+def a_file_whose_footer_does_not_decode(rig: HeadRig, work: InferenceWork) -> InferenceWork:
+    path = a_copy(rig, work, 1)
+    data = bytearray(path.read_bytes())
+    # Overwrite the footer's bytes, keeping its length and the closing magic.
+    length = int.from_bytes(data[-8:-4], "little")
+    data[-8 - length : -8] = b"\xff" * length
+    path.write_bytes(bytes(data))
+    return rig.with_input(work, 1, path)
+
+
 @pytest.mark.parametrize(
     ("named", "code"),
     [
+        (a_file_whose_footer_does_not_decode, errors.ARTIFACT_MALFORMED),
         (a_file_from_another_backbone, errors.HEAD_INPUT_BACKBONE_MISMATCH),
         (a_file_of_another_width, errors.HEAD_INPUT_WIDTH_MISMATCH),
         (another_recordings_file, errors.HEAD_INPUT_RECORDING_MISMATCH),

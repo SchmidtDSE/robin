@@ -33,6 +33,8 @@ RECORDING_NAMESPACE_KEY = "robin.recording_namespace"
 RECORDING_VALUE_KEY = "robin.recording_value"
 RECIPE_FINGERPRINT_KEY = "robin.recipe_fingerprint"
 
+_ROBIN_PREFIX = b"robin."
+
 # Every artifact carries these keys, whatever its contract.
 REQUIRED_KEYS: tuple[str, ...] = (
     CONTRACT_KEY,
@@ -146,17 +148,19 @@ def detection_metadata(
 
 
 def decode_metadata(raw: Mapping[bytes, bytes] | None) -> dict[str, str]:
-    """A schema's byte keys and values, decoded to text.
+    """A schema's `robin.` keys and values, decoded to text.
 
-    pyarrow reports a missing header as `None`, which becomes an empty mapping for the
-    caller's key check to refuse. Bytes that are not valid UTF-8 raise a typed failure.
+    Other keys belong to other tools, and are left out unread. pyarrow reports a
+    missing header as `None`, which becomes an empty mapping for the caller's key check
+    to refuse. A `robin.` value that is not valid UTF-8 raises a typed failure.
     """
     if raw is None:
         return {}
     decoded: dict[str, str] = {}
     for key, value in raw.items():
-        name = _decode_text(key, what=f"the metadata key {key!r}")
-        decoded[name] = _decode_text(value, what=f"the value of {name}")
+        if key.startswith(_ROBIN_PREFIX):
+            name = _decode_text(key, what=f"the metadata key {key!r}")
+            decoded[name] = _decode_text(value, what=f"the value of {name}")
     return decoded
 
 
