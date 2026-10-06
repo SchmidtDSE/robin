@@ -585,7 +585,8 @@ def test_an_engine_defect_in_the_stream_is_not_reported_as_a_failure(tmp_path, m
     assert raised.value is defect
 
 
-def test_spilled_rows_stay_inside_the_folder_it_is_given(tmp_path, monkeypatch):
+def connection_config(tmp_path, monkeypatch, resources) -> dict:
+    """The config DuckDB is given when detections are written for a work with `resources`."""
     connected = []
     real = duckdb.connect
 
@@ -594,7 +595,22 @@ def test_spilled_rows_stay_inside_the_folder_it_is_given(tmp_path, monkeypatch):
         return real(*args, **kwargs)
 
     monkeypatch.setattr(detections.duckdb, "connect", connect)
-    written(tmp_path)
-
+    recording = a_recording()
+    work = a_work(recording).model_copy(update={"resources": resources})
+    detect(tmp_path, work, stage_scores(tmp_path, work, recording, OWL_WINDOWS))
     (config,) = connected
+    return config
+
+
+def test_spilled_rows_stay_inside_the_folder_it_is_given(tmp_path, monkeypatch):
+    config = connection_config(tmp_path, monkeypatch, {})
+
+    assert set(config) == {"temp_directory"}
+    assert Path(config["temp_directory"]).parent == tmp_path
+
+
+def test_duckdb_is_given_the_memory_limit_the_resources_set(tmp_path, monkeypatch):
+    config = connection_config(tmp_path, monkeypatch, {"duckdb_memory_limit": "512MB"})
+
+    assert config["memory_limit"] == "512MB"
     assert Path(config["temp_directory"]).parent == tmp_path

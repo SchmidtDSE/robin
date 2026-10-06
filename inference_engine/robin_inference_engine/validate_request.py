@@ -15,6 +15,7 @@ from robin_contracts.registry import TaxonRegistry
 from robin_contracts.work import REGISTRY_ROLE, InferenceWork
 from robin_inference_engine import errors
 from robin_inference_engine.accept_window import SCORE_RANGE
+from robin_inference_engine.detections import DUCKDB_MEMORY_LIMIT
 from robin_inference_engine.requested_outputs import (
     detections_request,
     embeddings_request,
@@ -26,7 +27,7 @@ _SETTING_TYPES: dict[str, type] = {"int": int, "float": float}
 
 
 def refuse_request(work: InferenceWork, *, registry: TaxonRegistry | None) -> None:
-    """Everything the engine refuses before it builds the model, all read from the card."""
+    """Everything the engine refuses before it builds the model."""
     card = work.model.card
     # First: whether the card is a head decides which of its fields the rest read.
     _refuse_an_input_the_card_does_not_read(work, card)
@@ -52,6 +53,7 @@ def refuse_request(work: InferenceWork, *, registry: TaxonRegistry | None) -> No
     if scores is not None:
         _refuse_a_floor_below_the_models_own(scores, card)
     _refuse_a_storage_width_the_card_does_not_declare(work, card)
+    _refuse_a_duckdb_memory_limit_that_is_not_a_string(work)
 
 
 def _refused(code: str, detail: str) -> errors.EngineError:
@@ -281,3 +283,14 @@ def _refuse_a_storage_width_the_card_does_not_declare(
         f"embeddings were requested at storage_dtype {embeddings.storage_dtype!r}, "
         f"but card {_card_id(card)} declares dtype {card.dtype!r}",
     )
+
+
+def _refuse_a_duckdb_memory_limit_that_is_not_a_string(work: InferenceWork) -> None:
+    # DuckDB parses the value itself, when it builds the detections.
+    limit = work.resources.get(DUCKDB_MEMORY_LIMIT)
+    if DUCKDB_MEMORY_LIMIT in work.resources and not (isinstance(limit, str) and limit):
+        raise _refused(
+            errors.RESOURCE_INVALID,
+            f"resource {DUCKDB_MEMORY_LIMIT!r} is {limit!r}, but DuckDB needs a non-empty "
+            f"string such as '4GB'",
+        )

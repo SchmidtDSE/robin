@@ -1079,6 +1079,37 @@ def test_a_failed_aggregation_fails_the_work_and_publishes_nothing(taxa_rig, mon
     assert_failed_cleanly(rig, result)
 
 
+def test_a_duckdb_memory_limit_does_not_change_the_detections_bytes(tmp_path):
+    def detections_bytes(folder: Path, resources) -> bytes:
+        card = build_card(taxa_registry_digest=registry_digest(TAXA_CSV))
+        rig = Rig(folder, card=card, registry_csv=TAXA_CSV)
+        work = rig.work(outputs=(scores_request(), detections_request()), resources=resources)
+        model = rig.model([[taxa_window(0.0, 0.9, 0.6, 0.7), taxa_window(3.0, 0.1, 0.2, 0.5)]])
+        result = success_of(rig, rig.run(work, model), work)
+        return published(rig, artifact(result, "detections")).read_bytes()
+
+    limited = detections_bytes(tmp_path / "limited", {"duckdb_memory_limit": "512MB"})
+
+    assert limited == detections_bytes(tmp_path / "unlimited", {})
+
+
+def test_a_memory_limit_duckdb_cannot_parse_fails_the_work_at_aggregation(taxa_rig):
+    rig = taxa_rig
+    work = rig.work(
+        recordings=2,
+        outputs=(scores_request(), detections_request()),
+        resources={"duckdb_memory_limit": "lots"},
+    )
+
+    result = rig.run(work, rig.model([[taxa_window(0.0, 0.9, 0.1, 0.1)]] * 2))
+
+    failure = failure_of(
+        result, work, code=errors.AGGREGATION_FAILED, stage=errors.AGGREGATE
+    )
+    assert (failure.namespace, failure.value) == ("test", "0")
+    assert_failed_cleanly(rig, result)
+
+
 def test_scores_embeddings_and_detections_are_published_together(taxa_rig):
     rig = taxa_rig
     work = rig.work(

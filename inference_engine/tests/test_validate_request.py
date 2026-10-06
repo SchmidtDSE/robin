@@ -623,6 +623,17 @@ def test_a_satisfiable_work_is_not_refused():
     assert accepted(build_work())
 
 
+@pytest.mark.parametrize("limit", [512, "", None])
+def test_a_duckdb_memory_limit_that_is_not_a_non_empty_string_is_refused(limit):
+    error = refused(build_work(resources={"duckdb_memory_limit": limit}))
+
+    assert_validate_request(error, errors.RESOURCE_INVALID, "duckdb_memory_limit", repr(limit))
+
+
+def test_a_duckdb_memory_limit_given_as_a_string_is_not_refused():
+    assert accepted(build_work(resources={"duckdb_memory_limit": "2GB"}))
+
+
 REFUSING_CALLS = {
     "scores_not_emitted": lambda: refused(build_work(card=build_card(score_domain=None, taxa_registry_digest=None))),
     "full_retention_reduced": lambda: refused(build_work(card=THRESHOLDED_CARD)),
@@ -663,6 +674,7 @@ REFUSING_CALLS = {
     "head_emits_no_embeddings": lambda: refused(
         build_head_work(outputs=(build_scores(), build_embeddings()))
     ),
+    "resource_invalid": lambda: refused(build_work(resources={"duckdb_memory_limit": ""})),
 }
 
 

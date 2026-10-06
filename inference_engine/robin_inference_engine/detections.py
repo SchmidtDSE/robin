@@ -34,6 +34,10 @@ DUCKDB_BATCH_ROWS = 2**16
 
 DETECTION_ID = "detection_id"
 
+# The work resource that caps DuckDB's memory, as a string DuckDB parses, such as "4GB".
+# Without it, DuckDB takes its own default share of the machine's memory.
+DUCKDB_MEMORY_LIMIT = "duckdb_memory_limit"
+
 DETECTIONS_SCHEMA = pa.schema(
     [
         pa.field(DETECTION_ID, pa.string(), nullable=False),
@@ -136,9 +140,10 @@ def write_detections(
     """Select the detections in one recording's staged scores file and write them to `path`.
 
     `registry` is the table `registry_table` returns, and `metadata` the file's whole header.
-    DuckDB spills under `temporary`. Returns None, leaving no file, when nothing is
-    selected. An expected failure is an `EngineError` at the aggregate stage naming the
-    recording.
+    DuckDB spills under `temporary`, and its memory limit is the work's
+    `duckdb_memory_limit` resource, if it sets one. Returns None, leaving no file, when
+    nothing is selected. An expected failure is an `EngineError` at the aggregate stage
+    naming the recording.
     """
     recording = scores.recording
     try:
@@ -149,6 +154,7 @@ def write_detections(
             registry=registry,
             metadata=metadata,
             temporary=temporary,
+            memory_limit=work.resources.get(DUCKDB_MEMORY_LIMIT),
             identity=_recording_identity(work, recording, recipe),
             recipe_fingerprint=recipe.id,
         )
@@ -175,6 +181,7 @@ def _select_and_write(
     registry: pa.Table,
     metadata: Mapping[bytes, bytes],
     temporary: Path,
+    memory_limit: str | None,
     identity: Mapping[str, str],
     recipe_fingerprint: str,
 ) -> int:
@@ -183,24 +190,26 @@ def _select_and_write(
     with read_scores(scores.path, expected_checksum=scores.checksum) as stream:
         source = _CheckedScores(stream.batches, registry.column("label"), scores.recording)
         config = {"temp_directory": str(temporary / "duckdb")}
-        with duckdb.connect(config=config) as connection:
-            connection.register("registry", registry)
-            connection.register("scores", source.reader())
-            try:
+        if memory_limit is not None:
+            config["memory_limit"] = memory_limit
+        try:
+            with duckdb.connect(config=config) as connection:
+                connection.register("registry", registry)
+                connection.register("scores", source.reader())
                 selected = connection.execute(sql, parameters).to_arrow_reader(
                     DUCKDB_BATCH_ROWS
                 )
                 with_ids = (_with_ids(batch, identity) for batch in selected)
                 return _write_parquet(path, with_ids, metadata)
-            except duckdb.Error as exc:
-                source.raise_recorded()
-                raise errors.EngineError(
-                    errors.AGGREGATION_FAILED,
-                    errors.AGGREGATE,
-                    f"selecting the detections of recording {errors.named(scores.recording)} "
-                    f"raised {type(exc).__name__}: {exc}",
-                    recording=scores.recording,
-                ) from exc
+        except duckdb.Error as exc:
+            source.raise_recorded()
+            raise errors.EngineError(
+                errors.AGGREGATION_FAILED,
+                errors.AGGREGATE,
+                f"selecting the detections of recording {errors.named(scores.recording)} "
+                f"raised {type(exc).__name__}: {exc}",
+                recording=scores.recording,
+            ) from exc
 
 
 class _CheckedScores:
