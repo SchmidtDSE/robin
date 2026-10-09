@@ -1,8 +1,10 @@
 """The installed distribution: what it registers, what listing imports, and its resources."""
 
 import importlib.util
+import json
 import subprocess
 import sys
+from collections import Counter
 from importlib.metadata import entry_points
 from importlib.resources import as_file, files
 
@@ -11,12 +13,15 @@ import pytest
 from robin_contracts.cards import HeadCard, model_ref, read_card
 from robin_contracts.protocols import ModelContext
 from robin_inference_engine import errors
+from robin_contracts.tasks import ModelOutputVersion, output_version_id
 from robin_inference_engine.construct_model import (
+    ENTRY_POINT_GROUP,
     HEAD_RUNTIME_GROUP,
     construct_head,
     construct_model,
     installed_models,
 )
+from robin_models.output_versions import OUTPUT_VERSIONS
 
 RUNTIME_MODULES = (
     "robin_models.owl.adapter",
@@ -184,3 +189,55 @@ def test_constructing_an_onnx_head_without_onnxruntime_is_an_unloadable_entry_po
     assert caught.value.code == errors.MODEL_ENTRY_POINT_UNLOADABLE
     assert caught.value.stage == errors.CONSTRUCT_MODEL
     assert "robin-models[onnx-head]" in caught.value.detail
+
+
+# The output-version table.
+
+
+def installed_identifiers() -> list[str]:
+    """The output-version identifier of each installed entry point, repeats kept."""
+    models = [f"model:{entry.name}" for entry in entry_points(group=ENTRY_POINT_GROUP)]
+    heads = [f"head_runtime:{entry.name}" for entry in entry_points(group=HEAD_RUNTIME_GROUP)]
+    return models + heads
+
+
+def test_the_output_versions_name_each_installed_entry_point():
+    in_table = {version.model for version in OUTPUT_VERSIONS}
+    installed = set(installed_identifiers())
+    assert installed - in_table == set(), "entry points with no output version"
+    assert in_table - installed == set(), "output versions with no entry point"
+
+
+def test_no_model_has_two_output_versions():
+    counts = Counter(version.model for version in OUTPUT_VERSIONS)
+    assert [model for model, count in counts.items() if count > 1] == []
+
+
+def test_every_output_version_is_a_checked_positive_int():
+    for version in OUTPUT_VERSIONS:
+        assert type(version) is ModelOutputVersion
+        assert type(version.version) is int and version.version >= 1, version
+
+
+@pytest.mark.parametrize(("package", "model"), MODELS)
+def test_a_bundled_cards_identifier_has_an_output_version(package, model):
+    identifier = output_version_id(bundled_card(package))
+    assert identifier == f"model:{model}"
+    assert identifier in {version.model for version in OUTPUT_VERSIONS}
+
+
+def test_reading_and_exporting_the_output_versions_imports_no_adapter_and_no_runtime():
+    code = (
+        "import json\n"
+        "from robin_models.output_versions import OUTPUT_VERSIONS\n"
+        "json.dumps([version.model_dump(mode='json') for version in OUTPUT_VERSIONS])"
+    )
+    assert modules_loaded_after(code) == set()
+
+
+def test_the_output_versions_export_as_json_objects_of_model_and_version():
+    exported = json.loads(
+        json.dumps([version.model_dump(mode="json") for version in OUTPUT_VERSIONS])
+    )
+    assert all(set(row) == {"model", "version"} for row in exported)
+    assert [ModelOutputVersion(**row) for row in exported] == list(OUTPUT_VERSIONS)

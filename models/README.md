@@ -130,6 +130,18 @@ Reports* 13, 22876 (2023).
 Kaggle states the licence of version 8 as Apache 2.0. It is not covered by robin's BSD-3-Clause
 licence.
 
+## Output versions
+
+`robin_models/output_versions.py` gives the output version of each model's code in this
+release. There is one entry for each base model, such as `model:owl/v4`, and one for each
+head runtime, such as `head_runtime:onnx`. Every head on one runtime shares that runtime's
+version.
+
+Increase a version in the change that changes that model's outputs. The cause can be the
+adapter, the engine, preprocessing, or a locked dependency such as TensorFlow or soxr. A
+change that leaves the outputs the same keeps the version. A new entry point needs an entry
+in the table; a test refuses an entry point without one.
+
 ## Running more than one model
 
 Run one TensorFlow model per process. OWL needs legacy Keras, and TensorFlow chooses its Keras

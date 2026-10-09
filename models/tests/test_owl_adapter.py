@@ -1,5 +1,6 @@
 """The OWL adapter: its bundled card and registry, and the adapter against a fake runtime."""
 
+import contextlib
 import csv
 import hashlib
 import importlib
@@ -182,12 +183,23 @@ class FakeRuntime:
         self.predicted: list[list[str]] = []
         self.batch_sizes: list[int] = []
         self.score_count = 51
+        self.device: str | None = None
+        self.load_devices: list[str | None] = []
 
     def load_model(self, path):
+        self.load_devices.append(self.device)
         self.loaded.append(str(path))
         if self.load_error is not None:
             raise self.load_error
         return types.SimpleNamespace(input_shape=self.input_shape)
+
+    @contextlib.contextmanager
+    def on_device(self, name: str):
+        previous, self.device = self.device, name
+        try:
+            yield
+        finally:
+            self.device = previous
 
     def info(self, path):
         self.inspected.append(str(path))
@@ -224,6 +236,7 @@ def runtime(monkeypatch):
     tensorflow.keras = types.SimpleNamespace(
         models=types.SimpleNamespace(load_model=fake.load_model)
     )
+    tensorflow.device = fake.on_device
     soundfile = types.ModuleType("soundfile")
     soundfile.info = fake.info
     processor = types.ModuleType("sox_tensorflow.processor")
@@ -280,7 +293,7 @@ def test_a_built_model_satisfies_the_protocol_and_restates_nothing_from_its_card
         pytest.param({}, 64, id="none_given"),
         pytest.param({"batch_size": 8}, 8, id="given"),
         pytest.param({"device": "cpu", "batch_size": 1}, 1, id="beside_another_key"),
-        pytest.param({"device": "cpu"}, 64, id="only_an_unused_key"),
+        pytest.param({"device": "cpu"}, 64, id="only_the_device"),
     ],
 )
 def test_the_batch_size_is_read_from_the_resources(runtime, resources, expected):
@@ -305,6 +318,35 @@ def test_a_bad_batch_size_is_refused_before_the_weights_load(runtime, tmp_path):
     with pytest.raises(ValueError, match="batch_size"):
         runtime.adapter.build(owl_context(tmp_path, resources={"batch_size": 0}))
     assert runtime.loaded == []
+
+
+# The device, a resource.
+
+
+@pytest.mark.parametrize("resources", [{}, {"device": "cpu"}], ids=["absent", "cpu"])
+def test_the_weights_load_on_the_cpu(runtime, tmp_path, resources):
+    runtime.adapter.build(owl_context(tmp_path, resources=resources))
+    assert runtime.load_devices == ["/CPU:0"]
+
+
+@pytest.mark.parametrize("value", ["gpu", "/GPU:0", "/CPU:0", "CPU", "", None], ids=repr)
+def test_any_other_device_is_refused_before_the_weights_load(runtime, tmp_path, value):
+    with pytest.raises(ValueError, match="device") as caught:
+        runtime.adapter.build(owl_context(tmp_path, resources={"device": value}))
+    assert repr(value) in str(caught.value)
+    assert runtime.loaded == []
+
+
+def test_each_batch_is_scored_on_the_cpu_and_the_scope_ends_with_it(runtime):
+    seen = []
+
+    def network(images):
+        seen.append(runtime.device)
+        return types.SimpleNamespace(numpy=lambda: images)
+
+    assert runtime.adapter._score_batch(network, "images") == "images"
+    assert seen == ["/CPU:0"]
+    assert runtime.device is None
 
 
 # What OWL does, whatever its card says.

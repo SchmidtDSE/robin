@@ -163,6 +163,7 @@ _register(
         "robin_models.birdnet",
         "robin_models.perch",
         "robin_models.onnx_head",
+        "robin_models.output_versions",
         "robin_contracts",
     ),
 )

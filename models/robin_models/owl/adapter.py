@@ -34,6 +34,9 @@ except ModuleNotFoundError as error:
 # Batch size changes the scores at float32 rounding level, and nothing else.
 DEFAULT_BATCH_SIZE = 64
 
+DEVICE = "cpu"
+TF_DEVICE = "/CPU:0"
+
 # What OWL does whatever its card says. sox_tensorflow renders at 8 kHz from the first
 # channel, resampled by soxr at its high-quality setting, and renders only full windows.
 # The network was trained on 12-second clips, ends in a sigmoid for each class, and has no
@@ -50,10 +53,11 @@ BEHAVIOUR = {
 
 
 def build(context: ModelContext) -> "OwlModel":
-    """Check the resources and files, load the weights, and return the model."""
+    """Check the card, resources and files, load the weights, and return the model."""
     card = context.card
     _refuse_a_card_owl_does_not_follow(card)
     batch_size = _read_batch_size(context.resources)
+    _read_device(context.resources)
     if context.registry is None:
         raise ValueError("model owl/v4 needs a registry to name its outputs, and got none")
     weights = context.files.get("weights")
@@ -62,7 +66,8 @@ def build(context: ModelContext) -> "OwlModel":
             "model owl/v4 needs a file under the role 'weights', "
             f"and got the roles {sorted(context.files)}"
         )
-    network = tf.keras.models.load_model(str(weights))
+    with tf.device(TF_DEVICE):
+        network = tf.keras.models.load_model(str(weights))
     _refuse_a_spectrogram_shape_the_network_does_not_take(card, network)
     return OwlModel(
         card=card,
@@ -93,12 +98,18 @@ def _refuse_a_spectrogram_shape_the_network_does_not_take(card: ModelCard, netwo
 
 
 def _read_batch_size(resources: Mapping[str, JsonScalar]) -> int:
-    """The `batch_size` resource, or the default. Other resources are not OWL's to read."""
+    """The `batch_size` resource, or the default."""
     size = resources.get("batch_size", DEFAULT_BATCH_SIZE)
     # bool is an int subclass, and True is a type error, not a batch of one.
     if type(size) is not int or size < 1:
         raise ValueError(f"resource batch_size must be a positive int, got {size!r}")
     return size
+
+
+def _read_device(resources: Mapping[str, JsonScalar]) -> None:
+    device = resources.get("device", DEVICE)
+    if device != DEVICE:
+        raise ValueError(f"model owl/v4 runs only on resource device {DEVICE!r}, got {device!r}")
 
 
 class OwlModel:
@@ -187,6 +198,12 @@ def _predict(
         .batch(batch_size)
     )
     for images, indices in dataset:
-        predictions = network(images).numpy()
+        predictions = _score_batch(network, images)
         for index, vector in zip(indices.numpy(), predictions):
             yield int(index), vector.tolist()
+
+
+def _score_batch(network, images):
+    """The network's scores for one batch, computed on the CPU."""
+    with tf.device(TF_DEVICE):
+        return network(images).numpy()
