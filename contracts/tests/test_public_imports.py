@@ -145,12 +145,15 @@ def test_spec_reexports_are_importable():
 
 def test_result_reexports_are_importable():
     from robin_contracts import (
+        RECORDING_FAILURE_STAGES,
+        WORK_FAILURE_STAGES,
         ArtifactRecord,
         FailureReport,
+        InferenceCompleted,
         InferenceFailure,
         InferenceResult,
-        InferenceSuccess,
         RecordingCoverage,
+        RecordingFailed,
         ZeroWindowReason,
     )
 
@@ -158,6 +161,9 @@ def test_result_reexports_are_importable():
     assert FailureReport is not None
     assert InferenceFailure is not None
     assert InferenceResult is not None
-    assert InferenceSuccess is not None
+    assert InferenceCompleted is not None
     assert RecordingCoverage is not None
+    assert RecordingFailed is not None
+    assert RECORDING_FAILURE_STAGES is not None
+    assert WORK_FAILURE_STAGES is not None
     assert ZeroWindowReason is not None

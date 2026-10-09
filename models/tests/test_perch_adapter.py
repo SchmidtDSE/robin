@@ -28,7 +28,7 @@ from robin_contracts.inputs import AudioClip, Embeddings
 from robin_contracts.layout import artifact_path
 from robin_contracts.output_contracts import EmbeddingsRequest, ScoresRequest
 from robin_contracts.protocols import Model, ModelContext
-from robin_contracts.results import InferenceSuccess
+from robin_contracts.results import InferenceCompleted
 from robin_contracts.work import AudioInput, InferenceWork, PinnedFile, PinnedModel, RecordingRef
 from robin_inference_engine.artifacts.embeddings import read_embeddings
 from robin_inference_engine.artifacts.scores import read_scores
@@ -1132,7 +1132,8 @@ def test_a_work_runs_through_the_engine_to_scores_and_embeddings(runtime, tmp_pa
         inputs=LocalFileProvider(),
         artifacts=LocalArtifactWriter(root),
     )
-    assert isinstance(result, InferenceSuccess), result
+    assert isinstance(result, InferenceCompleted), result
+    assert result.failed == (), result.failed
     records = {record.kind: record for record in result.artifacts}
     path = root / artifact_path("scores", "test", "seven-seconds")
     with read_scores(path, expected_checksum=records["scores"].checksum) as stream:

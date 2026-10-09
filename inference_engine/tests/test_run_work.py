@@ -1,9 +1,11 @@
 """One work in, one result out, through the ports and an installed model."""
 
+import errno
 import hashlib
 import inspect
 import json
 import math
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -21,6 +23,7 @@ from doubles import (
     ScriptedModel,
     WorkBuilder,
     installed_factory,
+    recording_failure_of,
     registry_digest,
 )
 from robin_contracts.canonical import canonical_json_bytes, checksum_file
@@ -45,8 +48,9 @@ from robin_contracts.records import ClassScore, WindowOutput
 from robin_contracts.results import (
     ArtifactRecord,
     FailureReport,
+    InferenceCompleted,
     InferenceFailure,
-    InferenceSuccess,
+    InferenceResult,
 )
 from robin_contracts.specs import recipe
 from robin_contracts.work import (
@@ -60,8 +64,8 @@ from robin_contracts.work import (
 from robin_inference_engine import detections, engine, errors
 from robin_inference_engine.artifacts.embeddings import read_embeddings
 from robin_inference_engine.artifacts.metadata import decode_metadata
-from robin_inference_engine.artifacts.scores import read_scores
-from robin_inference_engine.coverage import check_completion_evidence
+from robin_inference_engine.artifacts.scores import ScoresWriter, read_scores
+from robin_inference_engine.coverage import CoverageBuilder, check_completion_evidence
 from robin_inference_engine.engine import run_work
 from robin_inference_engine.load_registry import load_registry
 
@@ -515,13 +519,14 @@ def rows_of(rig: Rig, record: ArtifactRecord) -> list[dict]:
         return [row for batch in stream.batches for row in batch.to_pylist()]
 
 
-def artifact(result: InferenceSuccess, kind: str) -> ArtifactRecord:
+def artifact(result: InferenceCompleted, kind: str) -> ArtifactRecord:
     return next(one for one in result.artifacts if one.kind == kind)
 
 
-def success_of(rig: Rig, result, work: InferenceWork) -> InferenceSuccess:
-    """Check everything any success must say, and return it."""
-    assert isinstance(result, InferenceSuccess), result
+def success_of(rig: Rig, result, work: InferenceWork) -> InferenceCompleted:
+    """Check everything that a result covering every recording must say, and return it."""
+    assert isinstance(result, InferenceCompleted), result
+    assert result.failed == (), result.failed
     assert result.work_digest == work_digest(work)
     assert [(row.namespace, row.value) for row in result.coverage] == [
         (one.namespace, one.value) for one in work.recordings
@@ -718,7 +723,7 @@ def test_a_thresholded_request_above_the_models_floor_publishes_only_what_reache
     assert [(row["label"], row["score"]) for row in rows] == [("rain", 0.5)]
 
 
-def test_a_full_stream_missing_a_label_fails_the_work_under_a_reduced_request(rig):
+def test_a_full_stream_missing_a_label_fails_the_recording_under_a_reduced_request(rig):
     request = ScoresRequest(
         contract_id="robin.scores.parquet/1", retention="top_k", min_score=0.0, top_k=1
     )
@@ -727,7 +732,9 @@ def test_a_full_stream_missing_a_label_fails_the_work_under_a_reduced_request(ri
 
     result = rig.run(work, rig.model([[short]]))
 
-    failure_of(result, work, code=errors.INCOMPLETE_FULL_SCORES, stage=errors.ACCEPT_WINDOW)
+    recording_failure_of(
+        result, work, value="0", code=errors.INCOMPLETE_FULL_SCORES, stage=errors.ACCEPT_WINDOW
+    )
     assert_failed_cleanly(rig, result)
 
 
@@ -782,7 +789,9 @@ def test_an_embedding_at_the_storage_precision_rather_than_the_emitted_one_fails
 
     result = rig.run(work, rig.model([[WindowOutput(start=0.0, end=3.0, embedding=stored_width)]]))
 
-    failure_of(result, work, code=errors.MALFORMED_EMBEDDING, stage=errors.ACCEPT_WINDOW)
+    recording_failure_of(
+        result, work, value="0", code=errors.MALFORMED_EMBEDDING, stage=errors.ACCEPT_WINDOW
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1060,7 +1069,7 @@ def test_published_detections_read_as_one_dataset_naming_each_recording(taxa_rig
     ]
 
 
-def test_a_failed_aggregation_fails_the_work_and_publishes_nothing(taxa_rig, monkeypatch):
+def test_a_failed_aggregation_fails_the_recordings_and_publishes_nothing(taxa_rig, monkeypatch):
     rig = taxa_rig
     monkeypatch.setattr(
         detections,
@@ -1071,10 +1080,10 @@ def test_a_failed_aggregation_fails_the_work_and_publishes_nothing(taxa_rig, mon
 
     result = rig.run(work, rig.model([[taxa_window(0.0, 0.9, 0.1, 0.1)]] * 2))
 
-    failure = failure_of(
-        result, work, code=errors.AGGREGATION_FAILED, stage=errors.AGGREGATE
-    )
-    assert (failure.namespace, failure.value) == ("test", "0")
+    for value in ("0", "1"):
+        recording_failure_of(
+            result, work, value=value, code=errors.AGGREGATION_FAILED, stage=errors.AGGREGATE
+        )
     assert not any(call[0] == "create" for call in rig.calls)
     assert_failed_cleanly(rig, result)
 
@@ -1093,7 +1102,7 @@ def test_a_duckdb_memory_limit_does_not_change_the_detections_bytes(tmp_path):
     assert limited == detections_bytes(tmp_path / "unlimited", {})
 
 
-def test_a_memory_limit_duckdb_cannot_parse_fails_the_work_at_aggregation(taxa_rig):
+def test_a_memory_limit_duckdb_cannot_parse_fails_the_recordings_at_aggregation(taxa_rig):
     rig = taxa_rig
     work = rig.work(
         recordings=2,
@@ -1103,10 +1112,10 @@ def test_a_memory_limit_duckdb_cannot_parse_fails_the_work_at_aggregation(taxa_r
 
     result = rig.run(work, rig.model([[taxa_window(0.0, 0.9, 0.1, 0.1)]] * 2))
 
-    failure = failure_of(
-        result, work, code=errors.AGGREGATION_FAILED, stage=errors.AGGREGATE
-    )
-    assert (failure.namespace, failure.value) == ("test", "0")
+    for value in ("0", "1"):
+        recording_failure_of(
+            result, work, value=value, code=errors.AGGREGATION_FAILED, stage=errors.AGGREGATE
+        )
     assert_failed_cleanly(rig, result)
 
 
@@ -1230,8 +1239,9 @@ def test_zero_windows_from_a_recording_of_unknown_duration_are_unexplained(tmp_p
 
     result = rig.run(work)
 
-    failure = failure_of(result, work, code=errors.UNEXPLAINED_ZERO_WINDOWS, stage=errors.INFER)
-    assert (failure.namespace, failure.value) == ("test", "0")
+    recording_failure_of(
+        result, work, value="0", code=errors.UNEXPLAINED_ZERO_WINDOWS, stage=errors.INFER
+    )
 
 
 def test_zero_windows_under_a_geometry_that_floors_at_one_are_unexplained(rig):
@@ -1240,7 +1250,9 @@ def test_zero_windows_under_a_geometry_that_floors_at_one_are_unexplained(rig):
 
     result = rig.run(work)
 
-    failure_of(result, work, code=errors.UNEXPLAINED_ZERO_WINDOWS, stage=errors.INFER)
+    recording_failure_of(
+        result, work, value="0", code=errors.UNEXPLAINED_ZERO_WINDOWS, stage=errors.INFER
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1248,7 +1260,7 @@ def test_zero_windows_under_a_geometry_that_floors_at_one_are_unexplained(rig):
 # ---------------------------------------------------------------------------
 
 
-def assert_failed_cleanly(rig: Rig, result: InferenceFailure) -> None:
+def assert_failed_cleanly(rig: Rig, result: InferenceResult) -> None:
     """clean_up ran once, every model file was released, and no artifact is named."""
     assert rig.calls.count(("clean_up",)) == 1
     assert rig.released_model_files() == rig.model_files.returned
@@ -1258,73 +1270,79 @@ def assert_failed_cleanly(rig: Rig, result: InferenceFailure) -> None:
         assert checksum_file(rig.destination / relative) not in text
 
 
-def test_an_adapter_raising_mid_recording_fails_the_work(rig):
+def test_an_adapter_raising_mid_recording_fails_the_recording(rig):
     work = rig.work()
     model = rig.model([[window(0), ValueError("the tensor was the wrong shape")]])
 
     result = rig.run(work, model)
 
-    failure = failure_of(result, work, code=errors.MODEL_RUN_FAILED, stage=errors.INFER)
-    assert (failure.namespace, failure.value) == ("test", "0")
+    failure = recording_failure_of(
+        result, work, value="0", code=errors.MODEL_RUN_FAILED, stage=errors.INFER
+    )
     assert "ValueError" in failure.detail
     assert "the tensor was the wrong shape" in failure.detail
     assert_failed_cleanly(rig, result)
 
 
-def test_a_window_the_boundary_refuses_fails_the_work_where_it_happened(rig):
+def test_a_window_the_boundary_refuses_fails_the_recording_where_it_happened(rig):
     work = rig.work()
     stray = WindowOutput(start=3.0, end=6.0, scores=(ClassScore("hawk", 0.5),))
 
     result = rig.run(work, rig.model([[window(0), stray]]))
 
-    failure = failure_of(result, work, code=errors.UNKNOWN_LABEL, stage=errors.ACCEPT_WINDOW)
-    assert (failure.namespace, failure.value, failure.window_start_s) == ("test", "0", 3.0)
+    failure = recording_failure_of(
+        result, work, value="0", code=errors.UNKNOWN_LABEL, stage=errors.ACCEPT_WINDOW
+    )
+    assert failure.window_start_s == 3.0
     assert_failed_cleanly(rig, result)
 
 
-def test_a_vector_too_large_for_its_storage_width_fails_the_work(tmp_path):
+def test_a_vector_too_large_for_its_storage_width_fails_the_recording(tmp_path):
     rig = Rig(tmp_path, card=build_card(dtype="float16"))
     work = rig.work(outputs=(embeddings_request(),))
     huge = WindowOutput(start=0.0, end=3.0, embedding=np.full(DIM, 1e6, dtype=np.float32))
 
     result = rig.run(work, rig.model([[huge]]))
 
-    failure = failure_of(
+    recording_failure_of(
         result,
         work,
+        value="0",
         code=errors.EMBEDDING_VALUE_OUT_OF_STORAGE_DTYPE_RANGE,
         stage=errors.WRITE_ARTIFACT,
     )
-    assert (failure.namespace, failure.value) == ("test", "0")
     assert_failed_cleanly(rig, result)
 
 
-def test_a_writer_that_fails_on_the_second_create_fails_the_work(rig):
+def test_a_writer_that_fails_on_the_second_create_fails_only_that_recording(rig):
     work = rig.work(recordings=2)
     writer = CopyingWriter(rig.destination, rig.calls, fail_on=2)
     before = work_directories()
 
     result = rig.run(work, rig.model(script(2, 1)), artifacts=writer)
 
-    failure = failure_of(
-        result, work, code=errors.ARTIFACT_PUBLICATION_FAILED, stage=errors.WRITE_ARTIFACT
+    report = recording_failure_of(
+        result,
+        work,
+        value="1",
+        code=errors.ARTIFACT_PUBLICATION_FAILED,
+        stage=errors.WRITE_ARTIFACT,
     )
-    assert "OSError" in failure.detail
-    assert (failure.namespace, failure.value) == ("test", "1")
-    # The first recording's file was published, and the result still names none.
-    assert published_files(rig) == {artifact_path("scores", "test", "0")}
+    assert "OSError" in report.detail
+    assert [row.value for row in result.coverage] == ["0"]
+    assert [(one.kind, one.value) for one in result.artifacts] == [("scores", "0")]
     assert work_directories() == before
-    assert_failed_cleanly(rig, result)
 
 
-def test_an_input_the_port_cannot_fetch_fails_the_work_at_acquisition(rig):
+def test_an_input_the_port_cannot_fetch_fails_the_recording_at_acquisition(rig):
     work = rig.work()
     inputs = rig.files("audio", {})
 
     result = rig.run(work, rig.model(script(1)), inputs=inputs)
 
-    failure = failure_of(result, work, code=errors.INPUT_UNAVAILABLE, stage=errors.ACQUIRE_INPUT)
-    assert (failure.namespace, failure.value) == ("test", "0")
+    failure = recording_failure_of(
+        result, work, value="0", code=errors.INPUT_UNAVAILABLE, stage=errors.ACQUIRE_INPUT
+    )
     assert "KeyError" in failure.detail
     assert not any(call[:2] == ("audio", "release") for call in rig.calls)
     assert_failed_cleanly(rig, result)
@@ -1344,53 +1362,56 @@ def model_file_releases(rig: Rig) -> list[tuple]:
     return [("model_files", "release", path) for path in paths]
 
 
-def recordings_run(rig: Rig, work: InferenceWork, positions: range) -> list[tuple]:
-    calls = []
-    for position in positions:
-        uri = work.recordings[position].audio_uri
-        path = rig.build.audio_paths[uri]
-        calls += [
-            ("audio", "fetch", uri),
-            ("run", path),
-            ("after_recording",),
-            ("audio", "release", path),
-        ]
-    return calls
+def recording_run(
+    rig: Rig, work: InferenceWork, position: int, *, kinds: tuple[str, ...] = ("scores",)
+) -> list[tuple]:
+    """The calls for one recording: fetch, run, publish each kind, then clean up."""
+    recording = work.recordings[position]
+    path = rig.build.audio_paths[recording.audio_uri]
+    return [
+        ("audio", "fetch", recording.audio_uri),
+        ("run", path),
+        *(("create", kind, recording.namespace, recording.value) for kind in kinds),
+        ("after_recording",),
+        ("audio", "release", path),
+    ]
 
 
-def test_a_successful_work_calls_every_component_in_order(rig):
+def test_each_recording_is_published_when_it_ends(rig):
     work = rig.work(recordings=3)
 
     success_of(rig, rig.run(work, rig.model(script(1, 1, 1))), work)
 
     assert rig.calls == [
         *model_file_fetches(rig),
-        *recordings_run(rig, work, range(3)),
-        ("create", "scores", "test", "0"),
-        ("create", "scores", "test", "1"),
-        ("create", "scores", "test", "2"),
+        *(call for position in range(3) for call in recording_run(rig, work, position)),
         ("clean_up",),
         *model_file_releases(rig),
     ]
 
 
-def test_a_failure_in_the_second_recording_still_finishes_it_and_opens_no_third(rig):
+def test_a_failing_recording_does_not_stop_the_others(rig):
     work = rig.work(recordings=3)
     model = rig.model([[window(0)], [RuntimeError("out of memory")], [window(0)]])
 
     result = rig.run(work, model)
 
-    failure = failure_of(result, work, code=errors.MODEL_RUN_FAILED, stage=errors.INFER)
-    assert (failure.namespace, failure.value) == ("test", "1")
+    report = recording_failure_of(
+        result, work, value="1", code=errors.MODEL_RUN_FAILED, stage=errors.INFER
+    )
+    assert "out of memory" in report.detail
+    assert [row.value for row in result.coverage] == ["0", "2"]
     assert rig.calls == [
         *model_file_fetches(rig),
-        *recordings_run(rig, work, range(2)),
+        *recording_run(rig, work, 0),
+        *recording_run(rig, work, 1, kinds=()),
+        *recording_run(rig, work, 2),
         ("clean_up",),
         *model_file_releases(rig),
     ]
 
 
-def test_a_failing_cleanup_step_cannot_hide_the_original_failure(rig):
+def test_cleanup_failures_after_a_failed_recording_are_logged_and_change_nothing(rig):
     work = rig.work()
     model = rig.model(
         [[ValueError("the first failure")]],
@@ -1404,8 +1425,10 @@ def test_a_failing_cleanup_step_cannot_hide_the_original_failure(rig):
 
     result = rig.run(work, model, log=lines.append)
 
-    failure = failure_of(result, work, code=errors.MODEL_RUN_FAILED, stage=errors.INFER)
-    assert "the first failure" in failure.detail
+    report = recording_failure_of(
+        result, work, value="0", code=errors.MODEL_RUN_FAILED, stage=errors.INFER
+    )
+    assert "the first failure" in report.detail
     for later in ("the second failure", "the third failure", "the fourth failure"):
         assert any(later in line for line in lines), later
     assert rig.calls[-3:] == [("clean_up",), *model_file_releases(rig)]
@@ -1413,51 +1436,136 @@ def test_a_failing_cleanup_step_cannot_hide_the_original_failure(rig):
 
 CLEANUP_FAILURES = {
     "after_recording": (
-        {"fail_after_recording": OSError("could not close")},
-        {},
-        errors.MODEL_RUN_FAILED,
-        errors.INFER,
-        ("test", "0"),
+        {"fail_after_recording": OSError("could not close")}, {}, "could not close"
     ),
-    "input_release": (
-        {},
-        {"inputs": {"fail_release": OSError("disk busy")}},
-        errors.INPUT_UNAVAILABLE,
-        errors.ACQUIRE_INPUT,
-        ("test", "0"),
-    ),
-    "clean_up": (
-        {"fail_clean_up": OSError("could not free")},
-        {},
-        errors.MODEL_RUN_FAILED,
-        errors.INFER,
-        (None, None),
-    ),
+    "input_release": ({}, {"inputs": {"fail_release": OSError("disk busy")}}, "disk busy"),
+    "clean_up": ({"fail_clean_up": OSError("could not free")}, {}, "could not free"),
     "model_file_release": (
-        {},
-        {"model_files": {"fail_release": OSError("cache locked")}},
-        errors.MODEL_FILE_UNAVAILABLE,
-        errors.ACQUIRE_MODEL,
-        (None, None),
+        {}, {"model_files": {"fail_release": OSError("cache locked")}}, "cache locked"
     ),
 }
 
 
 @pytest.mark.parametrize("step", CLEANUP_FAILURES)
-def test_a_cleanup_step_failing_on_an_otherwise_successful_path_is_the_failure(rig, step):
-    model_kwargs, port_kwargs, code, stage, recording = CLEANUP_FAILURES[step]
-    work = rig.work()
+def test_a_failing_cleanup_step_is_only_logged(rig, step):
+    model_kwargs, port_kwargs, message = CLEANUP_FAILURES[step]
+    work = rig.work(recordings=2)
     if "model_files" in port_kwargs:
         rig.model_files = rig.files(
             "model_files", rig.build.model_paths, **port_kwargs["model_files"]
         )
     inputs = rig.files("audio", rig.build.audio_paths, **port_kwargs.get("inputs", {}))
+    lines: list[str] = []
 
-    result = rig.run(work, rig.model(script(1), **model_kwargs), inputs=inputs)
+    result = rig.run(work, rig.model(script(1, 1), **model_kwargs), inputs=inputs, log=lines.append)
 
-    failure = failure_of(result, work, code=code, stage=stage)
-    assert (failure.namespace, failure.value) == recording
-    assert "OSError" in failure.detail
+    success_of(rig, result, work)
+    assert any("OSError" in line and message in line for line in lines), lines
+    assert rig.calls[-3:] == [("clean_up",), *model_file_releases(rig)]
+
+
+def test_a_late_publish_failure_discards_the_recordings_coverage_and_files(rig):
+    work = rig.work(recordings=2, outputs=(scores_request(), embeddings_request()))
+    # Create 1 is recording 0's scores, and create 2 is its embeddings.
+    writer = CopyingWriter(rig.destination, rig.calls, fail_on=2)
+
+    result = rig.run(work, rig.model(script(1, 1, embedding=True)), artifacts=writer)
+
+    recording_failure_of(
+        result,
+        work,
+        value="0",
+        code=errors.ARTIFACT_PUBLICATION_FAILED,
+        stage=errors.WRITE_ARTIFACT,
+    )
+    assert [row.value for row in result.coverage] == ["1"]
+    assert {(one.kind, one.value) for one in result.artifacts} == {
+        ("scores", "1"), ("embeddings", "1")
+    }
+    # The scores file stays in storage, but no result names it.
+    assert artifact_path("scores", "test", "0") in published_files(rig)
+
+
+def test_a_work_in_which_every_recording_fails_is_still_completed(rig):
+    work = rig.work(recordings=2)
+
+    result = rig.run(work, rig.model(script(1, 1)), inputs=rig.files("audio", {}))
+
+    assert isinstance(result, InferenceCompleted), result
+    assert (result.coverage, result.artifacts) == ((), ())
+    assert [(one.value, one.failure.code) for one in result.failed] == [
+        ("0", errors.INPUT_UNAVAILABLE),
+        ("1", errors.INPUT_UNAVAILABLE),
+    ]
+    assert_failed_cleanly(rig, result)
+
+
+def test_one_value_in_two_namespaces_fails_and_completes_apart(rig):
+    recordings = (
+        rig.build.recording("7", namespace="soundhub"),
+        rig.build.recording("7", namespace="another-archive"),
+    )
+    work = rig.work(recordings=recordings)
+
+    result = rig.run(work, rig.model([[ValueError("broken")], [window(0)]]))
+
+    recording_failure_of(
+        result, work, namespace="soundhub", value="7",
+        code=errors.MODEL_RUN_FAILED, stage=errors.INFER,
+    )
+    assert [(row.namespace, row.value) for row in result.coverage] == [("another-archive", "7")]
+
+
+def test_a_full_disk_while_staging_fails_only_that_recording(rig, monkeypatch):
+    original = ScoresWriter.write
+    failures = iter([OSError(errno.ENOSPC, "No space left on device")])
+
+    def write(self, window):
+        failure = next(failures, None)
+        if failure is not None:
+            raise failure
+        original(self, window)
+
+    monkeypatch.setattr(ScoresWriter, "write", write)
+    work = rig.work(recordings=2)
+
+    result = rig.run(work, rig.model(script(1, 1)))
+
+    report = recording_failure_of(
+        result, work, value="0", code=errors.ARTIFACT_WRITE_FAILED, stage=errors.WRITE_ARTIFACT
+    )
+    assert "No space left on device" in report.detail
+    assert [row.value for row in result.coverage] == ["1"]
+
+
+def test_a_work_folder_that_cannot_be_removed_is_only_logged(rig, monkeypatch):
+    original = shutil.rmtree
+
+    def rmtree(path, *args, **kwargs):
+        if Path(path).name.startswith("robin-work-"):
+            raise OSError(errno.EBUSY, "Device or resource busy")
+        original(path, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "rmtree", rmtree)
+    work = rig.work()
+    lines: list[str] = []
+
+    result = rig.run(work, rig.model(script(1)), log=lines.append)
+
+    success_of(rig, result, work)
+    assert any("Device or resource busy" in line for line in lines), lines
+
+
+def test_an_engine_defect_during_a_recording_is_raised_after_cleanup(rig, monkeypatch):
+    def defect(self, window):
+        raise RuntimeError("the engine contradicted itself")
+
+    monkeypatch.setattr(CoverageBuilder, "record", defect)
+    work = rig.work(recordings=2)
+
+    with pytest.raises(RuntimeError, match="contradicted itself"):
+        rig.run(work, rig.model(script(1, 1)))
+
     assert rig.calls[-3:] == [("clean_up",), *model_file_releases(rig)]
 
 
@@ -1522,7 +1630,7 @@ def test_the_same_work_run_twice_gives_byte_identical_results(rig):
     first = rig.run(work, rig.model(script(2, 3, embedding=True)))
     second = rig.run(work, rig.model(script(2, 3, embedding=True)))
 
-    assert isinstance(first, InferenceSuccess)
+    assert isinstance(first, InferenceCompleted)
     assert canonical_json_bytes(first) == canonical_json_bytes(second)
 
 

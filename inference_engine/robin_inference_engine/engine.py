@@ -1,9 +1,12 @@
 """Runs one work and returns its result.
 
-Every expected failure is returned as an `InferenceFailure`. An exception from code the
-engine does not own (a port, the registry loader, the model factory, the adapter) is
-reported at the stage that called it. A `RuntimeError` from the engine's own components
-is a defect in the engine and is not caught.
+A failure before the first recording starts fails the whole work and is returned as an
+`InferenceFailure`. After that, a recording that fails is reported in the result's
+`failed`, and the work continues with the next one. An exception from code the engine
+does not own (a port, the registry loader, the model factory, the adapter) is reported
+at the stage that called it. A `RuntimeError` from the engine's own components is a
+defect in the engine and is not caught. A cleanup step that fails is logged and does
+not change the result.
 """
 
 from collections.abc import Callable, Iterator
@@ -24,9 +27,10 @@ from robin_contracts.registry import TaxonRegistry
 from robin_contracts.results import (
     ArtifactRecord,
     FailureReport,
+    InferenceCompleted,
     InferenceFailure,
     InferenceResult,
-    InferenceSuccess,
+    RecordingFailed,
     ZeroWindowReason,
 )
 from robin_contracts.specs import Recipe, WindowGeometry, recipe, window_count
@@ -93,33 +97,43 @@ def run_work(
         return _failure(run.digest, error)
 
 
+def _report(error: errors.EngineError) -> FailureReport:
+    return FailureReport(
+        code=error.code,
+        stage=error.stage,
+        window_start_s=error.window_start_s,
+        detail=error.detail[:DETAIL_LIMIT],
+    )
+
+
 def _failure(digest: str, error: errors.EngineError) -> InferenceFailure:
-    recording = error.recording
     return InferenceFailure(
-        schema_version=RESULT_CONTRACT_ID,
-        work_digest=digest,
-        failure=FailureReport(
-            code=error.code,
-            stage=error.stage,
-            namespace=recording.namespace if recording is not None else None,
-            value=recording.value if recording is not None else None,
-            window_start_s=error.window_start_s,
-            detail=error.detail[:DETAIL_LIMIT],
-        ),
+        schema_version=RESULT_CONTRACT_ID, work_digest=digest, failure=_report(error)
+    )
+
+
+def _recording_failed(recording: RecordingRef, error: errors.EngineError) -> RecordingFailed:
+    # The identity is the loop's recording, not the error's: some readers raise without one.
+    return RecordingFailed(
+        namespace=recording.namespace, value=recording.value, failure=_report(error)
     )
 
 
 def _run(run: _Run) -> InferenceResult:
     # One directory holds the model's scratch space and every staged artifact, so
     # removing it on the way out is the whole of the engine's own cleanup.
-    with TemporaryDirectory(prefix="robin-work-") as temporary:
+    temporary = TemporaryDirectory(prefix="robin-work-")
+    with _cleanup_on_exit(
+        lambda: [(f"removing the work folder {temporary.name}", temporary.cleanup)],
+        log=run.log,
+    ):
         fetched: list[Path] = []
         # After clean_up, because the adapter may hold the files open until then.
         with _cleanup_on_exit(
             lambda: [_releasing_model_file(run.model_files, path) for path in fetched],
             log=run.log,
         ):
-            return _run_model(run, fetched=fetched, root=Path(temporary))
+            return _run_model(run, fetched=fetched, root=Path(temporary.name))
 
 
 def _run_model(run: _Run, *, fetched: list[Path], root: Path) -> InferenceResult:
@@ -154,8 +168,7 @@ def _run_model(run: _Run, *, fetched: list[Path], root: Path) -> InferenceResult
         if isinstance(card, HeadCard)
         else construct_model(ref=model_ref(card), context=context)
     )
-    clean_up = _cleanup_step(model.clean_up, "clean_up", errors.MODEL_RUN_FAILED, errors.INFER)
-    with _cleanup_on_exit(lambda: [clean_up], log=run.log):
+    with _cleanup_on_exit(lambda: [("clean_up", model.clean_up)], log=run.log):
         staging = root / "staging"
         staging.mkdir()
         return _infer(run, model=model, recipe=stated, registry=registry, staging=staging)
@@ -168,7 +181,7 @@ def _infer(
     recipe: Recipe,
     registry: TaxonRegistry | None,
     staging: Path,
-) -> InferenceSuccess:
+) -> InferenceCompleted:
     work = run.work
     outputs = RecordingOutputs(work, recipe=recipe, registry=registry, staging=staging)
     boundary = AcceptanceBoundary(
@@ -180,35 +193,46 @@ def _infer(
         expect_embeddings=embeddings_request(work) is not None,
     )
     coverage = CoverageBuilder(work.recordings)
-    staged: list[StagedArtifact] = []
+    records: list[ArtifactRecord] = []
+    failed: list[RecordingFailed] = []
     for position, recording in enumerate(work.recordings):
-        staged += _run_recording(
-            run,
-            position,
-            recording,
-            model=model,
-            recipe=recipe,
-            boundary=boundary,
-            coverage=coverage,
-            outputs=outputs,
-        )
-    # Publishing waits for the last recording, so a work that fails while running
-    # publishes nothing.
-    records = tuple(_publish(run.artifacts, one) for one in staged)
-    return _success(run, recipe=recipe, outputs=outputs, records=records, coverage=coverage)
+        try:
+            records += _run_recording(
+                run,
+                position,
+                recording,
+                model=model,
+                recipe=recipe,
+                boundary=boundary,
+                coverage=coverage,
+                outputs=outputs,
+            )
+        except errors.EngineError as error:
+            coverage.discard(position)
+            failed.append(_recording_failed(recording, error))
+            run.log(f"recording {errors.named(recording)} failed at {error.stage}: {error.code}")
+    return _completed(
+        run,
+        recipe=recipe,
+        outputs=outputs,
+        records=tuple(records),
+        coverage=coverage,
+        failed=tuple(failed),
+    )
 
 
-def _success(
+def _completed(
     run: _Run,
     *,
     recipe: Recipe,
     outputs: RecordingOutputs,
     records: tuple[ArtifactRecord, ...],
     coverage: CoverageBuilder,
-) -> InferenceSuccess:
-    """The result of a completed work, checked against the work before it is returned."""
+    failed: tuple[RecordingFailed, ...],
+) -> InferenceCompleted:
+    """The result of a work that ran, checked against the work before it is returned."""
     detections = outputs.detections
-    success = InferenceSuccess(
+    completed = InferenceCompleted(
         schema_version=RESULT_CONTRACT_ID,
         work_digest=run.digest,
         recipe=recipe,
@@ -220,9 +244,10 @@ def _success(
         resolved_scores_request=scores_request(run.work),
         artifacts=records,
         coverage=coverage.build(),
+        failed=failed,
     )
-    check_completion_evidence(run.work, success)
-    return success
+    check_completion_evidence(run.work, completed)
+    return completed
 
 
 def _run_recording(
@@ -235,11 +260,11 @@ def _run_recording(
     boundary: AcceptanceBoundary,
     coverage: CoverageBuilder,
     outputs: RecordingOutputs,
-) -> tuple[StagedArtifact, ...]:
-    """Run one recording through the model, then always clean up after it.
+) -> tuple[ArtifactRecord, ...]:
+    """Run one recording through the model, publish its files, then clean up after it.
 
     Each accepted window keeps only the scores the request asks for before it is
-    written. Returns the recording's staged files that hold rows.
+    written. Returns the records of the files that were published.
     """
     requested = scores_request(run.work)
     boundary.begin_recording(position)
@@ -252,19 +277,20 @@ def _run_recording(
     ):
         path = _fetch_input(run.inputs, recording)
         given = _recording_input(run.work, recording, path, boundary, recipe.id)
-        with outputs.open_window_writers(position, recording) as writers:
-            windows = _start(model, recording, given)
-            accepted = 0
-            for window in _each(windows, recording):
-                kept = boundary.accept(window)
-                if requested is not None:
-                    kept = replace(kept, scores=retain_scores(kept.scores, requested))
-                coverage.record(kept)
-                writers.write(kept)
-                accepted += 1
-            boundary.end_recording()
-            staged = writers.finish()
-        detected = outputs.stage_detections(staged)
+        with _writing_locally(recording):
+            with outputs.open_window_writers(position, recording) as writers:
+                windows = _start(model, recording, given)
+                accepted = 0
+                for window in _each(windows, recording):
+                    kept = boundary.accept(window)
+                    if requested is not None:
+                        kept = replace(kept, scores=retain_scores(kept.scores, requested))
+                    coverage.record(kept)
+                    writers.write(kept)
+                    accepted += 1
+                boundary.end_recording()
+                staged = writers.finish()
+            detected = outputs.stage_detections(staged)
         if detected is not None:
             staged += (detected,)
         coverage.end_recording(
@@ -273,8 +299,11 @@ def _run_recording(
             else _zero_window_reason(recording, recipe.audio.geometry),
             detection_rows=detected.rows if detected is not None else 0,
         )
+        # Publishing starts only after every file is staged, so a failure while staging
+        # publishes none of this recording's files.
+        records = tuple(_publish(run.artifacts, one) for one in staged)
         run.log(f"recording {errors.named(recording)}: {accepted} windows accepted")
-        return staged
+        return records
 
 
 def _recording_cleanup(
@@ -284,36 +313,17 @@ def _recording_cleanup(
     *,
     path: Path | None,
     windows: Iterator[WindowOutput] | None,
-) -> list[Callable[[], None]]:
+) -> list["_CleanupStep"]:
     """The model's hook runs before the input is released: it may still hold the file."""
-    steps = []
+    name = errors.named(recording)
+    steps: list[_CleanupStep] = []
     # Close the run first: the adapter may keep files open until it is closed.
     close = getattr(windows, "close", None)
     if close is not None:
-        steps.append(
-            _cleanup_step(
-                close, "closing the run", errors.MODEL_RUN_FAILED, errors.INFER, recording
-            )
-        )
-    steps.append(
-        _cleanup_step(
-            model.after_recording,
-            "after_recording",
-            errors.MODEL_RUN_FAILED,
-            errors.INFER,
-            recording,
-        )
-    )
+        steps.append((f"closing the run of recording {name}", close))
+    steps.append((f"after_recording for recording {name}", model.after_recording))
     if path is not None:
-        steps.append(
-            _cleanup_step(
-                lambda: inputs.release(path),
-                "release",
-                errors.INPUT_UNAVAILABLE,
-                errors.ACQUIRE_INPUT,
-                recording,
-            )
-        )
+        steps.append((f"releasing the input of recording {name}", lambda: inputs.release(path)))
     return steps
 
 
@@ -354,6 +364,25 @@ def _zero_window_reason(
 # ---------------------------------------------------------------------------
 # Calls to the input port, the writer and the adapter, reported at their stage.
 # ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _writing_locally(recording: RecordingRef) -> Iterator[None]:
+    """Report an `OSError` while staging this recording's files as that recording's failure.
+
+    Only the writers can raise one here: the adapter's calls and the input reads already
+    turn what they raise into engine failures.
+    """
+    try:
+        yield
+    except OSError as exc:
+        raise errors.EngineError(
+            errors.ARTIFACT_WRITE_FAILED,
+            errors.WRITE_ARTIFACT,
+            f"writing the files of recording {errors.named(recording)} on local disk raised "
+            f"{type(exc).__name__}: {exc}",
+            recording=recording,
+        ) from exc
 
 
 def _publish(artifacts: ArtifactWriter, staged: StagedArtifact) -> ArtifactRecord:
@@ -502,63 +531,33 @@ def _load_registry(files: dict[str, Path]) -> TaxonRegistry | None:
 # ---------------------------------------------------------------------------
 
 
-def _releasing_model_file(model_files: FileProvider, path: Path) -> Callable[[], None]:
-    return _cleanup_step(
-        lambda: model_files.release(path),
-        f"releasing the model file {path}",
-        errors.MODEL_FILE_UNAVAILABLE,
-        errors.ACQUIRE_MODEL,
-    )
+_CleanupStep = tuple[str, Callable[[], object]]
 
 
-def _cleanup_step(
-    call: Callable[[], object],
-    name: str,
-    code: str,
-    stage: str,
-    recording: RecordingRef | None = None,
-) -> Callable[[], None]:
-    """`call` as a cleanup step, with anything it raises reported under `code`."""
-
-    def step() -> None:
-        try:
-            call()
-        except Exception as exc:
-            raise errors.EngineError(
-                code, stage, f"{name} raised {type(exc).__name__}: {exc}", recording=recording
-            ) from exc
-
-    return step
+def _releasing_model_file(model_files: FileProvider, path: Path) -> _CleanupStep:
+    return (f"releasing the model file {path}", lambda: model_files.release(path))
 
 
 @contextmanager
-def _cleanup_on_exit(steps: Callable[[], list[Callable[[], None]]], *, log: Log) -> Iterator[None]:
+def _cleanup_on_exit(steps: Callable[[], list[_CleanupStep]], *, log: Log) -> Iterator[None]:
     """Run the cleanup `steps()` when the block ends, whether or not it raised.
 
     `steps` is called at the end, so it sees whatever the block set up.
     """
-    failed = True
     try:
         yield
-        failed = False
     finally:
-        _run_cleanup_steps(steps(), failed=failed, log=log)
+        _run_cleanup_steps(steps(), log=log)
 
 
-def _run_cleanup_steps(steps: list[Callable[[], None]], *, failed: bool, log: Log) -> None:
-    """Run every step, even after one fails.
+def _run_cleanup_steps(steps: list[_CleanupStep], *, log: Log) -> None:
+    """Run every step, and log each one that fails.
 
-    After an earlier failure, a failing step is logged and cannot replace the failure
-    that is already being reported. Otherwise the first step to fail is raised.
+    A failed step never changes the result: the outputs were checked and checksummed
+    before cleanup runs.
     """
-    first: errors.EngineError | None = None
-    for step in steps:
+    for name, call in steps:
         try:
-            step()
-        except errors.EngineError as error:
-            if failed:
-                log(f"during cleanup after a failure: {error.detail}")
-            elif first is None:
-                first = error
-    if first is not None:
-        raise first
+            call()
+        except Exception as exc:
+            log(f"cleanup: {name} raised {type(exc).__name__}: {exc}")

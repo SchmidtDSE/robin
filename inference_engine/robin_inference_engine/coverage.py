@@ -4,7 +4,7 @@ from collections.abc import Sequence
 
 from robin_contracts.results import (
     ArtifactKind,
-    InferenceSuccess,
+    InferenceCompleted,
     RecordingCoverage,
     ZeroWindowReason,
 )
@@ -18,7 +18,8 @@ class CoverageBuilder:
 
     It takes the accepted window rather than the adapter's, so what it counts is what
     the acceptance boundary let through. A recording's row is built when the recording
-    ends and is immutable from then on.
+    ends. It is fixed from then on, unless the recording fails later and its row is
+    discarded.
     """
 
     def __init__(self, recordings: Sequence[RecordingRef]) -> None:
@@ -104,62 +105,78 @@ class CoverageBuilder:
         )
         self._open_recording = None
 
+    def discard(self, position: int) -> None:
+        """Forget the recording at this position, open or ended: it failed, so it has no row.
+
+        It still counts as begun, so it cannot be begun again.
+        """
+        if position not in self._begun:
+            raise RuntimeError(
+                f"recording {errors.named(self._recordings[position])} was never begun"
+            )
+        if self._open_recording == position:
+            self._open_recording = None
+        self._rows.pop(position, None)
+
     def build(self) -> tuple[RecordingCoverage, ...]:
-        """Every recording's row, in the work's order whatever order they ran in."""
+        """The rows of the recordings that ended and were not discarded, in the work's order."""
         if self._open_recording is not None:
             raise RuntimeError(
                 f"recording {errors.named(self._open())} was begun and never ended"
             )
-        missing = [
-            errors.named(recording)
-            for position, recording in enumerate(self._recordings)
-            if position not in self._rows
-        ]
-        if missing:
-            raise RuntimeError(f"recordings {missing} were never counted")
-        return tuple(self._rows[position] for position in range(len(self._recordings)))
+        return tuple(self._rows[position] for position in sorted(self._rows))
 
     def _open(self) -> RecordingRef:
         return self._recordings[self._open_recording]
 
 
-def check_completion_evidence(work: InferenceWork, success: InferenceSuccess) -> None:
+def check_completion_evidence(work: InferenceWork, completed: InferenceCompleted) -> None:
     """Refuse a result that does not answer the work it claims to answer.
 
     Every condition here is the engine contradicting itself after inference succeeded,
     so each raises rather than returning a code: there is no caller decision to make.
     """
-    _check_work_digest(work, success)
-    _check_recording_coverage(work, success)
-    _check_artifacts_were_requested(work, success)
+    _check_work_digest(work, completed)
+    _check_partition(work, completed)
+    _check_artifacts_were_requested(work, completed)
 
 
-def _check_work_digest(work: InferenceWork, success: InferenceSuccess) -> None:
+def _check_work_digest(work: InferenceWork, completed: InferenceCompleted) -> None:
     expected = work_digest(work)
-    if success.work_digest != expected:
+    if completed.work_digest != expected:
         raise RuntimeError(
-            f"result carries work digest {success.work_digest}, this work's is {expected}"
+            f"result carries work digest {completed.work_digest}, this work's is {expected}"
         )
 
 
-def _check_recording_coverage(
-    work: InferenceWork, success: InferenceSuccess
-) -> None:
+def _check_partition(work: InferenceWork, completed: InferenceCompleted) -> None:
+    """Covered and failed recordings together are the work's, each list in the work's order."""
     expected = [(recording.namespace, recording.value) for recording in work.recordings]
-    covered = [(row.namespace, row.value) for row in success.coverage]
-    if covered != expected:
+    lists = {
+        "coverage": [(row.namespace, row.value) for row in completed.coverage],
+        "failed": [(one.namespace, one.value) for one in completed.failed],
+    }
+    named = sorted(lists["coverage"] + lists["failed"])
+    if named != sorted(expected):
         raise RuntimeError(
-            f"coverage names recordings {covered}, in that order; "
-            f"it must name this work's {expected}, in the work's order"
+            f"coverage names {lists['coverage']} and failed names {lists['failed']}; "
+            f"together they must name this work's {expected}"
         )
+    for name, listed in lists.items():
+        members = set(listed)
+        if listed != [one for one in expected if one in members]:
+            raise RuntimeError(
+                f"{name} names recordings {listed}, in that order; "
+                "it must name them in the work's order"
+            )
 
 
 def _check_artifacts_were_requested(
-    work: InferenceWork, success: InferenceSuccess
+    work: InferenceWork, completed: InferenceCompleted
 ) -> None:
     # A requested kind may have no artifacts: a recording with no rows has no file.
     requested: set[ArtifactKind] = {output.kind for output in work.outputs}
-    unrequested = {artifact.kind for artifact in success.artifacts} - requested
+    unrequested = {artifact.kind for artifact in completed.artifacts} - requested
     if unrequested:
         raise RuntimeError(
             f"result names {sorted(unrequested)} artifacts, which this work did not "

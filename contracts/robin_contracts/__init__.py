@@ -38,12 +38,15 @@ from robin_contracts.protocols import (
 from robin_contracts.records import ClassScore, WindowOutput
 from robin_contracts.registry import RegistryEntry, TaxonRegistry
 from robin_contracts.results import (
+    RECORDING_FAILURE_STAGES,
+    WORK_FAILURE_STAGES,
     ArtifactRecord,
     FailureReport,
+    InferenceCompleted,
     InferenceFailure,
     InferenceResult,
-    InferenceSuccess,
     RecordingCoverage,
+    RecordingFailed,
     ZeroWindowReason,
 )
 from robin_contracts.specs import (
@@ -69,6 +72,8 @@ from robin_contracts.work import (
 )
 
 __all__ = [
+    "RECORDING_FAILURE_STAGES",
+    "WORK_FAILURE_STAGES",
     "ArtifactRecord",
     "AudioClip",
     "AudioInput",
@@ -83,9 +88,9 @@ __all__ = [
     "EmbeddingsRequest",
     "FailureReport",
     "HeadCard",
+    "InferenceCompleted",
     "InferenceFailure",
     "InferenceResult",
-    "InferenceSuccess",
     "InferenceWork",
     "Input",
     "InputArtifact",
@@ -102,6 +107,7 @@ __all__ = [
     "Recipe",
     "RecipeFingerprint",
     "RecordingCoverage",
+    "RecordingFailed",
     "RecordingRef",
     "RegistryEntry",
     "Resampling",

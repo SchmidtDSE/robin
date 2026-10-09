@@ -27,7 +27,7 @@ from robin_contracts.output_contracts import (
     ThresholdPolicy,
 )
 from robin_contracts.protocols import Model, ModelContext
-from robin_contracts.results import InferenceSuccess
+from robin_contracts.results import InferenceCompleted
 from robin_contracts.specs import recipe
 from robin_contracts.work import (
     AudioInput,
@@ -602,7 +602,8 @@ def test_a_head_work_runs_through_the_engine_to_scores_and_detections(runtime, t
         inputs=LocalFileProvider(),
         artifacts=LocalArtifactWriter(root),
     )
-    assert isinstance(result, InferenceSuccess), result
+    assert isinstance(result, InferenceCompleted), result
+    assert result.failed == (), result.failed
     assert [len(call.values) for call in runtime.calls] == [2, 1, 2, 1]
     checksums = {
         record.value: record.checksum for record in result.artifacts if record.kind == "scores"

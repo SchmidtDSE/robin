@@ -14,7 +14,12 @@ from robin_contracts.output_contracts import (
     ThresholdPolicy,
 )
 from robin_contracts.records import ClassScore
-from robin_contracts.results import ArtifactRecord, InferenceSuccess
+from robin_contracts.results import (
+    ArtifactRecord,
+    FailureReport,
+    InferenceCompleted,
+    RecordingFailed,
+)
 from robin_contracts.specs import AudioSpec, Recipe, WindowGeometry
 from robin_contracts.work import (
     AudioInput,
@@ -151,7 +156,7 @@ def scores_records(coverage) -> tuple[ArtifactRecord, ...]:
     )
 
 
-def build_success(work: InferenceWork, **overrides) -> InferenceSuccess:
+def build_completed(work: InferenceWork, **overrides) -> InferenceCompleted:
     coverage = overrides.pop("coverage") if "coverage" in overrides else cover(work.recordings)
     fields = {
         "schema_version": "robin.inference-result/1",
@@ -161,9 +166,10 @@ def build_success(work: InferenceWork, **overrides) -> InferenceSuccess:
         "window_geometry": GEOMETRY,
         "artifacts": scores_records(coverage),
         "coverage": coverage,
+        "failed": (),
         "resolved_scores_request": build_scores_request(),
     }
-    return InferenceSuccess(**(fields | overrides))
+    return InferenceCompleted(**(fields | overrides))
 
 
 # --- CoverageBuilder --------------------------------------------------------
@@ -172,9 +178,9 @@ ONE = build_recordings(("0",))
 TWO = build_recordings(("0", "1"))
 
 
-def test_success_factory_preserves_empty_coverage():
+def test_a_completed_result_with_no_recording_is_refused():
     with pytest.raises(ValidationError):
-        build_success(build_work(), coverage=())
+        build_completed(build_work(), coverage=())
 
 
 def test_begin_recording_refuses_to_discard_unfinished_coverage():
@@ -313,21 +319,52 @@ def test_a_recording_is_begun_once():
         builder.begin_recording(0)
 
 
-def test_build_refuses_a_recording_that_was_never_finished():
-    never_begun = CoverageBuilder(TWO)
-    never_begun.begin_recording(0)
-    never_begun.record(build_window())
-    never_begun.end_recording()
-
-    with pytest.raises(RuntimeError):
-        never_begun.build()
-
+def test_build_refuses_a_recording_left_open():
     left_open = CoverageBuilder(ONE)
     left_open.begin_recording(0)
     left_open.record(build_window())
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="never ended"):
         left_open.build()
+
+
+def test_a_discarded_open_recording_has_no_row_and_the_next_one_can_begin():
+    builder = CoverageBuilder(TWO)
+    builder.begin_recording(0)
+    builder.record(build_window())
+
+    builder.discard(0)
+    builder.begin_recording(1)
+    builder.record(build_window())
+    builder.end_recording()
+
+    assert [row.value for row in builder.build()] == [TWO[1].value]
+
+
+def test_a_discarded_ended_recording_loses_its_row():
+    builder = CoverageBuilder(TWO)
+    for position in (0, 1):
+        builder.begin_recording(position)
+        builder.record(build_window())
+        builder.end_recording()
+
+    builder.discard(0)
+
+    assert [row.value for row in builder.build()] == [TWO[1].value]
+
+
+def test_a_discarded_recording_cannot_begin_again():
+    builder = CoverageBuilder(ONE)
+    builder.begin_recording(0)
+    builder.discard(0)
+
+    with pytest.raises(RuntimeError):
+        builder.begin_recording(0)
+
+
+def test_only_a_begun_recording_can_be_discarded():
+    with pytest.raises(RuntimeError, match="never begun"):
+        CoverageBuilder(ONE).discard(0)
 
 
 def test_a_reason_on_a_completed_recording_is_a_defect():
@@ -359,27 +396,67 @@ def test_a_window_with_no_recording_open_is_a_defect():
 def test_coverage_must_name_exactly_the_works_recordings():
     work = build_work(values=("0", "1"))
 
-    extra = build_success(work, coverage=cover(build_recordings(("0", "1", "2"))))
+    extra = build_completed(work, coverage=cover(build_recordings(("0", "1", "2"))))
     with pytest.raises(RuntimeError, match=re.escape("('soundhub', '2')")):
         check_completion_evidence(work, extra)
 
-    missing = build_success(work, coverage=cover(build_recordings(("0",))))
+    missing = build_completed(work, coverage=cover(build_recordings(("0",))))
     with pytest.raises(RuntimeError, match=re.escape("('soundhub', '1')")):
         check_completion_evidence(work, missing)
 
 
 def test_coverage_must_follow_the_works_order():
     work = build_work(values=("0", "1"))
-    reordered = build_success(work, coverage=cover(tuple(reversed(work.recordings))))
+    reordered = build_completed(work, coverage=cover(tuple(reversed(work.recordings))))
 
     with pytest.raises(RuntimeError, match="order"):
         check_completion_evidence(work, reordered)
 
 
+def failed_entries(recordings) -> tuple[RecordingFailed, ...]:
+    report = FailureReport(code="model_run_failed", stage="infer", detail="it raised")
+    return tuple(
+        RecordingFailed(namespace=one.namespace, value=one.value, failure=report)
+        for one in recordings
+    )
+
+
+def test_covered_and_failed_together_must_name_the_works_recordings():
+    work = build_work(values=("0", "1", "2"))
+    first, second, third = work.recordings
+
+    check_completion_evidence(
+        work,
+        build_completed(work, coverage=cover((first, third)), failed=failed_entries((second,))),
+    )
+
+    missing = build_completed(work, coverage=cover((first,)), failed=failed_entries((second,)))
+    with pytest.raises(RuntimeError, match=re.escape("('soundhub', '2')")):
+        check_completion_evidence(work, missing)
+
+
+def test_failed_must_follow_the_works_order():
+    work = build_work(values=("0", "1"))
+    reordered = build_completed(
+        work, coverage=(), failed=failed_entries(tuple(reversed(work.recordings)))
+    )
+
+    with pytest.raises(RuntimeError, match="failed .* order"):
+        check_completion_evidence(work, reordered)
+
+
+def test_every_recording_failing_is_consistent():
+    work = build_work(values=("0", "1"))
+
+    check_completion_evidence(
+        work, build_completed(work, coverage=(), failed=failed_entries(work.recordings))
+    )
+
+
 def test_a_requested_kind_may_have_no_artifacts():
     work = build_work()
 
-    success = build_success(work, coverage=cover_nothing(work.recordings), artifacts=())
+    success = build_completed(work, coverage=cover_nothing(work.recordings), artifacts=())
 
     assert check_completion_evidence(work, success) is None
 
@@ -389,7 +466,7 @@ def test_no_artifact_has_a_kind_the_work_did_not_request():
     coverage = cover(work.recordings, detection_rows=1)
 
     detections = build_artifact(kind="detections", contract_id="robin.detections.parquet/1")
-    unrequested = build_success(
+    unrequested = build_completed(
         work,
         coverage=coverage,
         artifacts=(*scores_records(coverage), detections),
@@ -403,7 +480,7 @@ def test_no_artifact_has_a_kind_the_work_did_not_request():
     with pytest.raises(RuntimeError, match="embeddings"):
         check_completion_evidence(
             work,
-            build_success(
+            build_completed(
                 work, coverage=embedded, artifacts=(*scores_records(embedded), embeddings)
             ),
         )
@@ -413,7 +490,7 @@ def test_no_artifact_has_a_kind_the_work_did_not_request():
     )
     check_completion_evidence(
         embeddings_only,
-        build_success(
+        build_completed(
             embeddings_only,
             coverage=cover(embeddings_only.recordings, scores=(), embedding=np.zeros(4)),
             artifacts=(embeddings,),
@@ -426,7 +503,7 @@ def test_the_result_must_carry_this_works_digest():
     work = build_work()
     other = build_work(values=("0", "1"))
 
-    success = build_success(work, work_digest=work_digest(other))
+    success = build_completed(work, work_digest=work_digest(other))
 
     with pytest.raises(RuntimeError):
         check_completion_evidence(work, success)
@@ -444,7 +521,7 @@ def test_a_consistent_result_passes():
         ),
     )
     coverage = cover(work.recordings, detection_rows=1)
-    success = build_success(
+    success = build_completed(
         work,
         coverage=coverage,
         artifacts=(

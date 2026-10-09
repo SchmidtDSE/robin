@@ -10,13 +10,16 @@ from robin_contracts.canonical import canonical_json_bytes, sha256_v1
 from robin_contracts.cards import AudioGeometry, ModelCard, RunnerResampled, model_ref
 from robin_contracts.output_contracts import ScoresRequest, ThresholdPolicy
 from robin_contracts.results import (
+    RECORDING_FAILURE_STAGES,
+    WORK_FAILURE_STAGES,
     ArtifactRecord,
     FailureReport,
     FailureStage,
+    InferenceCompleted,
     InferenceFailure,
     InferenceResult,
-    InferenceSuccess,
     RecordingCoverage,
+    RecordingFailed,
 )
 from robin_contracts.specs import AudioSpec, Recipe, WindowGeometry
 from robin_contracts.work import PinnedFile, PinnedModel
@@ -116,7 +119,7 @@ def build_scores_request(**overrides) -> ScoresRequest:
     return ScoresRequest(**(fields | overrides))
 
 
-def build_success(**overrides) -> InferenceSuccess:
+def build_completed(**overrides) -> InferenceCompleted:
     fields = {
         "schema_version": "robin.inference-result/1",
         "work_digest": RECORD_DIGEST,
@@ -125,8 +128,9 @@ def build_success(**overrides) -> InferenceSuccess:
         "window_geometry": GEOMETRY,
         "artifacts": (),
         "coverage": (build_coverage(),),
+        "failed": (),
     }
-    return InferenceSuccess(**(fields | overrides))
+    return InferenceCompleted(**(fields | overrides))
 
 
 def build_report(**overrides) -> FailureReport:
@@ -138,11 +142,16 @@ def build_report(**overrides) -> FailureReport:
     return FailureReport(**(fields | overrides))
 
 
+def build_recording_failed(**overrides) -> RecordingFailed:
+    fields = {"namespace": "soundhub", "value": "43", "failure": build_report()}
+    return RecordingFailed(**(fields | overrides))
+
+
 def build_failure(**overrides) -> InferenceFailure:
     fields = {
         "schema_version": "robin.inference-result/1",
         "work_digest": RECORD_DIGEST,
-        "failure": build_report(),
+        "failure": build_report(code="model_file_unavailable", stage="acquire_model"),
     }
     return InferenceFailure(**(fields | overrides))
 
@@ -305,11 +314,11 @@ def test_negative_counts_are_refused(overrides):
         build_coverage(**overrides)
 
 
-# --- InferenceSuccess -------------------------------------------------------
+# --- InferenceCompleted -------------------------------------------------------
 
 
 def test_a_minimal_success_round_trips():
-    success = build_success()
+    success = build_completed()
 
     rebuilt = TypeAdapter(InferenceResult).validate_python(success.model_dump(mode="json"))
 
@@ -318,29 +327,71 @@ def test_a_minimal_success_round_trips():
     assert isinstance(rebuilt.artifacts, tuple)
 
 
+def test_a_completed_result_names_at_least_one_recording():
+    with pytest.raises(ValidationError, match="names each of its work's recordings"):
+        build_completed(coverage=(), failed=())
+
+
+def test_a_result_in_which_every_recording_failed_is_completed():
+    completed = build_completed(coverage=(), failed=(build_recording_failed(),))
+
+    assert completed.outcome == "completed"
+    assert completed.artifacts == ()
+
+
 @pytest.mark.parametrize(
-    "coverage",
+    ("coverage", "failed"),
     [
-        pytest.param((), id="empty"),
-        pytest.param(
-            (build_coverage(value="42"), build_coverage(value="42")),
-            id="repeated",
-        ),
+        ((build_coverage(), build_coverage()), ()),
+        ((), (build_recording_failed(), build_recording_failed())),
+        ((build_coverage(value="43"),), (build_recording_failed(value="43"),)),
     ],
+    ids=["covered twice", "failed twice", "covered and failed"],
 )
-def test_coverage_rows_are_present_and_name_each_recording_once(coverage):
-    with pytest.raises(ValidationError):
-        build_success(coverage=coverage)
+def test_each_recording_is_named_once_across_coverage_and_failed(coverage, failed):
+    with pytest.raises(ValidationError, match=re.escape("('soundhub', ")):
+        build_completed(coverage=coverage, failed=failed)
 
 
-def test_coverage_order_is_left_to_the_work():
-    # The result does not hold the work, so it cannot know the work's order.
-    coverage = (build_coverage(value="43"), build_coverage(value="42"))
+def test_coverage_and_failed_order_is_left_to_the_work():
+    later, earlier = build_recording_failed(value="9"), build_recording_failed(value="1")
 
-    assert [row.value for row in build_success(coverage=coverage).coverage] == [
-        "43",
-        "42",
-    ]
+    completed = build_completed(failed=(later, earlier))
+
+    assert [one.value for one in completed.failed] == ["9", "1"]
+
+
+def test_a_failed_recording_has_no_artifact():
+    with pytest.raises(ValidationError, match="has no coverage row"):
+        build_completed(
+            coverage=(),
+            failed=(build_recording_failed(value="42"),),
+            artifacts=(build_artifact(value="42", rows=1),),
+        )
+
+
+def test_the_two_stage_sets_divide_every_stage():
+    assert WORK_FAILURE_STAGES == {
+        "validate_request", "acquire_model", "load_registry", "construct_model"
+    }
+    assert RECORDING_FAILURE_STAGES == {
+        "acquire_input", "read_input_artifact", "infer",
+        "accept_window", "write_artifact", "aggregate",
+    }
+    assert WORK_FAILURE_STAGES.isdisjoint(RECORDING_FAILURE_STAGES)
+    assert WORK_FAILURE_STAGES | RECORDING_FAILURE_STAGES == set(get_args(FailureStage))
+
+
+@pytest.mark.parametrize("stage", sorted(WORK_FAILURE_STAGES))
+def test_a_recording_cannot_fail_at_a_whole_work_stage(stage):
+    with pytest.raises(ValidationError, match="cannot fail one recording"):
+        build_recording_failed(failure=build_report(stage=stage))
+
+
+@pytest.mark.parametrize("stage", sorted(RECORDING_FAILURE_STAGES))
+def test_a_work_cannot_fail_whole_at_a_recording_stage(stage):
+    with pytest.raises(ValidationError, match="cannot fail the whole work"):
+        build_failure(failure=build_report(stage=stage))
 
 
 def test_the_same_value_in_two_namespaces_is_two_coverage_rows():
@@ -349,7 +400,7 @@ def test_the_same_value_in_two_namespaces_is_two_coverage_rows():
         build_coverage(namespace="arbimon", value="42"),
     )
 
-    assert len(build_success(coverage=coverage).coverage) == 2
+    assert len(build_completed(coverage=coverage).coverage) == 2
 
 
 def test_a_coverage_refusal_names_the_recording():
@@ -381,7 +432,7 @@ def test_each_scores_record_holds_its_recordings_score_rows():
         build_coverage(value="43", score_rows=3),
     )
 
-    success = build_success(
+    success = build_completed(
         artifacts=(build_artifact(value="42", rows=2), build_artifact(value="43", rows=3)),
         coverage=coverage,
         resolved_scores_request=build_scores_request(),
@@ -390,7 +441,7 @@ def test_each_scores_record_holds_its_recordings_score_rows():
     assert [artifact.rows for artifact in success.artifacts] == [2, 3]
 
     with pytest.raises(ValidationError, match=re.escape("('soundhub', '42')")):
-        build_success(
+        build_completed(
             artifacts=(build_artifact(value="42", rows=3), build_artifact(value="43", rows=2)),
             coverage=coverage,
             resolved_scores_request=build_scores_request(),
@@ -403,7 +454,7 @@ def test_each_embeddings_record_holds_its_recordings_embedding_rows():
         build_coverage(value="43", embedding_rows=1),
     )
 
-    success = build_success(
+    success = build_completed(
         artifacts=(
             build_embeddings_artifact(value="42", rows=2),
             build_embeddings_artifact(value="43", rows=1),
@@ -414,7 +465,7 @@ def test_each_embeddings_record_holds_its_recordings_embedding_rows():
     assert [artifact.rows for artifact in success.artifacts] == [2, 1]
 
     with pytest.raises(ValidationError):
-        build_success(
+        build_completed(
             artifacts=(
                 build_embeddings_artifact(value="42", rows=2),
                 build_embeddings_artifact(value="43", rows=2),
@@ -435,7 +486,7 @@ def test_each_detections_record_holds_its_recordings_detection_rows():
     }
     scores = (build_artifact(value="42", rows=4), build_artifact(value="43", rows=4))
 
-    success = build_success(
+    success = build_completed(
         artifacts=(
             *scores,
             build_detections_artifact(value="42", rows=2),
@@ -447,7 +498,7 @@ def test_each_detections_record_holds_its_recordings_detection_rows():
     assert [artifact.rows for artifact in success.artifacts] == [4, 4, 2, 1]
 
     with pytest.raises(ValidationError, match=re.escape("('soundhub', '43')")):
-        build_success(
+        build_completed(
             artifacts=(
                 *scores,
                 build_detections_artifact(value="42", rows=2),
@@ -466,7 +517,7 @@ def test_a_detection_count_and_a_detections_record_come_together():
 
     # A count with no record.
     with pytest.raises(ValidationError, match="detections"):
-        build_success(
+        build_completed(
             artifacts=(scores,),
             coverage=(build_coverage(score_rows=2, detection_rows=1),),
             **fields,
@@ -474,7 +525,7 @@ def test_a_detection_count_and_a_detections_record_come_together():
 
     # A record with no count.
     with pytest.raises(ValidationError, match="detections"):
-        build_success(
+        build_completed(
             artifacts=(scores, build_detections_artifact(rows=1)),
             coverage=(build_coverage(score_rows=2, detection_rows=0),),
             **fields,
@@ -482,14 +533,14 @@ def test_a_detection_count_and_a_detections_record_come_together():
 
 
 def test_a_recording_counting_rows_of_a_kind_has_a_record_of_that_kind():
-    assert build_success(coverage=(build_coverage(embedding_rows=0),)).artifacts == ()
+    assert build_completed(coverage=(build_coverage(embedding_rows=0),)).artifacts == ()
 
     with pytest.raises(ValidationError):
-        build_success(coverage=(build_coverage(embedding_rows=2),))
+        build_completed(coverage=(build_coverage(embedding_rows=2),))
 
     # One recording's record does not stand for another's rows.
     with pytest.raises(ValidationError, match=re.escape("('soundhub', '43')")):
-        build_success(
+        build_completed(
             artifacts=(build_artifact(value="42", rows=2),),
             coverage=(
                 build_coverage(value="42", score_rows=2),
@@ -509,7 +560,7 @@ BUILDERS = {
 @pytest.mark.parametrize("kind", BUILDERS)
 def test_a_record_names_a_recording_in_coverage(kind):
     with pytest.raises(ValidationError, match=re.escape("('soundhub', '99')")):
-        build_success(
+        build_completed(
             artifacts=(BUILDERS[kind](value="99", rows=1),),
             resolved_scores_request=build_scores_request(),
             resolved_detection_policy=ThresholdPolicy(min_score=0.5),
@@ -520,7 +571,7 @@ def test_a_record_names_a_recording_in_coverage(kind):
 def test_a_zero_row_record_is_refused(kind):
     # A recording with no rows of a kind has no file; its coverage count says so.
     with pytest.raises(ValidationError, match="no rows"):
-        build_success(
+        build_completed(
             artifacts=(BUILDERS[kind](rows=0),),
             resolved_scores_request=build_scores_request(),
             resolved_detection_policy=ThresholdPolicy(min_score=0.5),
@@ -528,7 +579,7 @@ def test_a_zero_row_record_is_refused(kind):
 
 
 def test_a_scores_request_with_no_scores_records_is_accepted():
-    success = build_success(
+    success = build_completed(
         coverage=(build_coverage(score_rows=0),),
         resolved_scores_request=build_scores_request(
             retention="thresholded", min_score=0.5
@@ -541,13 +592,13 @@ def test_a_scores_request_with_no_scores_records_is_accepted():
 
 def test_a_recording_has_at_most_one_record_per_kind():
     with pytest.raises(ValidationError, match=re.escape("('soundhub', '42')")):
-        build_success(
+        build_completed(
             artifacts=(build_artifact(rows=2), build_artifact(rows=2)),
             coverage=(build_coverage(score_rows=2),),
             resolved_scores_request=build_scores_request(),
         )
 
-    success = build_success(
+    success = build_completed(
         artifacts=(
             build_artifact(namespace="soundhub", rows=2),
             build_artifact(namespace="arbimon", rows=2),
@@ -569,22 +620,22 @@ def test_a_record_requires_the_resolved_request_for_its_kind():
     policy = ThresholdPolicy(min_score=0.5)
 
     with pytest.raises(ValidationError):
-        build_success(artifacts=(scores,), coverage=coverage)
+        build_completed(artifacts=(scores,), coverage=coverage)
 
     with pytest.raises(ValidationError):
-        build_success(
+        build_completed(
             artifacts=(scores, detections),
             coverage=coverage,
             resolved_scores_request=build_scores_request(),
         )
 
     # A request whose recordings produced no rows has no records.
-    assert build_success(resolved_scores_request=build_scores_request()).artifacts == ()
-    assert build_success(
+    assert build_completed(resolved_scores_request=build_scores_request()).artifacts == ()
+    assert build_completed(
         resolved_scores_request=build_scores_request(), resolved_detection_policy=policy
     ).artifacts == ()
 
-    success = build_success(
+    success = build_completed(
         artifacts=(scores, detections),
         coverage=coverage,
         resolved_scores_request=build_scores_request(),
@@ -620,45 +671,34 @@ def test_a_failure_report_refuses_an_empty_code():
         build_report(code="")
 
 
-def test_a_failure_report_locates_itself_only_when_it_can():
-    report = build_report()
-
-    assert (report.namespace, report.value) == (None, None)
-    assert report.window_start_s is None
-    located = build_report(namespace="soundhub", value="42")
-    assert (located.namespace, located.value) == ("soundhub", "42")
-
+def test_a_failure_report_names_no_recording():
+    assert set(FailureReport.model_fields) == {"code", "stage", "window_start_s", "detail"}
+    assert build_report().window_start_s is None
     with pytest.raises(ValidationError):
         build_report(window_start_s=float("nan"))
-
-
-@pytest.mark.parametrize(
-    "half", [{"namespace": "soundhub"}, {"value": "42"}], ids=["namespace", "value"]
-)
-def test_a_failure_report_names_a_whole_recording_or_none(half):
-    with pytest.raises(ValidationError, match="together"):
-        build_report(**half)
 
 
 def test_the_result_union_discriminates_on_outcome():
     adapter = TypeAdapter(InferenceResult)
 
-    success = adapter.validate_python(build_success().model_dump(mode="json"))
+    success = adapter.validate_python(build_completed().model_dump(mode="json"))
     failure = adapter.validate_python(build_failure().model_dump(mode="json"))
 
-    assert isinstance(success, InferenceSuccess)
+    assert isinstance(success, InferenceCompleted)
     assert isinstance(failure, InferenceFailure)
 
     with pytest.raises(ValidationError):
         adapter.validate_python(build_failure().model_dump(mode="json") | {"outcome": "partial"})
+    with pytest.raises(ValidationError):
+        adapter.validate_python(build_completed().model_dump(mode="json") | {"outcome": "success"})
 
 
 # --- Canonical encoding -----------------------------------------------------
 
 
 def test_a_result_replays_byte_identically():
-    first = build_success()
-    second = build_success()
+    first = build_completed()
+    second = build_completed()
 
     assert canonical_json_bytes(first) == canonical_json_bytes(second)
     assert sha256_v1(first) == sha256_v1(first.model_dump(mode="json"))
@@ -666,7 +706,7 @@ def test_a_result_replays_byte_identically():
 
 def test_the_work_digest_field_refuses_the_file_digest_family():
     with pytest.raises(ValidationError):
-        build_success(work_digest=FILE_DIGEST)
+        build_completed(work_digest=FILE_DIGEST)
 
     with pytest.raises(ValidationError):
         build_failure(work_digest=FILE_DIGEST)
@@ -684,14 +724,14 @@ def test_the_work_digest_field_refuses_the_file_digest_family():
 )
 def test_a_success_refuses_half_a_registry_binding(binding):
     with pytest.raises(ValidationError) as exc:
-        build_success(**binding)
+        build_completed(**binding)
 
     assert "registry_uri" in str(exc.value)
     assert "registry_fingerprint" in str(exc.value)
 
 
 def test_a_success_accepts_a_whole_registry_binding():
-    success = build_success(
+    success = build_completed(
         registry_uri="file:///registry.csv", registry_fingerprint=FILE_DIGEST
     )
 
@@ -700,7 +740,7 @@ def test_a_success_accepts_a_whole_registry_binding():
 
 
 def test_a_success_accepts_no_registry_binding():
-    success = build_success()
+    success = build_completed()
 
     assert success.registry_uri is None
     assert success.registry_fingerprint is None

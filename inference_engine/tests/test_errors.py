@@ -2,7 +2,13 @@ from typing import get_args
 
 import pytest
 
-from robin_contracts.results import FailureReport
+from robin_contracts.results import (
+    RECORDING_FAILURE_STAGES,
+    WORK_FAILURE_STAGES,
+    FailureReport,
+    InferenceFailure,
+    RecordingFailed,
+)
 from robin_contracts.work import RecordingRef
 from robin_inference_engine import errors
 
@@ -39,7 +45,7 @@ def test_every_declared_constant_is_a_stage_or_one_of_its_codes():
     assert len(set(errors.ACQUIRE_INPUT_FAILURES)) == 1
     assert len(set(errors.INFER_FAILURES)) == 2
     assert len(set(errors.READ_INPUT_ARTIFACT_FAILURES)) == 10
-    assert len(set(errors.WRITE_ARTIFACT_FAILURES)) == 2
+    assert len(set(errors.WRITE_ARTIFACT_FAILURES)) == 3
     assert len(set(errors.AGGREGATE_FAILURES)) == 2
     assert declared == {stage for stage, _ in FAMILIES} | {
         code for _, codes in FAMILIES for code in codes
@@ -69,13 +75,27 @@ def test_each_stage_constant_is_one_of_the_declared_stages():
         assert stage in DECLARED_STAGES
 
 
-@pytest.mark.parametrize(("stage", "codes"), FAMILIES)
-def test_every_declared_code_is_reportable_on_its_own_stage(stage, codes):
-    for code in codes:
-        report = FailureReport(code=code, stage=stage, detail=f"{code} was raised")
+def report_at(stage: str, code: str) -> FailureReport:
+    report = FailureReport(code=code, stage=stage, detail=f"{code} was raised")
+    if stage in WORK_FAILURE_STAGES:
+        return InferenceFailure(
+            schema_version="robin.inference-result/1",
+            work_digest="sha256:v1:" + "0" * 64,
+            failure=report,
+        ).failure
+    return RecordingFailed(namespace="soundhub", value="42", failure=report).failure
 
-        assert report.code == code
-        assert report.stage == stage
+
+@pytest.mark.parametrize(("stage", "codes"), FAMILIES)
+def test_every_declared_code_is_reportable_at_its_stages_scope(stage, codes):
+    for code in codes:
+        assert (report_at(stage, code).code, report_at(stage, code).stage) == (code, stage)
+
+
+def test_a_local_write_failure_fails_one_recording():
+    assert errors.ARTIFACT_WRITE_FAILED == "artifact_write_failed"
+    assert errors.ARTIFACT_WRITE_FAILED in errors.WRITE_ARTIFACT_FAILURES
+    assert errors.WRITE_ARTIFACT in RECORDING_FAILURE_STAGES
 
 
 RECORDING = RecordingRef(namespace="soundhub", value="42", audio_uri="s3://b/42.wav")

@@ -186,17 +186,19 @@ READ_INPUT_ARTIFACT_FAILURES = (
 
 
 # ---------------------------------------------------------------------------
-# write_artifact: what the engine refuses to put in a file, and a file it could not
-# publish.
+# write_artifact: what the engine refuses to put in a file, a file it could not write
+# on local disk, and a file it could not publish.
 # ---------------------------------------------------------------------------
 
 WRITE_ARTIFACT = "write_artifact"
 
 EMBEDDING_VALUE_OUT_OF_STORAGE_DTYPE_RANGE = "embedding_value_out_of_storage_dtype_range"
+ARTIFACT_WRITE_FAILED = "artifact_write_failed"
 ARTIFACT_PUBLICATION_FAILED = "artifact_publication_failed"
 
 WRITE_ARTIFACT_FAILURES = (
     EMBEDDING_VALUE_OUT_OF_STORAGE_DTYPE_RANGE,
+    ARTIFACT_WRITE_FAILED,
     ARTIFACT_PUBLICATION_FAILED,
 )
 

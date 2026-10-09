@@ -27,7 +27,8 @@ from robin_contracts.results import (
     ArtifactContractId,
     ArtifactKind,
     ArtifactRecord,
-    InferenceSuccess,
+    FailureReport,
+    InferenceCompleted,
 )
 from robin_contracts.work import (
     REGISTRY_ROLE,
@@ -38,6 +39,7 @@ from robin_contracts.work import (
     PinnedFile,
     PinnedModel,
     RecordingRef,
+    work_digest,
 )
 
 CallLog = list[tuple[object, ...]]
@@ -398,7 +400,7 @@ class WorkBuilder:
 
 def head_work(
     backbone: InferenceWork,
-    result: InferenceSuccess,
+    result: InferenceCompleted,
     head: WorkBuilder,
     *,
     outputs: Sequence[OutputRequest],
@@ -426,3 +428,19 @@ def head_work(
     )
     work = head.work(named, input=source, settings={}, outputs=tuple(outputs))
     return work, paths
+
+
+def recording_failure_of(
+    result, work: InferenceWork, *, value: str, code: str, stage: str, namespace: str = "test"
+) -> FailureReport:
+    """The failure of one recording in a completed result, which names no artifact for it."""
+    assert isinstance(result, InferenceCompleted), result
+    assert result.work_digest == work_digest(work)
+    failures = {(one.namespace, one.value): one.failure for one in result.failed}
+    report = failures[(namespace, value)]
+    assert (report.code, report.stage) == (code, stage), report
+    assert all(
+        (artifact.namespace, artifact.value) != (namespace, value) for artifact in result.artifacts
+    )
+    assert all((row.namespace, row.value) != (namespace, value) for row in result.coverage)
+    return report

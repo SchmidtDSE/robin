@@ -22,6 +22,7 @@ from doubles import (
     WorkBuilder,
     head_work,
     installed_factory,
+    recording_failure_of,
     registry_digest,
 )
 from robin_contracts.canonical import checksum_file
@@ -43,7 +44,7 @@ from robin_contracts.protocols import JsonScalar, ModelContext
 from robin_contracts.inputs import Embeddings
 from robin_contracts.layout import artifact_path
 from robin_contracts.records import ClassScore, WindowOutput
-from robin_contracts.results import FailureReport, InferenceFailure, InferenceSuccess
+from robin_contracts.results import InferenceCompleted
 from robin_contracts.specs import recipe
 from robin_contracts.work import InferenceWork, InputArtifact, RecordingRef
 from robin_inference_engine import errors
@@ -134,7 +135,7 @@ def run_backbone(
     directory: Path,
     card: ModelCard = BACKBONE,
     settings: Mapping[str, JsonScalar] | None = None,
-) -> tuple[InferenceWork, InferenceSuccess]:
+) -> tuple[InferenceWork, InferenceCompleted]:
     """A backbone work that writes a scores and an embeddings file for each of ROWS'
     recordings."""
     settings = settings or {}
@@ -159,7 +160,8 @@ def run_backbone(
             inputs=LocalFiles("audio", build.audio_paths, calls),
             artifacts=CopyingWriter(directory / "published", calls),
         )
-    assert isinstance(result, InferenceSuccess), result
+    assert isinstance(result, InferenceCompleted), result
+    assert result.failed == (), result.failed
     return work, result
 
 
@@ -260,12 +262,6 @@ def rig(tmp_path) -> HeadRig:
     return HeadRig(tmp_path)
 
 
-def failure_of(result, *, code: str, stage: str) -> FailureReport:
-    assert isinstance(result, InferenceFailure), result
-    assert (result.failure.code, result.failure.stage) == (code, stage), result.failure
-    return result.failure
-
-
 # ---------------------------------------------------------------------------
 # The head's runtime, found and built.
 # ---------------------------------------------------------------------------
@@ -355,17 +351,18 @@ def a_file_whose_footer_does_not_decode(rig: HeadRig, work: InferenceWork) -> In
         (a_file_naming_no_recording_value, errors.ARTIFACT_METADATA_INCOMPLETE),
     ],
 )
-def test_an_input_file_the_engine_does_not_trust_fails_the_work_at_its_recording(
+def test_an_input_file_the_engine_does_not_trust_fails_its_recording(
     rig, named, code
 ):
     work = named(rig, rig.work())
 
     result = rig.run(work)
 
-    failure = failure_of(result, code=code, stage=errors.READ_INPUT_ARTIFACT)
-    assert (failure.namespace, failure.value) == ("test", "1")
+    recording_failure_of(result, work, value="1", code=code, stage=errors.READ_INPUT_ARTIFACT)
     assert rig.runs() == [("run", "embeddings", ROWS[0])]
-    assert not any(call[0] == "create" for call in rig.calls)
+    assert [call for call in rig.calls if call[0] == "create"] == [
+        ("create", "scores", "test", "0")
+    ]
 
 
 def test_the_head_is_given_each_recordings_stored_vectors_once(rig):
@@ -374,7 +371,7 @@ def test_the_head_is_given_each_recordings_stored_vectors_once(rig):
 
     result = rig.run(work, head)
 
-    assert isinstance(result, InferenceSuccess), result
+    assert isinstance(result, InferenceCompleted), result
     assert rig.runs() == [("run", "embeddings", rows) for rows in ROWS]
     assert len(head.given) == len(ROWS)
     for position, given in enumerate(head.given):
@@ -403,8 +400,15 @@ def test_each_input_file_is_released_after_its_recording(rig, fail):
         ("embeddings", "release", first),
     ]
     if fail is not None:
-        failure_of(result, code=errors.MODEL_RUN_FAILED, stage=errors.INFER)
-        assert len(steps) == 3
+        for value in ("0", "1"):
+            recording_failure_of(
+                result, work, value=value, code=errors.MODEL_RUN_FAILED, stage=errors.INFER
+            )
+        assert steps[3:] == [
+            ("run", "embeddings", ROWS[1]),
+            ("after_recording",),
+            ("embeddings", "release", rig.input_path(work, 1)),
+        ]
 
 
 def test_an_input_the_port_cannot_fetch_is_refused_naming_its_uri(rig):
@@ -418,10 +422,12 @@ def test_an_input_the_port_cannot_fetch_is_refused_naming_its_uri(rig):
 
     result = rig.run(work, inputs=inputs)
 
-    failure = failure_of(result, code=errors.INPUT_UNAVAILABLE, stage=errors.ACQUIRE_INPUT)
+    failure = recording_failure_of(
+        result, work, value="0", code=errors.INPUT_UNAVAILABLE, stage=errors.ACQUIRE_INPUT
+    )
     assert recording.embeddings.uri in failure.detail
     assert recording.audio_uri not in failure.detail
-    assert rig.runs() == []
+    assert rig.runs() == [("run", "embeddings", ROWS[1])]
 
 
 # ---------------------------------------------------------------------------
@@ -466,15 +472,20 @@ def a_different_end(given: Embeddings) -> list[WindowOutput]:
 
 
 @pytest.mark.parametrize("windows", [one_fewer, one_more, a_moved_start, a_different_end])
-def test_a_head_whose_windows_are_not_its_inputs_rows_fails_the_work(rig, windows):
+def test_a_head_whose_windows_are_not_its_inputs_rows_fails_each_recording(rig, windows):
     work = rig.work()
 
     result = rig.run(work, rig.head(windows=windows))
 
-    failure = failure_of(
-        result, code=errors.HEAD_WINDOWS_DISAGREE_WITH_INPUT, stage=errors.ACCEPT_WINDOW
-    )
-    assert (failure.namespace, failure.value) == ("test", "0")
+    # Recording 1 must fail on its own windows, not on state that recording 0 left.
+    for value in ("0", "1"):
+        recording_failure_of(
+            result,
+            work,
+            value=value,
+            code=errors.HEAD_WINDOWS_DISAGREE_WITH_INPUT,
+            stage=errors.ACCEPT_WINDOW,
+        )
     assert not any(call[0] == "create" for call in rig.calls)
 
 
@@ -500,7 +511,7 @@ def test_a_head_work_scores_every_window_of_its_input(rig):
 
     result = rig.run(work)
 
-    assert isinstance(result, InferenceSuccess), result
+    assert isinstance(result, InferenceCompleted), result
     scores = [record for record in result.artifacts if record.kind == "scores"]
     assert [(record.value, record.namespace) for record in scores] == [("0", "test"), ("1", "test")]
     for record, rows in zip(scores, ROWS, strict=True):
@@ -515,7 +526,7 @@ def test_a_head_works_result_carries_its_backbones_recipe_and_names_the_head(rig
 
     result = rig.run(work)
 
-    assert isinstance(result, InferenceSuccess), result
+    assert isinstance(result, InferenceCompleted), result
     stated = recipe(BACKBONE, {})
     assert result.recipe == stated
     assert result.window_geometry == stated.audio.geometry
@@ -529,7 +540,7 @@ def test_each_header_names_the_head_its_files_and_its_registry(rig):
 
     result = rig.run(work)
 
-    assert isinstance(result, InferenceSuccess), result
+    assert isinstance(result, InferenceCompleted), result
     head = model_ref(HEAD)
     files = {
         role: {"digest": pinned.digest, "size_bytes": pinned.size_bytes}
@@ -564,7 +575,7 @@ def test_a_head_over_overlapping_embeddings_scores_the_backbones_windows(overlap
 
     result = rig.run(work)
 
-    assert isinstance(result, InferenceSuccess), result
+    assert isinstance(result, InferenceCompleted), result
     assert result.recipe == recipe(OVERLAPPING_BACKBONE, OVERLAP)
     scores = [record for record in result.artifacts if record.kind == "scores"]
     for position, (record, rows) in enumerate(zip(scores, ROWS, strict=True)):
@@ -582,16 +593,26 @@ def test_a_head_naming_other_backbone_settings_than_its_input_is_refused(overlap
 
     result = rig.run(work)
 
-    failure = failure_of(
-        result, code=errors.HEAD_INPUT_RECIPE_DIFFERS, stage=errors.READ_INPUT_ARTIFACT
+    failure = recording_failure_of(
+        result,
+        work,
+        value="0",
+        code=errors.HEAD_INPUT_RECIPE_DIFFERS,
+        stage=errors.READ_INPUT_ARTIFACT,
     )
-    assert (failure.namespace, failure.value) == ("test", "0")
+    recording_failure_of(
+        result,
+        work,
+        value="1",
+        code=errors.HEAD_INPUT_RECIPE_DIFFERS,
+        stage=errors.READ_INPUT_ARTIFACT,
+    )
     assert recipe(OVERLAPPING_BACKBONE, OVERLAP).id in failure.detail
     assert recipe(OVERLAPPING_BACKBONE, {}).id in failure.detail
     assert rig.runs() == []
 
 
-def detection_ids(result: InferenceSuccess) -> set[str]:
+def detection_ids(result: InferenceCompleted) -> set[str]:
     ids: set[str] = set()
     for record in result.artifacts:
         if record.kind == "detections":
@@ -607,8 +628,8 @@ def test_two_heads_over_one_input_give_different_detections(rig, tmp_path):
 
     second = rig.run(full_head_work(rig))
 
-    assert isinstance(first, InferenceSuccess), first
-    assert isinstance(second, InferenceSuccess), second
+    assert isinstance(first, InferenceCompleted), first
+    assert isinstance(second, InferenceCompleted), second
     assert detection_ids(first)
     assert detection_ids(second)
     assert detection_ids(first).isdisjoint(detection_ids(second))
@@ -620,12 +641,23 @@ def test_a_head_published_at_its_backbones_destination_is_refused(rig, tmp_path)
 
     result = rig.run(work, artifacts=writer)
 
-    failure = failure_of(
-        result, code=errors.ARTIFACT_PUBLICATION_FAILED, stage=errors.WRITE_ARTIFACT
+    failure = recording_failure_of(
+        result,
+        work,
+        value="0",
+        code=errors.ARTIFACT_PUBLICATION_FAILED,
+        stage=errors.WRITE_ARTIFACT,
     )
-    assert (failure.namespace, failure.value) == ("test", "0")
+    recording_failure_of(
+        result,
+        work,
+        value="1",
+        code=errors.ARTIFACT_PUBLICATION_FAILED,
+        stage=errors.WRITE_ARTIFACT,
+    )
     assert "scores" in failure.detail
     assert [call for call in rig.calls if call[0] == "create"] == [
-        ("create", "scores", "test", "0")
+        ("create", "scores", "test", "0"),
+        ("create", "scores", "test", "1"),
     ]
     assert (tmp_path / "backbone" / "published" / artifact_path("scores", "test", "0")).exists()
