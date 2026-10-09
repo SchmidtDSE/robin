@@ -8,13 +8,16 @@ from pydantic import ValidationError
 
 from robin_contracts.canonical import canonical_json_bytes, sha256_v1
 from robin_contracts.cards import (
+    AudioGeometry,
     BackendResampled,
     EmbeddingDtype,
     HeadCard,
     ModelCard,
     ModelRef,
     RunnerResampled,
+    backbone_mismatch,
     card_digest,
+    model_ref,
     read_card,
     write_card,
 )
@@ -568,3 +571,84 @@ def test_a_card_that_is_not_utf8_is_refused_naming_its_path(tmp_path):
 
     assert str(path) in str(exc.value)
     assert isinstance(exc.value.__cause__, UnicodeDecodeError)
+
+
+# --- backbone_mismatch ------------------------------------------------------
+
+def build_backbone(**overrides) -> ModelCard:
+    fields = {
+        "model_name": "perch",
+        "model_version": "8",
+        "runtime": "tensorflow",
+        "window_duration": 5.0,
+        "sample_rate": 32000,
+        "min_detection_threshold": 0.0,
+        "score_domain": None,
+        "audio": AudioGeometry(
+            downmix="mean", resampler=RunnerResampled(algorithm="soxr_hq"), pad="drop"
+        ),
+        "backend": "tensorflow",
+        "dtype": "float32",
+        "can_emit_embeddings": True,
+        "embedding_dim": 1280,
+        "embedding_dtype": "float32",
+    }
+    return ModelCard(**(fields | overrides))
+
+
+def build_head_for(backbone: ModelCard, **overrides) -> HeadCard:
+    fields = {
+        "model_name": "amy-head",
+        "model_version": "1",
+        "runtime": "onnx",
+        "backbone": model_ref(backbone),
+        "embedding_dim": 1280,
+        "min_detection_threshold": 0.0,
+        "score_domain": "sigmoid",
+        "taxa_registry_digest": "sha256:" + "a" * 64,
+    }
+    return HeadCard(**(fields | overrides))
+
+
+def test_a_head_reads_the_backbone_it_names():
+    backbone = build_backbone()
+
+    assert backbone_mismatch(build_head_for(backbone), backbone) is None
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        pytest.param({"model_name": "birdnet"}, id="another_name"),
+        pytest.param({"sample_rate": 48000}, id="another_digest"),
+    ],
+)
+def test_a_head_refuses_another_backbone(other):
+    named = build_backbone()
+    given = build_backbone(**other)
+
+    reason = backbone_mismatch(build_head_for(named), given)
+
+    for fact in (model_ref(given).id, model_ref(given).digest,
+                 model_ref(named).id, model_ref(named).digest, "amy-head/1"):
+        assert fact in reason
+
+
+def test_a_head_refuses_a_backbone_that_emits_no_embeddings():
+    backbone = build_backbone(
+        can_emit_embeddings=False, embedding_dim=None, embedding_dtype=None
+    )
+
+    reason = backbone_mismatch(build_head_for(backbone), backbone)
+
+    for fact in ("perch/8", "can_emit_embeddings", "amy-head/1"):
+        assert fact in reason
+
+
+def test_a_head_refuses_a_backbone_of_another_width():
+    backbone = build_backbone(embedding_dim=1024)
+
+    reason = backbone_mismatch(build_head_for(backbone), backbone)
+
+    for fact in ("perch/8", "1024", "1280", "amy-head/1"):
+        assert fact in reason

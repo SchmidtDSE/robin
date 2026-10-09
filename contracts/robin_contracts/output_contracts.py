@@ -12,6 +12,8 @@ EmbeddingsContractId = Literal["robin.embeddings.parquet/1"]
 DetectionsContractId = Literal["robin.detections.parquet/1"]
 WorkContractId = Literal["robin.inference-work/1"]
 ResultContractId = Literal["robin.inference-result/1"]
+TaskContractId = Literal["robin.inference-task/1"]
+TaskResultContractId = Literal["robin.inference-task-result/1"]
 
 
 def _finite(value: float) -> float:

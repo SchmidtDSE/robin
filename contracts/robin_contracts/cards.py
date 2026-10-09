@@ -256,6 +256,31 @@ def model_ref(card: ModelCard | HeadCard) -> ModelRef:
     )
 
 
+def backbone_mismatch(head: HeadCard, backbone: ModelCard) -> str | None:
+    """Why `head` cannot read the embeddings `backbone` writes, or None if it can.
+
+    The engine and the control plane both refuse a head and backbone pair for this reason.
+    """
+    given = model_ref(backbone)
+    head_id = f"{head.model_name}/{head.model_version}"
+    if given != head.backbone:
+        return (
+            f"backbone {given.id} at {given.digest} is not the backbone head {head_id} "
+            f"reads, {head.backbone.id} at {head.backbone.digest}"
+        )
+    if not backbone.can_emit_embeddings:
+        return (
+            f"backbone {given.id} declares can_emit_embeddings false, but head "
+            f"{head_id} reads its embeddings"
+        )
+    if backbone.embedding_dim != head.embedding_dim:
+        return (
+            f"backbone {given.id} declares embedding_dim {backbone.embedding_dim}, but "
+            f"head {head_id} takes {head.embedding_dim} values"
+        )
+    return None
+
+
 # ModelCard and HeadCard each forbid extra fields and require one the other lacks, so
 # exactly one of them accepts any valid card and no discriminator field is needed.
 _ANY_CARD = TypeAdapter(ModelCard | HeadCard)

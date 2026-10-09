@@ -167,3 +167,29 @@ def test_result_reexports_are_importable():
     assert RECORDING_FAILURE_STAGES is not None
     assert WORK_FAILURE_STAGES is not None
     assert ZeroWindowReason is not None
+
+
+def test_backbone_mismatch_is_exported():
+    from robin_contracts import backbone_mismatch
+
+    assert callable(backbone_mismatch)
+
+
+def test_task_reexports_are_importable():
+    from robin_contracts import (
+        InferenceTask,
+        InferenceTaskResult,
+        ModelOutputVersion,
+        TaskRefusal,
+        WorkerError,
+        output_version_id,
+        task_result_problem,
+    )
+
+    assert InferenceTask is not None
+    assert InferenceTaskResult is not None
+    assert ModelOutputVersion is not None
+    assert TaskRefusal is not None
+    assert WorkerError is not None
+    assert callable(output_version_id)
+    assert callable(task_result_problem)

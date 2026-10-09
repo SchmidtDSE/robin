@@ -8,7 +8,7 @@ both sides of the disagreement.
 
 from collections.abc import Iterator, Mapping
 
-from robin_contracts.cards import HeadCard, ModelCard, model_ref
+from robin_contracts.cards import HeadCard, ModelCard, backbone_mismatch
 from robin_contracts.output_contracts import ScoresRequest
 from robin_contracts.protocols import JsonScalar
 from robin_contracts.registry import TaxonRegistry
@@ -78,25 +78,9 @@ def _refuse_an_input_the_card_does_not_read(
 
 
 def _refuse_a_backbone_the_head_does_not_read(backbone: ModelCard, head: HeadCard) -> None:
-    given = model_ref(backbone)
-    if given != head.backbone:
-        raise _refused(
-            errors.HEAD_BACKBONE_DISAGREES,
-            f"the work's input comes from backbone {given.id} at {given.digest}, but head "
-            f"{_card_id(head)} reads backbone {head.backbone.id} at {head.backbone.digest}",
-        )
-    if not backbone.can_emit_embeddings:
-        raise _refused(
-            errors.HEAD_BACKBONE_DISAGREES,
-            f"backbone {given.id} declares can_emit_embeddings false, but head "
-            f"{_card_id(head)} reads its embeddings",
-        )
-    if backbone.embedding_dim != head.embedding_dim:
-        raise _refused(
-            errors.HEAD_BACKBONE_DISAGREES,
-            f"backbone {given.id} declares embedding_dim {backbone.embedding_dim}, but head "
-            f"{_card_id(head)} takes {head.embedding_dim} values",
-        )
+    mismatch = backbone_mismatch(head, backbone)
+    if mismatch is not None:
+        raise _refused(errors.HEAD_BACKBONE_DISAGREES, mismatch)
 
 
 def _refuse_embeddings_from_a_head(work: InferenceWork, head: HeadCard) -> None:
