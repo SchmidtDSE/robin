@@ -175,6 +175,25 @@ def task_result_problem(
     )
 
 
+def output_root_problem(root: str, *, split_location: SplitLocation) -> str | None:
+    """Why no artifact can be under `root`, or None if artifacts can be."""
+    place = split_location(root)
+    if place is None:
+        return f"output_root {root!r} is not a location storage supports"
+    bad = [segment for segment in _root_parts(place[1]) if segment in _UNSAFE_SEGMENTS]
+    if bad:
+        return f"output_root {root!r} has an empty, '.', or '..' segment: {bad[0]!r}"
+    return None
+
+
+_UNSAFE_SEGMENTS = frozenset({"", ".", ".."})
+
+
+def _root_parts(path: str) -> tuple[str, ...]:
+    # A trailing `/` is ignored. An empty path is the whole store.
+    return tuple(path.removesuffix("/").split("/")) if path else ()
+
+
 def _recordings_problem(outcome: InferenceCompleted, work: InferenceWork) -> str | None:
     # The result's own validators already refuse a recording named twice.
     assigned = {(one.namespace, one.value) for one in work.recordings}
@@ -204,11 +223,11 @@ def _is_under(uri: str, root: str, split_location: SplitLocation) -> bool:
     if root_place is None or uri_place is None:
         return False
     (root_store, root_path), (uri_store, uri_path) = root_place, uri_place
-    root_parts = tuple(root_path.removesuffix("/").split("/")) if root_path else ()
+    root_parts = _root_parts(root_path)
     uri_parts = tuple(uri_path.split("/"))
     if uri_store != root_store or uri_parts[: len(root_parts)] != root_parts:
         return False
     rest = uri_parts[len(root_parts):]
     return bool(rest) and all(
-        segment not in ("", ".", "..") for segment in (*root_parts, *rest)
+        segment not in _UNSAFE_SEGMENTS for segment in (*root_parts, *rest)
     )

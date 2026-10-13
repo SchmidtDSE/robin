@@ -95,6 +95,7 @@ def _temporary_folder(tmp_path, monkeypatch) -> Path:
         ("s3://{bucket}/", ""),
         ("s3://{bucket}/runs/one", "runs/one/"),
         ("s3://{bucket}/runs/one/", "runs/one/"),
+        ("S3://{bucket}/runs/one", "runs/one/"),
     ],
 )
 def test_a_file_is_published_at_its_recordings_key(s3_bucket, tmp_path, root, prefix):
@@ -248,11 +249,11 @@ def _must_not_be_called(*args, **kwargs):
         "file:///tmp/r",
         "https://example.org/r",
         "/tmp/r",
-        "S3://b",
         "s3://",
         "s3:///p",
-        "s3://b//p",
         "s3://b/a//p",
+        "s3://b/a/../p",
+        "s3://b/./p",
         "s3://b/run#1",
         "s3://b/run?tag=1",
         "s3://b/run?",
@@ -272,7 +273,7 @@ def test_a_root_it_cannot_publish_under_is_refused(monkeypatch, root):
     assert root in str(refused.value)
 
 
-@pytest.mark.parametrize("root", ["s3://b", "s3://b/runs/one", "s3://b/runs/one/"])
+@pytest.mark.parametrize("root", ["s3://b", "s3://b/runs/one", "s3://b/runs/one/", "S3://b"])
 def test_an_s3_root_is_accepted(root):
     OndioArtifactWriter(root)
 

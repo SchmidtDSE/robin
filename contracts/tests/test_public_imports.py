@@ -182,6 +182,7 @@ def test_task_reexports_are_importable():
         ModelOutputVersion,
         TaskRefusal,
         WorkerError,
+        output_root_problem,
         output_version_id,
         task_result_problem,
     )
@@ -191,5 +192,6 @@ def test_task_reexports_are_importable():
     assert ModelOutputVersion is not None
     assert TaskRefusal is not None
     assert WorkerError is not None
+    assert callable(output_root_problem)
     assert callable(output_version_id)
     assert callable(task_result_problem)

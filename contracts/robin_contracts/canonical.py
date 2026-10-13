@@ -15,6 +15,7 @@ _SHA256_V1 = re.compile(r"sha256:v1:[0-9a-f]{64}")
 # `sha256:` hashes file bytes, `sha256:v1:` hashes canonical JSON, so a digest of one
 # kind never matches one of the other. Strip the label where a path needs bare hex.
 _SHA256_BYTES = re.compile(r"sha256:[0-9a-f]{64}")
+_BYTES_PREFIX = "sha256:"
 
 CHECKSUM_CHUNK_BYTES = 1 << 20
 
@@ -65,10 +66,15 @@ def is_sha256_bytes(value: str) -> bool:
     return _SHA256_BYTES.fullmatch(value) is not None
 
 
+def checksum_bytes(data: bytes) -> str:
+    """The `sha256:` checksum of `data`, the same as `checksum_file` of a file that holds it."""
+    return _BYTES_PREFIX + hashlib.sha256(data).hexdigest()
+
+
 def checksum_file(path: Path) -> str:
     """The `sha256:` checksum of a file, read a chunk at a time so any size is safe."""
     digest = hashlib.sha256()
     with open(path, "rb") as stream:
         while chunk := stream.read(CHECKSUM_CHUNK_BYTES):
             digest.update(chunk)
-    return "sha256:" + digest.hexdigest()
+    return _BYTES_PREFIX + digest.hexdigest()

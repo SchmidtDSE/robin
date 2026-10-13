@@ -73,6 +73,14 @@ def test_a_relative_file_uri_is_refused_even_when_the_file_exists(tmp_path, monk
         LocalFileProvider().fetch("file:relative.wav")
 
 
+def test_a_file_uri_without_two_slashes_is_refused_even_when_the_file_exists(tmp_path):
+    path = _file(tmp_path, "a.wav")
+    uri = f"file:{quote(str(path))}"
+
+    with pytest.raises(ValueError, match="file:"):
+        LocalFileProvider().fetch(uri)
+
+
 @pytest.mark.parametrize("suffix", ["?x=1", "#part", "?", "#"])
 def test_a_file_uri_with_a_query_or_fragment_is_refused(tmp_path, suffix):
     path = _file(tmp_path, "a.wav")

@@ -192,3 +192,15 @@ def test_a_failure_mid_copy_publishes_nothing_and_leaves_nothing(tmp_path, monke
 
     assert not _location(root).exists()
     assert list(_location(root).parent.iterdir()) == []
+
+
+def test_a_root_through_a_link_keeps_the_link_in_its_uris(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    linked = tmp_path / "linked"
+    linked.symlink_to(real, target_is_directory=True)
+
+    record = _create(LocalArtifactWriter(linked), _staged(tmp_path / "staging"))
+
+    assert record.uri == _location(linked).as_uri()
+    assert _location(real).read_bytes() == DATA

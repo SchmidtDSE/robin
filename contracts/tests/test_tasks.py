@@ -24,6 +24,7 @@ from robin_contracts.tasks import (
     ModelOutputVersion,
     TaskRefusal,
     WorkerError,
+    output_root_problem,
     output_version_id,
     task_result_problem,
 )
@@ -528,3 +529,31 @@ def test_a_root_is_matched_in_the_form_storage_reads():
 
 def test_a_key_storage_does_not_decode_is_compared_as_written():
     assert artifact_problem(f"{OUTPUT_ROOT}/%2e%2e/x.parquet") is None
+
+
+@pytest.mark.parametrize(
+    "root", ["s3://bucket/runs/r/tasks/t/outputs", "s3://bucket/x/", "s3://bucket"]
+)
+def test_a_usable_root_has_no_problem(root):
+    assert output_root_problem(root, split_location=split_location) is None
+
+
+@pytest.mark.parametrize(
+    ("root", "fact"),
+    [
+        ("relative/outputs", "not a location"),
+        ("gs://bucket/outputs", "not a location"),
+        ("s3://bucket/a/../b", "'..'"),
+        ("s3://bucket/a//b", "''"),
+        ("s3://bucket/./b", "'.'"),
+    ],
+)
+def test_an_unusable_root_is_explained(root, fact):
+    reason = output_root_problem(root, split_location=split_location)
+    assert root in reason and fact in reason
+
+
+@pytest.mark.parametrize("root", ["s3://bucket/a/../b", "s3://bucket/a//b"])
+def test_no_artifact_is_under_a_root_with_a_problem(root):
+    # One rule decides both, so a root the worker accepts can hold artifacts.
+    assert artifact_problem(f"{root}/scores/x.parquet", root=root) is not None

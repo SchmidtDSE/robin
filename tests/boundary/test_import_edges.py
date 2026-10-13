@@ -176,19 +176,25 @@ def test_contracts_importing_inference_engine_is_rejected(tmp_path):
     assert violations, "robin_contracts must not import any other robin_* package"
 
 
-def test_worker_importing_all_siblings_is_accepted(tmp_path):
+def test_worker_importing_the_packages_it_runs_is_accepted(tmp_path):
     module = _write_module(
         tmp_path,
         "robin_worker.entry",
         [
             "import robin_contracts",
             "import robin_inference_engine",
-            "import robin_run_manager",
             "import robin_adapters",
+            "import robin_models",
         ],
     )
     violations = check_file(module, tmp_path)
-    assert not violations, f"robin_worker may import all four siblings: {violations}"
+    assert not violations, f"robin_worker may import these packages: {violations}"
+
+
+def test_worker_importing_run_manager_is_rejected(tmp_path):
+    module = _write_module(tmp_path, "robin_worker.entry", ["import robin_run_manager"])
+    violations = check_file(module, tmp_path)
+    assert violations, "robin_worker must not import robin_run_manager"
 
 
 def test_any_module_importing_soundhub_is_rejected(tmp_path):

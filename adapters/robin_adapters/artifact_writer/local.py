@@ -20,10 +20,13 @@ class LocalArtifactWriter:
     final name. A hard link fails if the name exists, so no reader sees a partial file
     and no file is replaced. Different bytes already there raise `FileExistsError`.
     The root must be on a file system that supports hard links.
+
+    A relative root is made absolute when the writer is built. Links in the root are
+    kept as written, so the record's URI names the root as given.
     """
 
     def __init__(self, root: Path) -> None:
-        self._root = root.resolve()
+        self._root = root.absolute()
 
     def create(
         self,

@@ -33,7 +33,8 @@ test-contracts = "pytest contracts/tests -v"
 test-engine = "pytest inference_engine/tests -v"
 test-adapters = "pytest adapters/tests -v"
 test-models = "pytest models/tests -v"
-test = "pytest contracts/tests inference_engine/tests adapters/tests models/tests tests/boundary -v"
+test-worker = "pytest worker/tests -v"
+test = "pytest contracts/tests inference_engine/tests adapters/tests models/tests worker/tests tests/boundary -v"
 
 [tasks.wheels]
 cmd = """

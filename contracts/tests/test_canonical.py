@@ -10,6 +10,7 @@ from robin_contracts.canonical import (
     CHECKSUM_CHUNK_BYTES,
     CanonicalizationError,
     canonical_json_bytes,
+    checksum_bytes,
     checksum_file,
     is_sha256_bytes,
     sha256_v1,
@@ -93,6 +94,15 @@ def test_an_empty_file_has_a_checksum(tmp_path):
     path.write_bytes(b"")
 
     assert checksum_file(path) == "sha256:" + hashlib.sha256(b"").hexdigest()
+
+
+def test_bytes_have_the_checksum_of_a_file_that_holds_them(tmp_path):
+    path = tmp_path / "work.json"
+    payload = b'{"task": 1}'
+    path.write_bytes(payload)
+
+    assert checksum_bytes(payload) == checksum_file(path)
+    assert is_sha256_bytes(checksum_bytes(payload))
 
 
 def test_a_file_checksum_reads_one_bounded_chunk_at_a_time(tmp_path, monkeypatch):

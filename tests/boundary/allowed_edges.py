@@ -6,14 +6,16 @@ checker helper defined there.
 
 FORBIDDEN_PREFIXES = ("soundhub_",)
 
-# Packages whose robin_* imports are a fixed, exhaustive allow-list. A
-# module whose top-level name matches none of these keys (currently only
-# robin_worker) has no robin_*-import constraint beyond FORBIDDEN_PREFIXES.
+# Packages whose robin_* imports are a fixed, exhaustive allow-list. Every
+# package except robin_adapters, which is governed below, has one.
 FIXED_ALLOWED_ROBIN_IMPORTS = {
     "robin_contracts": frozenset(),
     "robin_inference_engine": frozenset({"robin_contracts"}),
     "robin_run_manager": frozenset({"robin_contracts"}),
     "robin_models": frozenset({"robin_contracts"}),
+    "robin_worker": frozenset(
+        {"robin_contracts", "robin_inference_engine", "robin_adapters", "robin_models"}
+    ),
 }
 
 # robin_adapters.* is governed separately because its persistence subtree

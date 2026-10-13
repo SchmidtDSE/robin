@@ -113,11 +113,12 @@ _register(
     required=(
         "robin_contracts",
         "robin_inference_engine",
-        "robin_run_manager",
         "robin_worker",
         "robin_adapters",
+        "robin_adapters.location",
+        "robin_models",
     ),
-    runtimes=("pyarrow", "duckdb"),
+    runtimes=("pyarrow", "duckdb", "boto3", "ondio"),
 )
 _register(
     "adapters",
@@ -138,6 +139,7 @@ _register(
         "robin_adapters.artifact_writer.local",
         "robin_adapters.file_provider.ondio",
         "robin_adapters.artifact_writer.ondio",
+        "robin_adapters.location",
         "robin_contracts",
     ),
     runtimes=("boto3", "ondio"),
@@ -151,8 +153,10 @@ _register(
         "robin_run_manager",
         "robin_worker",
         "robin_adapters",
+        "robin_adapters.location",
+        "robin_models",
     ),
-    runtimes=("pyarrow", "duckdb"),
+    runtimes=("pyarrow", "duckdb", "boto3", "ondio"),
 )
 _register(
     "models",

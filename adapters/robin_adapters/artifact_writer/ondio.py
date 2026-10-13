@@ -8,8 +8,9 @@ import ondio
 from robin_contracts.canonical import checksum_file
 from robin_contracts.layout import artifact_path
 from robin_contracts.results import ArtifactContractId, ArtifactKind, ArtifactRecord
+from robin_contracts.tasks import output_root_problem
 
-_SCHEMES = ("s3",)
+from robin_adapters.location import LOCAL_STORE, split_location
 
 
 class OndioArtifactWriter:
@@ -68,18 +69,15 @@ class OndioArtifactWriter:
 
 
 def _checked_root(root: str) -> str:
-    """`root` without its trailing `/`, or `ValueError` if it is no `s3://` root.
+    """`root` as ondio reads it, with no trailing `/`, or `ValueError` if it is not usable.
 
-    ondio cuts a uri at `?` or `#`, so neither may appear. Percent-encoding is kept.
+    A usable root is a remote root that passes the result check's own root rule.
     """
-    stripped = root.removesuffix("/")
-    scheme, separator, rest = stripped.partition("://")
-    if (
-        not separator
-        or scheme not in _SCHEMES
-        or "?" in root
-        or "#" in root
-        or "" in rest.split("/")
+    place = split_location(root)
+    if place is None or place[0] == LOCAL_STORE or output_root_problem(
+        root, split_location=split_location
     ):
-        raise ValueError(f"{root!r} is not an s3:// root with a bucket")
-    return stripped
+        raise ValueError(f"{root!r} is not a usable s3:// root with a bucket")
+    store, path = place
+    path = path.removesuffix("/")
+    return f"{store}/{path}" if path else store

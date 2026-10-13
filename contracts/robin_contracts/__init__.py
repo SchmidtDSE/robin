@@ -65,6 +65,7 @@ from robin_contracts.tasks import (
     ModelOutputVersion,
     TaskRefusal,
     WorkerError,
+    output_root_problem,
     output_version_id,
     task_result_problem,
 )
@@ -139,6 +140,7 @@ __all__ = [
     "backbone_mismatch",
     "canonical_json_bytes",
     "noop",
+    "output_root_problem",
     "output_version_id",
     "partition",
     "read_card",
