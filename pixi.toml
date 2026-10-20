@@ -14,7 +14,8 @@ pip = "*"
 [feature.test.pypi-dependencies]
 robin-contracts = { path = "contracts", editable = true }
 robin-inference-engine = { path = "inference_engine", editable = true }
-robin-run-manager = { path = "run_manager", editable = true }
+robin-run-manager = { path = "run_manager", editable = true, extras = ["rds"] }
+robin-cli = { path = "cli", editable = true }
 robin-worker = { path = "worker", editable = true }
 robin-adapters = { path = "adapters", editable = true, extras = ["ondio"] }
 robin-bioacoustics = { path = "robin", editable = true }
@@ -23,18 +24,39 @@ scipy = ">=1.17.1,<2"
 soundfile = ">=0.13.1,<0.14"
 moto = { version = ">=5.2.3,<5.3", extras = ["s3"] }
 
+[feature.local.pypi-dependencies]
+robin-contracts = { path = "contracts", editable = true }
+robin-run-manager = { path = "run_manager", editable = true }
+robin-cli = { path = "cli", editable = true }
+
+# The robin command reads these. compose.yaml uses the same defaults, and a value
+# that is already set in the shell is kept.
+[feature.local.activation.env]
+ROBIN_PROFILE = "$PIXI_PROJECT_ROOT/config"
+ROBIN_ENV = "local"
+ROBIN_DB_PORT = "${ROBIN_DB_PORT:-55432}"
+ROBIN_DB_PASSWORD = "${ROBIN_DB_PASSWORD:-robin}"
+
+[feature.local.tasks]
+setup = { cmd = "docker compose up --detach --wait && robin db migrate", description = "Start the local database and bring its tables up to date. Safe to run again." }
+stop = { cmd = "docker compose stop", description = "Stop the local database. Its data stays." }
+reset = { cmd = "docker compose down --volumes", description = "Delete the local database. Run `pixi run setup` to start again." }
+
 [environments]
+default = ["local"]
 test = ["test"]
 
 [tasks]
 boundary = "pytest tests/boundary -v"
-imports = "python -c \"import robin_contracts, robin_inference_engine, robin_run_manager, robin_worker, robin_adapters, robin_models\""
+imports = "python -c \"import robin_contracts, robin_inference_engine, robin_run_manager, robin_cli, robin_worker, robin_adapters, robin_models\""
 test-contracts = "pytest contracts/tests -v"
 test-engine = "pytest inference_engine/tests -v"
 test-adapters = "pytest adapters/tests -v"
 test-models = "pytest models/tests -v"
 test-worker = "pytest worker/tests -v"
-test = "pytest contracts/tests inference_engine/tests adapters/tests models/tests worker/tests tests/boundary -v"
+test-run-manager = "pytest run_manager/tests -v"
+test-cli = "pytest cli/tests -v"
+test = { cmd = "pytest contracts/tests inference_engine/tests adapters/tests models/tests worker/tests run_manager/tests cli/tests tests/boundary -v", description = "All tests. The run manager and CLI tests start PostgreSQL in Docker, so Docker must be running." }
 
 [tasks.wheels]
 cmd = """
@@ -46,6 +68,8 @@ echo === build: robin_inference_engine === &&
 python -m build --outdir .wheelcheck/dist inference_engine &&
 echo === build: robin_run_manager === &&
 python -m build --outdir .wheelcheck/dist run_manager &&
+echo === build: robin_cli === &&
+python -m build --outdir .wheelcheck/dist cli &&
 echo === build: robin_worker === &&
 python -m build --outdir .wheelcheck/dist worker &&
 echo === build: robin_adapters === &&
@@ -57,6 +81,7 @@ python -m build --outdir .wheelcheck/dist models &&
 echo === seed: transitive deps === &&
 python -m pip download --dest .wheelcheck/dist "pydantic>=2.12,<3" &&
 python -m pip download --dest .wheelcheck/dist "pyyaml>=6.0.2,<7" &&
+python -m pip download --dest .wheelcheck/dist "psycopg[binary]>=3.2,<4" "psycopg-pool>=3.3,<4" &&
 python -m pip download --dest .wheelcheck/dist "numpy>=2.1,<3" &&
 python -m pip download --dest .wheelcheck/dist "pyarrow>=23.0.1,<24" &&
 python -m pip download --dest .wheelcheck/dist "duckdb>=1.5.5,<2" &&
@@ -68,6 +93,8 @@ echo "=== seed: robin-models[onnx-head] runtime ===" &&
 python -m pip download --dest .wheelcheck/dist --find-links .wheelcheck/dist ".wheelcheck/dist/robin_models-0.0.0-py3-none-any.whl[onnx-head]" &&
 echo "=== seed: robin-adapters[ondio] runtime ===" &&
 python -m pip download --dest .wheelcheck/dist --find-links .wheelcheck/dist ".wheelcheck/dist/robin_adapters-0.0.0-py3-none-any.whl[ondio]" &&
+echo "=== seed: robin-run-manager[rds] runtime ===" &&
+python -m pip download --dest .wheelcheck/dist --find-links .wheelcheck/dist ".wheelcheck/dist/robin_run_manager-0.0.0-py3-none-any.whl[rds]" &&
 echo === install: robin-contracts === &&
 python -m venv .wheelcheck/venv-robin_contracts &&
 .wheelcheck/venv-robin_contracts/bin/pip install --no-index --find-links .wheelcheck/dist robin-contracts &&
@@ -82,7 +109,12 @@ echo === install: robin-run-manager === &&
 python -m venv .wheelcheck/venv-robin_run_manager &&
 .wheelcheck/venv-robin_run_manager/bin/pip install --no-index --find-links .wheelcheck/dist robin-run-manager &&
 echo === import: robin_run_manager === &&
-.wheelcheck/venv-robin_run_manager/bin/python -I -c "import robin_run_manager; print('OK: imported robin_run_manager')" &&
+.wheelcheck/venv-robin_run_manager/bin/python -I -c "from importlib.resources import files; from robin_run_manager.migrations import packaged_migrations; assert (files('robin_run_manager') / 'schema' / 'README.md').is_file(), 'no schema folder in the wheel'; names = [m.name for m in packaged_migrations()]; print('OK: imported robin_run_manager with its schema folder and migrations', names)" &&
+echo === install: robin-cli === &&
+python -m venv .wheelcheck/venv-robin_cli &&
+.wheelcheck/venv-robin_cli/bin/pip install --no-index --find-links .wheelcheck/dist robin-cli &&
+echo === import: robin_cli === &&
+.wheelcheck/venv-robin_cli/bin/python -I -c "import robin_cli; print('OK: imported robin_cli')" &&
 echo === install: robin-worker === &&
 python -m venv .wheelcheck/venv-robin_worker &&
 .wheelcheck/venv-robin_worker/bin/pip install --no-index --find-links .wheelcheck/dist robin-worker &&
@@ -107,7 +139,7 @@ echo "=== import: robin_models.birdnet, its bundled card and registry, and no te
 .wheelcheck/venv-robin_models/bin/python -I -c "import hashlib, importlib.util, robin_models.birdnet; from importlib.resources import files; from robin_contracts.cards import model_ref, read_card; resources = files('robin_models.birdnet') / 'resources'; card = read_card(resources / 'card.yaml'); ref = model_ref(card); digest = hashlib.sha256((resources / 'taxa_registry.csv').read_bytes()).hexdigest(); assert ref.id == 'birdnet/v2p4', ref; assert digest == 'b758a58bee475d45b1fb04a8f42cbaa13c794d2dc782f0e86968e6c1515d4c2d', digest; assert card.taxa_registry_digest == 'sha256:' + digest, card.taxa_registry_digest; assert importlib.util.find_spec('tensorflow') is None, 'tensorflow is installed'; print('OK: imported robin_models.birdnet, read card', ref.id, 'and registry sha256', digest, 'without tensorflow')" &&
 echo "=== import: robin_models.perch, its bundled card and registry, and no tensorflow ===" &&
 .wheelcheck/venv-robin_models/bin/python -I -c "import hashlib, importlib.util, robin_models.perch; from importlib.resources import files; from robin_contracts.cards import model_ref, read_card; resources = files('robin_models.perch') / 'resources'; card = read_card(resources / 'card.yaml'); ref = model_ref(card); digest = hashlib.sha256((resources / 'taxa_registry.csv').read_bytes()).hexdigest(); assert ref.id == 'perch/v8', ref; assert digest == 'ca28f370cb5924af9966fee9fcd0a12d57632bba85a01a3f5908f9011ef99fd9', digest; assert card.taxa_registry_digest == 'sha256:' + digest, card.taxa_registry_digest; assert importlib.util.find_spec('tensorflow') is None, 'tensorflow is installed'; print('OK: imported robin_models.perch, read card', ref.id, 'and registry sha256', digest, 'without tensorflow')" &&
-rm -rf .wheelcheck/venv-robin_contracts .wheelcheck/venv-robin_inference_engine .wheelcheck/venv-robin_run_manager .wheelcheck/venv-robin_worker .wheelcheck/venv-robin_adapters .wheelcheck/venv-robin_bioacoustics .wheelcheck/venv-robin_models
+rm -rf .wheelcheck/venv-robin_contracts .wheelcheck/venv-robin_inference_engine .wheelcheck/venv-robin_run_manager .wheelcheck/venv-robin_cli .wheelcheck/venv-robin_worker .wheelcheck/venv-robin_adapters .wheelcheck/venv-robin_bioacoustics .wheelcheck/venv-robin_models
 """
 
 [tasks.install-shapes]

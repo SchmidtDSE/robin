@@ -14,10 +14,8 @@ from pathlib import Path
 import pytest
 
 from .allowed_edges import (
-    ADAPTERS_DEFAULT_ALLOWED,
-    ADAPTERS_PERSISTENCE_ALLOWED,
-    ADAPTERS_PERSISTENCE_PREFIX,
-    ADAPTERS_PREFIX,
+    COMPOSITION_ROOT,
+    COMPOSITION_ROOT_ALLOWED,
     FIXED_ALLOWED_ROBIN_IMPORTS,
     FORBIDDEN_PREFIXES,
 )
@@ -67,10 +65,8 @@ def _imported_module_names(file_path: Path) -> set[str]:
 
 def _allowed_robin_prefixes_for(module_name: str) -> set[str] | None:
     """robin_* prefixes module_name may import, or None if unconstrained."""
-    if _prefix_matches(module_name, ADAPTERS_PERSISTENCE_PREFIX):
-        return ADAPTERS_PERSISTENCE_ALLOWED
-    if _prefix_matches(module_name, ADAPTERS_PREFIX):
-        return ADAPTERS_DEFAULT_ALLOWED
+    if _prefix_matches(module_name, COMPOSITION_ROOT):
+        return COMPOSITION_ROOT_ALLOWED
     for owner, allowed in FIXED_ALLOWED_ROBIN_IMPORTS.items():
         if _prefix_matches(module_name, owner):
             return allowed
@@ -133,27 +129,44 @@ def _write_module(root: Path, dotted_name: str, import_lines: list[str]) -> Path
 # ---------------------------------------------------------------------------
 
 
-def test_adapters_storage_importing_run_manager_is_rejected(tmp_path):
-    module = _write_module(
-        tmp_path,
-        "robin_adapters.storage.s3",
-        ["from robin_run_manager.ports import persistence"],
-    )
+@pytest.mark.parametrize(
+    "module_name", ["robin_adapters.storage.s3", "robin_adapters.persistence.postgres"]
+)
+def test_adapters_importing_run_manager_is_rejected(tmp_path, module_name):
+    module = _write_module(tmp_path, module_name, ["from robin_run_manager import database"])
     violations = check_file(module, tmp_path)
-    assert violations, "robin_adapters.storage.s3 must not import robin_run_manager"
+    assert violations, f"{module_name} must not import robin_run_manager"
 
 
-def test_adapters_persistence_importing_run_manager_is_accepted(tmp_path):
+def test_the_composition_root_importing_adapters_is_accepted(tmp_path):
     module = _write_module(
         tmp_path,
-        "robin_adapters.persistence.postgres",
-        ["from robin_run_manager.ports import persistence"],
+        "robin_run_manager.compose",
+        ["from robin_adapters.location import split_location", "import robin_contracts"],
     )
     violations = check_file(module, tmp_path)
-    assert not violations, (
-        "robin_adapters.persistence.postgres may import robin_run_manager: "
-        f"{violations}"
+    assert not violations, f"robin_run_manager.compose may import adapters: {violations}"
+
+
+def test_other_run_manager_modules_importing_adapters_is_rejected(tmp_path):
+    module = _write_module(tmp_path, "robin_run_manager.database", ["import robin_adapters"])
+    violations = check_file(module, tmp_path)
+    assert violations, "only robin_run_manager.compose may import robin_adapters"
+
+
+def test_cli_importing_run_manager_is_accepted(tmp_path):
+    module = _write_module(
+        tmp_path, "robin_cli.main", ["from robin_run_manager.database import open_database"]
     )
+    violations = check_file(module, tmp_path)
+    assert not violations, f"robin_cli may import robin_run_manager: {violations}"
+
+
+@pytest.mark.parametrize("imported", ["robin_adapters", "robin_contracts", "robin_worker"])
+def test_cli_importing_other_packages_is_rejected(tmp_path, imported):
+    module = _write_module(tmp_path, "robin_cli.main", [f"import {imported}"])
+    violations = check_file(module, tmp_path)
+    assert violations, f"robin_cli must not import {imported}"
 
 
 def test_inference_engine_importing_run_manager_is_rejected(tmp_path):

@@ -6,22 +6,19 @@ checker helper defined there.
 
 FORBIDDEN_PREFIXES = ("soundhub_",)
 
-# Packages whose robin_* imports are a fixed, exhaustive allow-list. Every
-# package except robin_adapters, which is governed below, has one.
+# The robin_* imports that each package may make. The list is exhaustive.
 FIXED_ALLOWED_ROBIN_IMPORTS = {
     "robin_contracts": frozenset(),
     "robin_inference_engine": frozenset({"robin_contracts"}),
     "robin_run_manager": frozenset({"robin_contracts"}),
+    "robin_cli": frozenset({"robin_run_manager"}),
+    "robin_adapters": frozenset({"robin_contracts"}),
     "robin_models": frozenset({"robin_contracts"}),
     "robin_worker": frozenset(
         {"robin_contracts", "robin_inference_engine", "robin_adapters", "robin_models"}
     ),
 }
 
-# robin_adapters.* is governed separately because its persistence subtree
-# carries an additional allowance that the rest of the adapters tree does
-# not get.
-ADAPTERS_PREFIX = "robin_adapters"
-ADAPTERS_PERSISTENCE_PREFIX = "robin_adapters.persistence"
-ADAPTERS_DEFAULT_ALLOWED = frozenset({"robin_contracts"})
-ADAPTERS_PERSISTENCE_ALLOWED = frozenset({"robin_contracts", "robin_run_manager"})
+# The composition root is the one run-manager module that may import adapters.
+COMPOSITION_ROOT = "robin_run_manager.compose"
+COMPOSITION_ROOT_ALLOWED = frozenset({"robin_contracts", "robin_adapters"})

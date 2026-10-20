@@ -17,6 +17,48 @@ Platform adapters connect ROBIN to existing catalogs, storage, and access polici
 
 **Status:** ROBIN is being designed and extracted from the SoundHub model runner branch `mdc/refactor` by @gottacatchenall. Package boundaries and public interfaces are still evolving.
 
+## Local development
+
+You need [pixi](https://pixi.sh) and Docker. Docker must be running.
+
+### Run the `robin` command
+
+```sh
+pixi run setup       # start a local database and create its tables
+pixi shell           # open a shell where `robin` is ready to use
+robin --help
+robin whoami
+```
+
+You can also run one command without a shell: `pixi run robin whoami`.
+
+`pixi run setup` is safe to run again at any time. It starts the database if it is
+stopped and applies new migrations.
+
+| Command | What it does |
+|---|---|
+| `pixi run setup` | Start the database and make it ready to use. |
+| `pixi run stop` | Stop the database. The data stays. |
+| `pixi run reset` | Delete the database. Run `setup` to start again. |
+
+The setup uses these files:
+
+- `compose.yaml` has the local PostgreSQL database.
+- `config/local.yaml` is the profile that `robin` uses. It gets the port and the password
+  from environment variables that pixi sets.
+
+You use Robin with your own database login, and Robin uses your own credentials for
+other services. `robin whoami` shows the login.
+
+### Run the tests
+
+```sh
+pixi run -e test test
+```
+
+The run manager and CLI tests start their own temporary PostgreSQL container, so Docker
+must be running. They do not use the database from `pixi run setup`.
+
 ## License
 
 BSD-3-Clause. See [LICENSE](LICENSE).

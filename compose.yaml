@@ -1,0 +1,23 @@
+# Services for local development. Start them with `pixi run setup`.
+# To use other values, set ROBIN_DB_PORT or ROBIN_DB_PASSWORD in your shell before
+# `pixi run setup` and `pixi shell`. The robin command then uses the same values.
+name: robin
+
+services:
+  db:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_USER: robin
+      POSTGRES_PASSWORD: ${ROBIN_DB_PASSWORD:-robin}
+    ports:
+      - "127.0.0.1:${ROBIN_DB_PORT:-55432}:5432"
+    volumes:
+      - db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "--username", "robin", "--host", "127.0.0.1"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  db:

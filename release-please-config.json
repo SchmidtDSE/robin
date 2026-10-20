@@ -18,6 +18,12 @@
       "changelog-path": "CHANGELOG.md",
       "component": "runtime"
     },
+    "cli": {
+      "package-name": "robin-cli",
+      "release-type": "python",
+      "changelog-path": "CHANGELOG.md",
+      "component": "runtime"
+    },
     "worker": {
       "package-name": "robin-worker",
       "release-type": "python",

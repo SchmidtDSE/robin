@@ -46,6 +46,7 @@ _ROBIN_COMPONENTS = (
     "robin_contracts",
     "robin_inference_engine",
     "robin_run_manager",
+    "robin_cli",
     "robin_worker",
     "robin_adapters",
     "robin_models",
@@ -106,6 +107,19 @@ _register(
     "run-manager",
     install=("robin-run-manager",),
     required=("robin_run_manager", "robin_contracts"),
+    runtimes=("psycopg",),
+)
+_register(
+    "run-manager-rds",
+    install=("robin-run-manager[rds]",),
+    required=("robin_run_manager", "robin_contracts"),
+    runtimes=("psycopg", "boto3"),
+)
+_register(
+    "cli",
+    install=("robin-cli",),
+    required=("robin_cli", "robin_run_manager", "robin_contracts"),
+    runtimes=("psycopg",),
 )
 _register(
     "worker",
@@ -151,12 +165,13 @@ _register(
         "robin_contracts",
         "robin_inference_engine",
         "robin_run_manager",
+        "robin_cli",
         "robin_worker",
         "robin_adapters",
         "robin_adapters.location",
         "robin_models",
     ),
-    runtimes=("pyarrow", "duckdb", "boto3", "ondio"),
+    runtimes=("pyarrow", "duckdb", "boto3", "ondio", "psycopg"),
 )
 _register(
     "models",

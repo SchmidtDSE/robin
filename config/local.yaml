@@ -1,0 +1,8 @@
+# The profile for local development, with the database from compose.yaml.
+# `pixi shell` and `pixi run` select it and set the variables.
+database:
+  host: 127.0.0.1
+  port: ${ROBIN_DB_PORT}
+  dbname: robin
+  user: robin
+  password: ${ROBIN_DB_PASSWORD}
