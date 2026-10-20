@@ -5,8 +5,18 @@ build-backend = "hatchling.build"
 [project]
 name = "robin-run-manager"
 version = "0.0.0"
-description = "Run manager for ROBIN — runs, attempts, publication, promotion, and authorization."
+description = "The ROBIN control plane: operations, the database schema, and profiles."
 requires-python = ">=3.11"
 license = { text = "BSD-3-Clause" }
 authors = [{ name = "Schmidt Center for Data Science and the Environment" }]
-dependencies = ["robin-contracts >=0.0,<0.1"]
+dependencies = [
+  "robin-contracts >=0.0,<0.1",
+  "pydantic>=2.12,<3",
+  "pyyaml>=6.0.2,<7",
+  "psycopg[binary]>=3.2,<4",
+  "psycopg-pool>=3.3,<4",
+]
+
+[project.optional-dependencies]
+# For `auth: rds_iam`: boto3 makes the login token from the user's AWS credentials.
+rds = ["boto3>=1.35,<2"]
