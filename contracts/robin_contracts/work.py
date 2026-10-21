@@ -9,7 +9,7 @@ import math
 from collections.abc import Mapping
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, BaseModel, Field, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, Field, model_validator
 
 from robin_contracts.canonical import is_sha256_bytes, is_sha256_v1, sha256_v1
 from robin_contracts.cards import HeadCard, ModelCard
@@ -53,9 +53,27 @@ def _finite_values(value: Mapping[str, JsonScalar]) -> Mapping[str, JsonScalar]:
     return value
 
 
+def _one_per_kind_and_satisfiable(
+    outputs: tuple[OutputRequest, ...],
+) -> tuple[OutputRequest, ...]:
+    if not outputs:
+        raise ValueError("at least one output must be requested")
+    kinds = [output.kind for output in outputs]
+    if len(set(kinds)) != len(kinds):
+        raise ValueError("each output kind can be requested at most once")
+    if "detections" in kinds and "scores" not in kinds:
+        raise ValueError("a detections request needs a scores request beside it")
+    return outputs
+
+
 BytesDigest = Annotated[str, AfterValidator(_bytes_digest)]
 CanonicalDigest = Annotated[str, AfterValidator(_canonical_digest)]
 NonEmptyText = Annotated[str, AfterValidator(_non_empty)]
+# Values by name, each with a canonical encoding: settings and resources.
+FiniteScalarMap = Annotated[Mapping[str, JsonScalar], AfterValidator(_finite_values)]
+OutputRequests = Annotated[
+    tuple[OutputRequest, ...], AfterValidator(_one_per_kind_and_satisfiable)
+]
 
 
 # The role of the pinned file that holds the label registry.
@@ -117,14 +135,7 @@ class EmbeddingArtifactInput(BaseModel, frozen=True, extra="forbid"):
     contract_id: EmbeddingsContractId
     backbone: ModelCard
     # The settings the backbone's work ran with.
-    backbone_settings: Mapping[str, JsonScalar] = {}
-
-    @field_validator("backbone_settings")
-    @classmethod
-    def _values_have_a_canonical_encoding(
-        cls, value: Mapping[str, JsonScalar]
-    ) -> Mapping[str, JsonScalar]:
-        return _finite_values(value)
+    backbone_settings: FiniteScalarMap = {}
 
 
 class InferenceWork(BaseModel, frozen=True, extra="forbid"):
@@ -139,16 +150,9 @@ class InferenceWork(BaseModel, frozen=True, extra="forbid"):
     recordings: tuple[RecordingRef, ...]
     model: PinnedModel
     input: Annotated[AudioInput | EmbeddingArtifactInput, Field(discriminator="kind")]
-    settings: Mapping[str, JsonScalar]
-    resources: Mapping[str, JsonScalar]
-    outputs: tuple[OutputRequest, ...]
-
-    @field_validator("settings", "resources")
-    @classmethod
-    def _values_have_a_canonical_encoding(
-        cls, value: Mapping[str, JsonScalar]
-    ) -> Mapping[str, JsonScalar]:
-        return _finite_values(value)
+    settings: FiniteScalarMap
+    resources: FiniteScalarMap
+    outputs: OutputRequests
 
     @model_validator(mode="after")
     def _recordings_are_identified_once_each(self) -> "InferenceWork":
@@ -175,17 +179,6 @@ class InferenceWork(BaseModel, frozen=True, extra="forbid"):
                     f"recording ({recording.namespace!r}, {recording.value!r}) names an "
                     f"embeddings file, but the work runs over audio"
                 )
-        return self
-
-    @model_validator(mode="after")
-    def _outputs_are_one_per_kind_and_satisfiable(self) -> "InferenceWork":
-        if not self.outputs:
-            raise ValueError("a work must request at least one output")
-        kinds = [output.kind for output in self.outputs]
-        if len(set(kinds)) != len(kinds):
-            raise ValueError("a work requests each output kind at most once")
-        if "detections" in kinds and "scores" not in kinds:
-            raise ValueError("a detections request needs a scores request beside it")
         return self
 
 

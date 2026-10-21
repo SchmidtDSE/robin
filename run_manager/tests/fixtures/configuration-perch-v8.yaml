@@ -1,0 +1,13 @@
+# A backbone configuration that saves embeddings for heads.
+model: perch/v8
+input:
+  kind: audio
+settings:
+  window_overlap: 2.5
+outputs:
+  - kind: scores
+    contract_id: robin.scores.parquet/1
+    retention: thresholded
+    min_score: 0.1
+  - kind: embeddings
+    contract_id: robin.embeddings.parquet/1

@@ -195,3 +195,11 @@ def test_task_reexports_are_importable():
     assert callable(output_root_problem)
     assert callable(output_version_id)
     assert callable(task_result_problem)
+
+
+def test_request_check_reexports_are_importable():
+    from robin_contracts import REQUEST_PROBLEM_CODES, RequestProblem, check_request_for_problem
+
+    assert REQUEST_PROBLEM_CODES
+    assert RequestProblem is not None
+    assert callable(check_request_for_problem)

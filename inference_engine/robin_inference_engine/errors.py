@@ -1,5 +1,21 @@
 """Typed engine failures. A caller decides what to do from the code, not the message."""
 
+from robin_contracts.request_checks import (
+    EMBEDDING_DTYPE_DISAGREES,
+    EMBEDDINGS_NOT_EMITTED,
+    FULL_RETENTION_REDUCED,
+    HEAD_BACKBONE_DISAGREES,
+    HEAD_EMITS_NO_EMBEDDINGS,
+    INPUT_KIND_DISAGREES_WITH_CARD,
+    MIN_SCORE_OUT_OF_DOMAIN,
+    REGISTRY_DISAGREES_WITH_CARD,
+    REGISTRY_REQUIRED,
+    SCORE_FLOOR_BELOW_MODEL_FLOOR,
+    SCORES_NOT_EMITTED,
+    SETTING_TYPE_MISMATCH,
+    SETTING_UNDECLARED,
+    WINDOW_OVERLAP_INVALID,
+)
 from robin_contracts.work import RecordingRef
 
 # ---------------------------------------------------------------------------
@@ -47,21 +63,9 @@ ACCEPT_WINDOW_FAILURES = (
 
 VALIDATE_REQUEST = "validate_request"
 
-SCORES_NOT_EMITTED = "scores_not_emitted"
-EMBEDDINGS_NOT_EMITTED = "embeddings_not_emitted"
-FULL_RETENTION_REDUCED = "full_retention_reduced"
-SCORE_FLOOR_BELOW_MODEL_FLOOR = "score_floor_below_model_floor"
-MIN_SCORE_OUT_OF_DOMAIN = "min_score_out_of_domain"
-EMBEDDING_DTYPE_DISAGREES = "embedding_dtype_disagrees"
-REGISTRY_REQUIRED = "registry_required"
+# The checks that need only in-memory values are shared with the control plane, with their
+# codes.
 REGISTRY_FINGERPRINT_MISMATCH = "registry_fingerprint_mismatch"
-REGISTRY_DISAGREES_WITH_CARD = "registry_disagrees_with_card"
-SETTING_UNDECLARED = "setting_undeclared"
-SETTING_TYPE_MISMATCH = "setting_type_mismatch"
-WINDOW_OVERLAP_INVALID = "window_overlap_invalid"
-INPUT_KIND_DISAGREES_WITH_CARD = "input_kind_disagrees_with_card"
-HEAD_BACKBONE_DISAGREES = "head_backbone_disagrees"
-HEAD_EMITS_NO_EMBEDDINGS = "head_emits_no_embeddings"
 RESOURCE_INVALID = "resource_invalid"
 
 VALIDATE_REQUEST_FAILURES = (

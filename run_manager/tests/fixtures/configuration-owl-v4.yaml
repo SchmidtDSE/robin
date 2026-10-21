@@ -1,0 +1,9 @@
+model: owl/v4
+input:
+  kind: audio
+settings:
+  window_overlap: 0.0
+outputs:
+  - kind: scores
+    contract_id: robin.scores.parquet/1
+    retention: full

@@ -306,12 +306,11 @@ class _UniqueKeyLoader(yaml.SafeLoader):
         return super().construct_mapping(node, deep=deep)
 
 
-def read_card(path: Path) -> ModelCard | HeadCard:
-    """Read a card from a YAML file whose fields are the card's fields.
+def read_yaml_mapping(path: Path, what: str) -> dict:
+    """Read a YAML file that holds one mapping, such as a card. `what` names it in messages.
 
-    Nothing is renamed, defaulted or resolved against the file's folder. A value YAML
-    reads as a number or a bool where the card wants text is refused, not converted.
-    Raises ValueError, naming the path, for a malformed or invalid card; file errors
+    A repeated key is refused, not replaced by the last one. Raises ValueError, naming
+    the path, for text that is not UTF-8, is not YAML, or is not a mapping; file errors
     are raised as they are.
     """
     try:
@@ -321,11 +320,23 @@ def read_card(path: Path) -> ModelCard | HeadCard:
     try:
         loaded = yaml.load(text, Loader=_UniqueKeyLoader)
     except yaml.YAMLError as error:
-        raise ValueError(f"{path} is not a readable card: {error}") from error
+        raise ValueError(f"{path} is not a readable {what}: {error}") from error
     if not isinstance(loaded, dict):
         raise ValueError(
-            f"{path} must hold a mapping of card fields, got {type(loaded).__name__}"
+            f"{path} must hold a mapping of {what} fields, got {type(loaded).__name__}"
         )
+    return loaded
+
+
+def read_card(path: Path) -> ModelCard | HeadCard:
+    """Read a card from a YAML file whose fields are the card's fields.
+
+    Nothing is renamed, defaulted or resolved against the file's folder. A value YAML
+    reads as a number or a bool where the card wants text is refused, not converted.
+    Raises ValueError, naming the path, for a malformed or invalid card; file errors
+    are raised as they are.
+    """
+    loaded = read_yaml_mapping(path, "card")
     try:
         return _ANY_CARD.validate_python(loaded)
     except ValidationError as error:

@@ -234,6 +234,8 @@ def test_with_json_the_pool_writes_nothing_else_to_stderr(environ, tmp_path, dat
 
 
 def test_json_can_come_after_the_command(robin):
+    # Migrate first, so that both runs below apply nothing.
+    robin("db", "migrate")
     after = robin("db", "migrate", "--json")
     before = robin("--json", "db", "migrate")
 

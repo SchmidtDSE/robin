@@ -26,6 +26,7 @@ from pydantic import (
 )
 
 from robin_run_manager.errors import INVALID_PROFILE, Refused
+from robin_run_manager.operator_files import field_problems
 
 SHARED_FILE = "config.yaml"
 _ENVIRONMENT = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
@@ -149,7 +150,7 @@ def load_profile(directory: Path, environment: str, environ: Mapping[str, str]) 
     try:
         return Profile.model_validate(expanded)
     except ValidationError as error:
-        problems = _problems(error)
+        problems = field_problems(error, "profile")
     # Raised outside the handler, so that the refusal has no link to the pydantic error.
     raise Refused(
         INVALID_PROFILE,
@@ -241,14 +242,3 @@ def _variable(name: str, environ: Mapping[str, str], where: str) -> str:
             details={"field": where, "variable": name},
         )
     return environ[name]
-
-
-def _problems(error: ValidationError) -> list[dict[str, str]]:
-    # Without the input values, so that a secret from an environment variable is never shown.
-    return [
-        {
-            "field": ".".join(str(part) for part in problem["loc"]) or "profile",
-            "message": problem["msg"],
-        }
-        for problem in error.errors(include_url=False, include_context=False, include_input=False)
-    ]

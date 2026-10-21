@@ -23,6 +23,7 @@ from robin_run_manager.compose import Services, compose
 from robin_run_manager.database import current_login
 from robin_run_manager.errors import NotConfigured, OperationError, OutcomeUncertain, Unavailable
 from robin_run_manager.migrations import require_current_schema
+from robin_run_manager.pages import DEFAULT_LIMIT, MAX_LIMIT
 from robin_run_manager.profile import Profile, ProfileNotFound, load_profile
 
 from robin_cli import commands
@@ -147,7 +148,39 @@ def _parser() -> argparse.ArgumentParser:
         nouns, "whoami", commands.whoami,
         "show your database login and the selected profile", needs_schema=False,
     )
+
+    model_commands = _group(nouns, "models", "registered models")
+    register = _command(
+        model_commands, "register", commands.register_model,
+        "register a model from a file that holds its card and pinned files",
+    )
+    register.add_argument("file", metavar="FILE")
+    _page_options(_command(model_commands, "list", commands.list_models, "list models"))
+    _command(model_commands, "show", commands.show_model, "show one model").add_argument(
+        "id", metavar="ID", help="the model's name/version, for example owl/v4"
+    )
+
+    preset_commands = _group(nouns, "presets", "named configurations")
+    create = _command(
+        preset_commands, "create", commands.create_preset, "name a configuration"
+    )
+    create.add_argument("name", metavar="NAME")
+    create.add_argument("--configuration", metavar="FILE", required=True)
+    _page_options(_command(preset_commands, "list", commands.list_presets, "list presets"))
+    _command(preset_commands, "show", commands.show_preset, "show one preset").add_argument(
+        "name", metavar="NAME"
+    )
     return parser
+
+
+def _page_options(command) -> None:
+    command.add_argument(
+        "--limit", metavar="N", type=int, default=DEFAULT_LIMIT,
+        help=f"items on each page, 1 to {MAX_LIMIT} (default {DEFAULT_LIMIT})",
+    )
+    where = command.add_mutually_exclusive_group()
+    where.add_argument("--cursor", metavar="C", help="start after the page that gave this cursor")
+    where.add_argument("--all", action="store_true", help="follow every page")
 
 
 def _group(nouns, name: str, help: str):

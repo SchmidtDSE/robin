@@ -165,6 +165,12 @@ def test_refusal_reasons_keep_their_published_values():
         "schema_not_current",
         "migration_changed",
         "migration_unknown",
+        "model_conflict",
+        "preset_conflict",
+        "unknown_model",
+        "unknown_configuration",
+        "invalid_cursor",
+        "invalid_configuration",
     )
     assert declared == set(errors.REFUSAL_REASONS)
 

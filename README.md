@@ -50,6 +50,20 @@ The setup uses these files:
 You use Robin with your own database login, and Robin uses your own credentials for
 other services. `robin whoami` shows the login.
 
+| `robin` command | What it does |
+|---|---|
+| `robin whoami` | Show your database login and the selected profile. |
+| `robin db migrate` | Apply the migrations that the database does not have. |
+| `robin models register FILE` | Register a model from a file with its card and pinned files. |
+| `robin models list` | List the registered models. |
+| `robin models show ID` | Show one model, for example `owl/v4`. |
+| `robin presets create NAME --configuration FILE` | Give a configuration a name. |
+| `robin presets list` | List the presets. |
+| `robin presets show NAME` | Show one preset and its configuration. |
+
+Each list command takes `--limit N`, and `--cursor C` or `--all`. Add `--json` to any
+command for JSON output.
+
 ### Run the tests
 
 ```sh

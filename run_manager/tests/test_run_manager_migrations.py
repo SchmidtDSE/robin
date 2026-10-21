@@ -37,8 +37,7 @@ def applied_versions(database):
 def one_packaged_migration(monkeypatch, tmp_path):
     """Use one test migration as this release's migrations.
 
-    The schema folder may have no migration. Then the schema checks below would
-    compare two empty lists and prove nothing.
+    These tests check the migration rules, not the real schema.
     """
     packaged = folder_with(
         tmp_path / "packaged", {"0001_first.sql": "CREATE TABLE first (x integer);"}
@@ -46,9 +45,11 @@ def one_packaged_migration(monkeypatch, tmp_path):
     monkeypatch.setattr(migrations, "packaged_migrations", lambda: packaged)
 
 
-def test_the_schema_folder_has_no_migration_yet():
-    # The first tables bring the first migration. That change replaces this test.
-    assert load_migrations(files("robin_run_manager") / "schema") == ()
+def test_the_schema_folder_holds_the_models_and_presets_migration():
+    # Read directly: the fixture above replaces packaged_migrations.
+    found = load_migrations(files("robin_run_manager") / "schema")
+
+    assert [migration.name for migration in found] == ["0001_models_and_presets"]
 
 
 def test_migrate_applies_every_migration_to_an_empty_database(database):

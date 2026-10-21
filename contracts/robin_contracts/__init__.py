@@ -38,6 +38,11 @@ from robin_contracts.protocols import (
 )
 from robin_contracts.records import ClassScore, WindowOutput
 from robin_contracts.registry import RegistryEntry, TaxonRegistry
+from robin_contracts.request_checks import (
+    REQUEST_PROBLEM_CODES,
+    RequestProblem,
+    check_request_for_problem,
+)
 from robin_contracts.results import (
     RECORDING_FAILURE_STAGES,
     WORK_FAILURE_STAGES,
@@ -84,6 +89,7 @@ from robin_contracts.work import (
 
 __all__ = [
     "RECORDING_FAILURE_STAGES",
+    "REQUEST_PROBLEM_CODES",
     "WORK_FAILURE_STAGES",
     "ArtifactRecord",
     "AudioClip",
@@ -124,6 +130,7 @@ __all__ = [
     "RecordingFailed",
     "RecordingRef",
     "RegistryEntry",
+    "RequestProblem",
     "Resampling",
     "RunnerResampled",
     "ScoreRetention",
@@ -139,6 +146,7 @@ __all__ = [
     "artifact_path",
     "backbone_mismatch",
     "canonical_json_bytes",
+    "check_request_for_problem",
     "noop",
     "output_root_problem",
     "output_version_id",

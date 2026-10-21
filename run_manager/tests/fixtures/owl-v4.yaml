@@ -1,0 +1,32 @@
+# A model registration: the card's fields, and the pinned files by role.
+card:
+  model_name: owl
+  model_version: v4
+  runtime: tf-legacy-keras
+  window_duration: 12.0
+  sample_rate: 8000
+  spectrogram_shape: [257, 1000]
+  min_detection_threshold: 0.0
+  score_domain: sigmoid
+  taxa_registry_digest: sha256:bb172a45a873cada2a0bd5a2846f12053b1cf249eb58eab5eacdbb0efa6b19ed
+  audio:
+    downmix: first
+    resampler:
+      by: runner
+      algorithm: soxr_hq
+    pad: drop
+  backend: h5-fp32
+  inference_params:
+    - name: window_overlap
+      type: float
+  dtype: float32
+  can_emit_embeddings: false
+files:
+  weights:
+    uri: s3://robin-models/owl/v4/weights.h5
+    digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+    size_bytes: 1048576
+  taxa_registry:
+    uri: s3://robin-models/owl/v4/taxa_registry.csv
+    digest: sha256:bb172a45a873cada2a0bd5a2846f12053b1cf249eb58eab5eacdbb0efa6b19ed
+    size_bytes: 2048

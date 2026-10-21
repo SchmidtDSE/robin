@@ -1,7 +1,7 @@
 """The work a caller hands the engine, its scientific digest, and batch partitioning."""
 
 import pytest
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from robin_contracts.cards import AudioGeometry, HeadCard, ModelCard, ModelRef, RunnerResampled
 from robin_contracts.output_contracts import DetectionsRequest, ScoresRequest, ThresholdPolicy
@@ -9,8 +9,10 @@ from robin_contracts.work import (
     REGISTRY_ROLE,
     AudioInput,
     EmbeddingArtifactInput,
+    FiniteScalarMap,
     InferenceWork,
     InputArtifact,
+    OutputRequests,
     PinnedFile,
     PinnedModel,
     RecordingRef,
@@ -170,6 +172,30 @@ def test_detections_without_scores_is_refused():
         build_work(outputs=(detections,))
 
     assert len(build_work(outputs=(build_scores(), detections)).outputs) == 2
+
+
+DETECTIONS = DetectionsRequest(
+    contract_id="robin.detections.parquet/1", policy=ThresholdPolicy(min_score=0.1)
+)
+
+OUTPUT_LIST_PROBLEMS = {
+    "at least one output must be requested": (),
+    "each output kind can be requested at most once": (build_scores(), build_scores()),
+    "a detections request needs a scores request beside it": (DETECTIONS,),
+}
+
+
+@pytest.mark.parametrize("message", sorted(OUTPUT_LIST_PROBLEMS))
+def test_an_output_list_problem_names_no_document(message):
+    # The same type checks the outputs of a work and of a configuration.
+    with pytest.raises(ValidationError, match=message):
+        TypeAdapter(OutputRequests).validate_python(OUTPUT_LIST_PROBLEMS[message])
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_a_finite_scalar_map_refuses_a_non_finite_float(value):
+    with pytest.raises(ValidationError, match="no canonical encoding"):
+        TypeAdapter(FiniteScalarMap).validate_python({"a": value})
 
 
 @pytest.mark.parametrize("value", [{"nested": 1}, [1, 2]])

@@ -139,7 +139,10 @@ def test_a_sagemaker_launcher_needs_s3_storage(tmp_path, storage):
         sections["storage"] = storage
     write(tmp_path, "dev.yaml", sections)
 
-    assert "s3" in invalid(tmp_path).message
+    refusal = invalid(tmp_path)
+    assert "s3" in refusal.message
+    # A problem with the whole profile names the profile, not a field.
+    assert [problem["field"] for problem in refusal.details["problems"]] == ["profile"]
 
 
 def test_a_pool_minimum_above_its_maximum_is_refused(tmp_path):

@@ -1,0 +1,22 @@
+# A head registration: a small model that reads the embeddings perch/v8 saves.
+card:
+  model_name: songbird-head
+  model_version: v1
+  runtime: onnx
+  backbone:
+    name: perch
+    version: v8
+    digest: sha256:v1:8de729b912983ba2beb516230a0270ed5f5e949a4410e35700956023f12b91eb
+  embedding_dim: 1280
+  min_detection_threshold: 0.0
+  score_domain: sigmoid
+  taxa_registry_digest: sha256:3333333333333333333333333333333333333333333333333333333333333333
+files:
+  weights:
+    uri: s3://robin-models/songbird-head/v1/head.onnx
+    digest: sha256:4444444444444444444444444444444444444444444444444444444444444444
+    size_bytes: 65536
+  taxa_registry:
+    uri: s3://robin-models/songbird-head/v1/taxa_registry.csv
+    digest: sha256:3333333333333333333333333333333333333333333333333333333333333333
+    size_bytes: 1024

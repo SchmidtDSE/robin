@@ -13,6 +13,12 @@ SERVER_NOT_VERIFIED = "server_not_verified"
 SCHEMA_NOT_CURRENT = "schema_not_current"
 MIGRATION_CHANGED = "migration_changed"
 MIGRATION_UNKNOWN = "migration_unknown"
+MODEL_CONFLICT = "model_conflict"
+PRESET_CONFLICT = "preset_conflict"
+UNKNOWN_MODEL = "unknown_model"
+UNKNOWN_CONFIGURATION = "unknown_configuration"
+INVALID_CURSOR = "invalid_cursor"
+INVALID_CONFIGURATION = "invalid_configuration"
 
 REFUSAL_REASONS = (
     NOT_AUTHENTICATED,
@@ -24,6 +30,12 @@ REFUSAL_REASONS = (
     SCHEMA_NOT_CURRENT,
     MIGRATION_CHANGED,
     MIGRATION_UNKNOWN,
+    MODEL_CONFLICT,
+    PRESET_CONFLICT,
+    UNKNOWN_MODEL,
+    UNKNOWN_CONFIGURATION,
+    INVALID_CURSOR,
+    INVALID_CONFIGURATION,
 )
 
 

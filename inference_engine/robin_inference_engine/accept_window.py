@@ -10,14 +10,13 @@ from robin_contracts.cards import HeadCard, ModelCard
 from robin_contracts.output_contracts import ScoresRequest
 from robin_contracts.records import ClassScore, WindowOutput
 from robin_contracts.registry import TaxonRegistry
+from robin_contracts.request_checks import SCORE_RANGE
 from robin_contracts.specs import WindowGeometry
 from robin_contracts.work import RecordingRef
 from robin_inference_engine import errors
 
 # Relative to the hop or window. Covers binary rounding in i * hop, nothing more.
 GRID_ALLOWANCE = 1e-9
-
-SCORE_RANGE = (0.0, 1.0)
 
 
 @dataclass(frozen=True, slots=True)

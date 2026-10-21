@@ -1,0 +1,33 @@
+# A backbone registration: a model that can save embeddings for a head.
+card:
+  model_name: perch
+  model_version: v8
+  runtime: tensorflow
+  window_duration: 5.0
+  sample_rate: 32000
+  min_detection_threshold: 0.0
+  score_domain: sigmoid
+  taxa_registry_digest: sha256:ca28f370cb5924af9966fee9fcd0a12d57632bba85a01a3f5908f9011ef99fd9
+  audio:
+    downmix: mean
+    resampler:
+      by: runner
+      algorithm: scipy_polyphase_with_context
+    pad: centre_crop_end_pad
+  backend: pb-fp32
+  inference_params:
+    - name: window_overlap
+      type: float
+  dtype: float32
+  can_emit_embeddings: true
+  embedding_dim: 1280
+  embedding_dtype: float32
+files:
+  weights:
+    uri: s3://robin-models/perch/v8/saved_model.tar
+    digest: sha256:2222222222222222222222222222222222222222222222222222222222222222
+    size_bytes: 4194304
+  taxa_registry:
+    uri: s3://robin-models/perch/v8/taxa_registry.csv
+    digest: sha256:ca28f370cb5924af9966fee9fcd0a12d57632bba85a01a3f5908f9011ef99fd9
+    size_bytes: 4096
