@@ -17,7 +17,10 @@ def read_yaml_or_refuse(path: Path, what: str) -> dict[str, Any]:
     """
     try:
         return read_yaml_mapping(path, what)
-    except (OSError, ValueError) as error:
+    except OSError as error:
+        # strerror leaves out the errno and the path. The message gives the path.
+        problem = f"{error.strerror}." if error.strerror else str(error)
+    except ValueError as error:
         problem = str(error)
     raise Refused(
         INVALID_REQUEST,

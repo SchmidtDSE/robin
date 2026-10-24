@@ -131,6 +131,32 @@ def test_runs_show_prints_observed_provenance_as_json(robin, owl_preset):
     assert provenance["recording_count"] == 3
 
 
+def test_runs_show_prints_each_value_as_its_json(robin, owl_preset):
+    run_id = submit(robin, "--recordings", str(RECORDINGS), "--preset", "owl")["run_id"]
+    data = json.loads(robin("--json", "runs", "show", run_id).stdout)
+
+    # A line that starts with "name: " starts that field. A JSON value can have more
+    # lines; each of them belongs to the last field.
+    shown = {}
+    name = None
+    for line in robin("runs", "show", run_id).stdout.splitlines():
+        head, separator, rest = line.partition(": ")
+        if separator and head in data and head not in shown:
+            name = head
+            shown[name] = [rest]
+        else:
+            shown[name].append(line)
+
+    assert data["cancelled_at"] is None
+    assert set(shown) == set(data)
+    for name, lines in shown.items():
+        text = "\n".join(lines)
+        if isinstance(data[name], str):
+            assert text == data[name], name
+        else:
+            assert json.loads(text) == data[name], name
+
+
 def test_runs_show_of_an_unknown_run_exits_1(robin, owl_preset):
     ran = robin("--json", "runs", "show", "not-a-run")
 
@@ -138,13 +164,14 @@ def test_runs_show_of_an_unknown_run_exits_1(robin, owl_preset):
     assert ran.error()["reason"] == "not_found"
 
 
-def test_runs_recordings_with_an_unknown_state_exits_1(robin, owl_preset):
+@pytest.mark.parametrize("option", [["--state", "done"], ["--skip-reason", "nope"]])
+def test_runs_recordings_with_an_unknown_filter_exits_2(robin, owl_preset, option):
     run_id = submit(robin, "--recordings", str(RECORDINGS), "--preset", "owl")["run_id"]
 
-    ran = robin("--json", "runs", "recordings", run_id, "--state", "done")
+    ran = robin("--json", "runs", "recordings", run_id, *option)
 
-    assert ran.code == 1
-    assert ran.error()["reason"] == "invalid_request"
+    assert ran.code == 2
+    assert ran.error()["reason"] == "invalid_arguments"
 
 
 def test_runs_recordings_prints_each_recording(robin, owl_preset):

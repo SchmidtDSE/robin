@@ -1,4 +1,4 @@
-"""What each `robin` command runs, and how its result is printed.
+"""What each `robin` command runs, and the result that it gives.
 
 Each handler takes a `Context` and the parsed arguments, and returns an `Output`.
 """
@@ -16,17 +16,28 @@ from robin_run_manager.configuration import read_configuration
 from robin_run_manager.pages import Page
 from robin_run_manager.recording_inputs import read_recordings_file, read_uris_file
 
+MODEL_COLUMNS = ("MODEL", "KIND", "CARD_DIGEST")
+PRESET_COLUMNS = ("NAME", "MODEL", "CONFIGURATION_DIGEST")
+RUN_COLUMNS = ("RUN", "STATUS", "SUBMITTED_BY", "CREATED_AT", "RECORDINGS")
+RECORDING_COLUMNS = ("NAMESPACE", "VALUE", "STATE", "SKIP_REASON")
+TASK_COLUMNS = ("TASK", "STATE", "RECORDINGS")
+
 
 @dataclass(frozen=True)
 class Output:
-    """A command's result. With --json, `data` is printed; otherwise `text`.
+    """A command's result. With --json, `data` is printed.
 
+    Without --json, a list command sets `columns` and `rows`, a show command sets
+    `fields`, the `(name, value)` pairs to print, and other commands set `text`.
     `notice` is an extra message for people. It goes to stderr, and only without --json.
     """
 
     data: Any
-    text: str
+    text: str = ""
     notice: str | None = None
+    columns: tuple[str, ...] = ()
+    rows: tuple[tuple[str, ...], ...] = ()
+    fields: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -57,7 +68,7 @@ def whoami(context: Context, arguments) -> Output:
         "profile": str(context.profile),
         "environment": context.environment,
     }
-    return Output(data=data, text="\n".join(f"{name}: {value}" for name, value in data.items()))
+    return Output(data=data, fields=tuple(data.items()))
 
 
 def register_model(context: Context, arguments) -> Output:
@@ -82,7 +93,8 @@ def list_models(context: Context, arguments) -> Output:
     return _list(
         partial(models.list_models, context.services.database),
         arguments,
-        lambda item: f"{item['model_id']}  {item['kind']}  {item['card_digest']}",
+        MODEL_COLUMNS,
+        lambda item: (item["model_id"], item["kind"], item["card_digest"]),
     )
 
 
@@ -111,9 +123,11 @@ def list_presets(context: Context, arguments) -> Output:
     return _list(
         partial(presets.list_presets, context.services.database),
         arguments,
+        PRESET_COLUMNS,
         lambda item: (
-            f"{item['name']}  {item['model_name']}/{item['model_version']}  "
-            f"{item['configuration_digest']}"
+            item["name"],
+            f"{item['model_name']}/{item['model_version']}",
+            item["configuration_digest"],
         ),
     )
 
@@ -164,9 +178,13 @@ def list_runs(context: Context, arguments) -> Output:
     return _list(
         read,
         arguments,
+        RUN_COLUMNS,
         lambda item: (
-            f"{item['run_id']}  {item['status']}  {item['submitted_by']}  "
-            f"{item['created_at']}  {item['recording_count']}"
+            item["run_id"],
+            item["status"],
+            item["submitted_by"],
+            item["created_at"],
+            str(item["recording_count"]),
         ),
     )
 
@@ -186,9 +204,9 @@ def list_run_recordings(context: Context, arguments) -> Output:
     return _list(
         read,
         arguments,
+        RECORDING_COLUMNS,
         lambda item: (
-            f"{item['namespace']}  {item['value']}  {item['state'] or '-'}  "
-            f"{item['skip_reason'] or '-'}"
+            item["namespace"], item["value"], item["state"] or "-", item["skip_reason"] or "-"
         ),
     )
 
@@ -197,11 +215,17 @@ def list_run_tasks(context: Context, arguments) -> Output:
     return _list(
         partial(runs.list_run_tasks, context.services.database, arguments.run_id),
         arguments,
-        lambda item: f"{item['task_id']}  {item['state']}  {item['recording_count']}",
+        TASK_COLUMNS,
+        lambda item: (item["task_id"], item["state"], str(item["recording_count"])),
     )
 
 
-def _list(read: Callable[..., Page], arguments, line: Callable[[dict], str]) -> Output:
+def _list(
+    read: Callable[..., Page],
+    arguments,
+    columns: tuple[str, ...],
+    row: Callable[[dict], tuple[str, ...]],
+) -> Output:
     if arguments.all:
         page = _read_all_pages(read, arguments.limit)
     else:
@@ -209,9 +233,8 @@ def _list(read: Callable[..., Page], arguments, line: Callable[[dict], str]) -> 
     notice = None
     if page.next_cursor is not None:
         notice = f"There are more. Show them with --cursor {page.next_cursor}"
-    return Output(
-        data=page.body(), text="\n".join(line(item) for item in page.items), notice=notice
-    )
+    rows = tuple(row(item) for item in page.items)
+    return Output(data=page.body(), notice=notice, columns=columns, rows=rows)
 
 
 def _read_all_pages(read: Callable[..., Page], limit: int) -> Page:
@@ -229,9 +252,8 @@ def _read_all_pages(read: Callable[..., Page], limit: int) -> Page:
 
 
 def _show(data: dict) -> Output:
-    lines = []
-    for name, value in data.items():
-        if isinstance(value, (dict, list)):
-            value = json.dumps(value, indent=2)
-        lines.append(f"{name}: {value}")
-    return Output(data=data, text="\n".join(lines))
+    fields = tuple(
+        (name, value if isinstance(value, str) else json.dumps(value, indent=2))
+        for name, value in data.items()
+    )
+    return Output(data=data, fields=fields)

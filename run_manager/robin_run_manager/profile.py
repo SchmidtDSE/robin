@@ -145,9 +145,15 @@ def load_profile(directory: Path, environment: str, environ: Mapping[str, str]) 
         raise NotConfigured(f"The profile folder {directory} does not exist.")
     environment_file = directory / f"{environment}.yaml"
     if not environment_file.is_file():
+        environments = _get_environment_names(directory)
+        if environments:
+            listed = f"Environments in this profile: {', '.join(environments)}."
+        else:
+            listed = "This profile has no environments."
         raise NotConfigured(
             f"The profile {directory} has no {environment_file.name} for environment "
-            f"{environment!r}."
+            f"{environment!r}. {listed}",
+            details={"environments": environments},
         )
     shared_file = directory / SHARED_FILE
     shared = _read(shared_file) if shared_file.is_file() else {}
@@ -163,6 +169,14 @@ def load_profile(directory: Path, environment: str, environ: Mapping[str, str]) 
         "The profile is not valid: "
         + "; ".join(f"{problem['field']}: {problem['message']}" for problem in problems),
         details={"problems": problems},
+    )
+
+
+def _get_environment_names(directory: Path) -> list[str]:
+    """The name of each `.yaml` file in the profile folder except `config.yaml`, sorted."""
+    return sorted(
+        path.stem for path in directory.glob("*.yaml")
+        if path.name != SHARED_FILE and path.is_file()
     )
 
 

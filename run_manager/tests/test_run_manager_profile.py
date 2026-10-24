@@ -92,6 +92,17 @@ def test_a_missing_environment_file_is_not_found(tmp_path):
         load_profile(tmp_path, "dev", ENVIRON)
 
 
+def test_a_missing_environment_lists_the_profile_environments(tmp_path):
+    write(tmp_path, "config.yaml", {"database": DATABASE})
+    write(tmp_path, "test.yaml", {})
+    write(tmp_path, "local.yaml", {})
+
+    with pytest.raises(NotConfigured) as raised:
+        load_profile(tmp_path, "prod", ENVIRON)
+
+    assert raised.value.details["environments"] == ["local", "test"]
+
+
 def test_a_missing_profile_folder_is_not_found(tmp_path):
     with pytest.raises(NotConfigured, match="folder"):
         load_profile(tmp_path / "absent", "dev", ENVIRON)

@@ -8,7 +8,6 @@ error is one JSON body on stderr.
 
 import argparse
 import contextlib
-import io
 import json
 import logging
 import os
@@ -30,6 +29,7 @@ from robin_run_manager.profile import load_profile
 from robin_run_manager.runs import RECORDING_STATES, SKIP_REASONS
 
 from robin_cli import commands
+from robin_cli.color import BOLD, DIM, RED_BOLD, STATUS_COLORS, YELLOW, add_color
 from robin_cli.commands import Context, Output
 
 PROFILE_VARIABLE = "ROBIN_PROFILE"
@@ -51,14 +51,50 @@ logging.getLogger("psycopg.pool").addHandler(logging.NullHandler())
 class _LocalProblem(Exception):
     """Wrong syntax, or no profile or environment is selected. Exit code 2.
 
-    `text` is argparse's own output for a syntax error. It is shown instead of the
-    message when the output is not JSON.
+    For a syntax error, `usage` is argparse's usage text and the message is argparse's
+    error line, such as `robin runs submit: error: ...`. Without JSON, both are shown
+    as argparse shows them. `command` is the command whose help the hint names, such as
+    `robin runs submit`.
     """
 
-    def __init__(self, reason: str, message: str, *, text: str = "") -> None:
+    def __init__(
+        self, reason: str, message: str, *, usage: str = "", command: str = "robin"
+    ) -> None:
         super().__init__(message)
         self.body = {"reason": reason, "message": message, "details": {}}
-        self.text = text
+        self.usage = usage
+        self.command = command
+
+
+class _Parser(argparse.ArgumentParser):
+    """An argparse parser that raises a `_LocalProblem` instead of printing and exiting.
+
+    Each subparser is also a `_Parser`, because argparse makes subparsers of the
+    parent's class. So `prog` names the command that the user typed.
+    """
+
+    def error(self, message: str):
+        raise _LocalProblem(
+            "invalid_arguments",
+            f"{self.prog}: error: {message}",
+            usage=self.format_usage(),
+            command=self.prog,
+        )
+
+
+def is_terminal(stream) -> bool:
+    """True if `stream` is a terminal. The tests replace this function."""
+    return stream.isatty()
+
+
+def is_color_on(stream, *, json_mode: bool, environ: Mapping[str, str]) -> bool:
+    """True if output on `stream` gets color: not --json, a terminal, and not turned off.
+
+    A `NO_COLOR` that is not empty, or `TERM=dumb`, turns color off.
+    """
+    if json_mode or environ.get("NO_COLOR") or environ.get("TERM") == "dumb":
+        return False
+    return is_terminal(stream)
 
 
 # ---------------------------------------------------------------------------
@@ -75,28 +111,29 @@ def main(argv: Sequence[str] | None = None, *, environ: Mapping[str, str] | None
     argv = sys.argv[1:] if argv is None else list(argv)
     # Found before parsing, so that a syntax error is also reported as JSON.
     json_mode = "--json" in argv
+    table = not json_mode and is_terminal(sys.stdout)
+    color = is_color_on(sys.stdout, json_mode=json_mode, environ=environ)
+    error_color = is_color_on(sys.stderr, json_mode=json_mode, environ=environ)
     try:
         arguments = _parse(_build_parser(), argv)
         directory, environment = _get_selection(arguments, environ)
         profile = load_profile(directory, environment, environ)
         if not json_mode:
-            print(f"robin: profile {directory}, environment {environment}", file=sys.stderr)
+            line = f"robin: profile {directory}, environment {environment}"
+            print(add_color(line, DIM, enabled=error_color), file=sys.stderr)
         services = compose(profile)
         with contextlib.closing(services.database):
             output = _run(arguments, services, directory, environment)
     except _LocalProblem as problem:
-        if problem.text and not json_mode:
-            sys.stderr.write(problem.text)
-        else:
-            _print_error(problem.body, json_mode=json_mode)
+        _print_local_problem(problem, json_mode=json_mode, color=error_color)
         return EXIT_LOCAL_PROBLEM
     except OperationError as error:
         # For example: a profile file is missing or not valid, the database refused
         # the login or cannot be reached, or the operation refused.
-        return _report(error, json_mode=json_mode)
+        return _report(error, json_mode=json_mode, color=error_color)
     except Exception:
-        return _report_defect(json_mode=json_mode)
-    _print(output, json_mode=json_mode)
+        return _report_defect(json_mode=json_mode, color=error_color)
+    _print(output, json_mode=json_mode, table=table, color=color, notice_color=error_color)
     return EXIT_SUCCESS
 
 
@@ -110,23 +147,16 @@ def _run(
 
 
 def _parse(parser: argparse.ArgumentParser, argv: list[str]) -> argparse.Namespace:
-    """Parse `argv`. A syntax error becomes a `_LocalProblem` that holds argparse's text.
+    """Parse `argv`. A syntax error raises a `_LocalProblem` from `_Parser.error`.
 
-    A command's `check` tests the rules that argparse cannot. It also raises a `_LocalProblem`.
+    A command's `check` tests the rules that argparse cannot. If it returns a message,
+    that message becomes a `_LocalProblem`.
     """
-    captured = io.StringIO()
-    try:
-        with contextlib.redirect_stderr(captured):
-            arguments = parser.parse_args(argv)
-    except SystemExit as exit:
-        if exit.code == 0:
-            raise  # --help or --version; their text is on stdout
-        text = captured.getvalue()
-        lines = text.strip().splitlines()
-        message = lines[-1] if lines else "The command line is not valid."
-        raise _LocalProblem("invalid_arguments", message, text=text) from None
+    arguments = parser.parse_args(argv)
     if arguments.check is not None:
-        arguments.check(arguments)
+        message = arguments.check(arguments)
+        if message is not None:
+            raise _LocalProblem("invalid_arguments", message, command=arguments.prog)
     return arguments
 
 
@@ -135,6 +165,12 @@ def _get_selection(
 ) -> tuple[Path, str]:
     directory = arguments.profile or environ.get(PROFILE_VARIABLE)
     environment = arguments.env or environ.get(ENVIRONMENT_VARIABLE)
+    if not directory and not environment:
+        raise _LocalProblem(
+            "not_configured",
+            "No profile and no environment. Use --profile and --env, or set "
+            f"{PROFILE_VARIABLE} and {ENVIRONMENT_VARIABLE}.",
+        )
     if not directory:
         raise _LocalProblem(
             "not_configured", f"No profile. Use --profile, or set {PROFILE_VARIABLE}."
@@ -169,6 +205,9 @@ The usual order of work:
 This version stores submitted runs but does not prepare or run them yet. A submitted
 run stays in "preparing".
 
+Human output has color only on a terminal. Set NO_COLOR, or TERM=dumb, to turn
+color off.
+
 Use --json in scripts. Exit codes: 0 success, 1 refused, 2 command or profile
 problem, 3 outcome uncertain, 4 unavailable, 5 internal error.
 
@@ -195,7 +234,7 @@ Example:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _Parser(
         prog="robin",
         description="Register models, name configurations, and submit them to run on "
         "lists of recordings.",
@@ -292,7 +331,7 @@ def _add_model_commands(nouns) -> None:
     )
     _add_list_command(
         model_commands, "list", commands.list_models, "list models",
-        columns="MODEL  KIND  CARD_DIGEST", note="KIND is model or head.",
+        columns=commands.MODEL_COLUMNS, note="KIND is model or head.",
         example="robin models list --all",
     )
     _add_command(
@@ -389,7 +428,7 @@ def _add_preset_commands(nouns) -> None:
     )
     _add_list_command(
         preset_commands, "list", commands.list_presets, "list presets",
-        columns="NAME  MODEL  CONFIGURATION_DIGEST", example="robin presets list --limit 20",
+        columns=commands.PRESET_COLUMNS, example="robin presets list --limit 20",
     )
     _add_command(
         preset_commands, "show", commands.show_preset, "show one preset",
@@ -489,7 +528,7 @@ def _add_run_commands(nouns) -> None:
 
     listed = _add_list_command(
         run_commands, "list", commands.list_runs, "list runs, newest first",
-        columns="RUN  STATUS  SUBMITTED_BY  CREATED_AT  RECORDINGS",
+        columns=commands.RUN_COLUMNS,
         note="robin runs show --help lists the statuses.",
         example="robin runs list --submitted-by ana --created-after 2026-10-01T00:00:00Z",
     )
@@ -506,22 +545,23 @@ def _add_run_commands(nouns) -> None:
     ).add_argument("run_id", metavar="RUN", help=RUN_HELP)
     recordings = _add_list_command(
         run_commands, "recordings", commands.list_run_recordings, "list a run's recordings",
-        columns="NAMESPACE  VALUE  STATE  SKIP_REASON",
+        columns=commands.RECORDING_COLUMNS,
         note="STATE is - until preparation gives the recording one. SKIP_REASON is - "
         "unless the\nrecording was skipped.",
         example="robin runs recordings RUN --state skipped --skip-reason already_covered",
     )
     recordings.add_argument("run_id", metavar="RUN", help=RUN_HELP)
     recordings.add_argument(
-        "--state", metavar="S", help=f"only recordings in this state: {', '.join(RECORDING_STATES)}"
+        "--state", metavar="S", choices=RECORDING_STATES,
+        help=f"only recordings in this state: {', '.join(RECORDING_STATES)}",
     )
     recordings.add_argument(
-        "--skip-reason", metavar="R",
+        "--skip-reason", metavar="R", choices=SKIP_REASONS,
         help=f"only recordings skipped for this reason: {', '.join(SKIP_REASONS)}",
     )
     _add_list_command(
         run_commands, "tasks", commands.list_run_tasks, "list a run's tasks",
-        columns="TASK  STATE  RECORDINGS", example="robin runs tasks RUN",
+        columns=commands.TASK_COLUMNS, example="robin runs tasks RUN",
     ).add_argument("run_id", metavar="RUN", help=RUN_HELP)
 
 
@@ -530,17 +570,31 @@ def _add_run_commands(nouns) -> None:
 # ---------------------------------------------------------------------------
 
 
+LIST_LAYOUT = """\
+On a terminal, the first line is a header and the columns are aligned. In a pipe
+or a file, there is no header, and two spaces separate the values on each line.
+Use --json for output that scripts can depend on.
+"""
+
+
 def _add_list_command(
-    group, name: str, run, help: str, *, columns: str, example: str, note: str | None = None
+    group,
+    name: str,
+    run,
+    help: str,
+    *,
+    columns: tuple[str, ...],
+    example: str,
+    note: str | None = None,
 ):
     """Add a command that prints a page of items, one on each line, with the page options.
 
-    The epilog gives the columns, the optional note, and the example.
+    The epilog gives the columns, the optional note, the layout, and the example.
     """
-    epilog = f"Each line is: {columns}\n"
+    epilog = f"Columns: {'  '.join(columns)}\n"
     if note:
         epilog += f"{note}\n"
-    epilog += f"\nExample:\n\n  {example}\n"
+    epilog += f"{LIST_LAYOUT}\nExample:\n\n  {example}\n"
     command = _add_command(group, name, run, help, epilog=epilog)
     _add_page_options(command)
     return command
@@ -571,7 +625,7 @@ def _add_command(
     help: str,
     *,
     needs_schema: bool = True,
-    check: Callable[[argparse.Namespace], None] | None = None,
+    check: Callable[[argparse.Namespace], str | None] | None = None,
     epilog: str | None = None,
 ):
     # The raw formatter keeps the epilog's line breaks and indented examples.
@@ -584,7 +638,7 @@ def _add_command(
         "--json", action="store_true", default=argparse.SUPPRESS,
         help="print results and errors as JSON",
     )
-    command.set_defaults(run=run, needs_schema=needs_schema, check=check)
+    command.set_defaults(run=run, needs_schema=needs_schema, check=check, prog=command.prog)
     return command
 
 
@@ -593,29 +647,26 @@ def _add_command(
 # ---------------------------------------------------------------------------
 
 
-def _check_submit(arguments: argparse.Namespace) -> None:
+def _check_submit(arguments: argparse.Namespace) -> str | None:
     """Check the submit options that argparse cannot: --namespace goes with --uris only."""
     if arguments.uris is not None and arguments.namespace is None:
-        raise _LocalProblem("invalid_arguments", "--uris needs --namespace.")
+        return "--uris needs --namespace."
     if arguments.recordings is not None and arguments.namespace is not None:
-        raise _LocalProblem(
-            "invalid_arguments",
-            "--namespace is used only with --uris. Each line of --recordings has its own.",
-        )
+        return "--namespace is used only with --uris. Each line of --recordings has its own."
+    return None
 
 
-def _check_register(arguments: argparse.Namespace) -> None:
+def _check_register(arguments: argparse.Namespace) -> str | None:
     """Check the register options that argparse cannot: one model source, and each role once."""
-    if (arguments.model is None) == (arguments.card is None):
-        raise _LocalProblem(
-            "invalid_arguments", "Name a built-in model, or give --card, but not both."
-        )
+    if arguments.model is None and arguments.card is None:
+        return "Name a built-in model, or give --card."
+    if arguments.model is not None and arguments.card is not None:
+        return "Name a built-in model or give --card, not both."
     roles = [role for role, _ in arguments.files]
     repeated = sorted({role for role in roles if roles.count(role) > 1})
     if repeated:
-        raise _LocalProblem(
-            "invalid_arguments", f"Give each role once. Repeated: {', '.join(repeated)}."
-        )
+        return f"Give each role once. Repeated: {', '.join(repeated)}."
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -623,18 +674,73 @@ def _check_register(arguments: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _print(output: Output, *, json_mode: bool) -> None:
+def _print(
+    output: Output, *, json_mode: bool, table: bool, color: bool, notice_color: bool
+) -> None:
+    """Print the result. With `table`, a list has a header and aligned columns.
+
+    Without `table`, two spaces separate the values of a list row. `color` is for
+    stdout and `notice_color` for the notice on stderr.
+    """
     if json_mode:
         print(json.dumps(output.data))
         return
-    if output.text:
-        print(output.text)
+    if output.columns and table:
+        lines = _get_table_lines(output.columns, output.rows, color=color)
+    elif output.columns:
+        lines = ["  ".join(values) for values in output.rows]
+    elif output.fields:
+        lines = _get_field_lines(output.fields, color=color)
+    else:
+        lines = [output.text] if output.text else []
+    if lines:
+        print("\n".join(lines))
     if output.notice:
-        print(f"robin: {output.notice}", file=sys.stderr)
+        print(add_color(f"robin: {output.notice}", DIM, enabled=notice_color), file=sys.stderr)
 
 
-def _report(error: OperationError, *, json_mode: bool) -> int:
-    _print_error(error.body(), json_mode=json_mode)
+def _get_table_lines(
+    columns: tuple[str, ...], rows: tuple[tuple[str, ...], ...], *, color: bool
+) -> list[str]:
+    """The header and the rows. Each column but the last is padded to its widest value.
+
+    Color is added after the padding, so that the codes do not change the widths.
+    """
+    widths = [
+        max(len(values[index]) for values in (columns, *rows)) for index in range(len(columns))
+    ]
+    # Only the run list has a STATUS column. Its values are the keys of STATUS_COLORS.
+    status = columns.index("STATUS") if "STATUS" in columns else None
+    lines = [add_color("  ".join(_pad(columns, widths)), BOLD, enabled=color)]
+    for values in rows:
+        cells = _pad(values, widths)
+        if status is not None:
+            cells[status] = add_color(
+                cells[status], STATUS_COLORS.get(values[status]), enabled=color
+            )
+        lines.append("  ".join(cells))
+    return lines
+
+
+def _pad(values: tuple[str, ...], widths: list[int]) -> list[str]:
+    """Each value padded to its column's width, except the last value."""
+    padded = [value.ljust(width) for value, width in zip(values[:-1], widths)]
+    return [*padded, values[-1]]
+
+
+def _get_field_lines(fields: tuple[tuple[str, str], ...], *, color: bool) -> list[str]:
+    """`name: value` lines, with the value of `status` in its color."""
+    lines = []
+    for name, value in fields:
+        # Only a run has a `status` field. Its values are the keys of STATUS_COLORS.
+        if name == "status":
+            value = add_color(value, STATUS_COLORS.get(value), enabled=color)
+        lines.append(f"{name}: {value}")
+    return lines
+
+
+def _report(error: OperationError, *, json_mode: bool, color: bool) -> int:
+    _print_error(error.body(), json_mode=json_mode, color=color)
     if isinstance(error, NotConfigured):
         return EXIT_LOCAL_PROBLEM
     if isinstance(error, OutcomeUncertain):
@@ -644,21 +750,36 @@ def _report(error: OperationError, *, json_mode: bool) -> int:
     return EXIT_REFUSED
 
 
-def _report_defect(*, json_mode: bool) -> int:
+def _report_defect(*, json_mode: bool, color: bool) -> int:
     request_id = uuid.uuid4().hex
-    print(f"robin: internal error, request {request_id}:", file=sys.stderr)
+    prefix = add_color("robin:", RED_BOLD, enabled=color)
+    print(f"{prefix} internal error, request {request_id}:", file=sys.stderr)
     traceback.print_exc(file=sys.stderr)
     body = {
         "reason": "internal_error",
         "message": "Robin failed because of a defect. The lines above give the details.",
         "details": {"request_id": request_id},
     }
-    _print_error(body, json_mode=json_mode)
+    _print_error(body, json_mode=json_mode, color=color)
     return EXIT_INTERNAL_ERROR
 
 
-def _print_error(body: dict, *, json_mode: bool) -> None:
+def _print_local_problem(problem: _LocalProblem, *, json_mode: bool, color: bool) -> None:
+    """Print the problem. Without --json, a command-line error ends with a hint line."""
+    if problem.usage and not json_mode:
+        sys.stderr.write(problem.usage)
+        prefix = f"{problem.command}:"
+        rest = problem.body["message"].removeprefix(prefix)
+        print(f"{add_color(prefix, RED_BOLD, enabled=color)}{rest}", file=sys.stderr)
+    else:
+        _print_error(problem.body, json_mode=json_mode, color=color)
+    if not json_mode and problem.body["reason"] == "invalid_arguments":
+        print(add_color(f"See: {problem.command} --help", YELLOW, enabled=color), file=sys.stderr)
+
+
+def _print_error(body: dict, *, json_mode: bool, color: bool) -> None:
     if json_mode:
         print(json.dumps(body), file=sys.stderr)
     else:
-        print(f"robin: {body['message']} ({body['reason']})", file=sys.stderr)
+        prefix = add_color("robin:", RED_BOLD, enabled=color)
+        print(f"{prefix} {body['message']} ({body['reason']})", file=sys.stderr)
