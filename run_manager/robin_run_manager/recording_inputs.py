@@ -1,0 +1,275 @@
+"""The two list files that `runs submit` reads: `--recordings` and `--uris`.
+
+Both are UTF-8 with one entry on each line. Empty lines are skipped, but a line of only
+spaces is refused.
+"""
+
+import codecs
+import hashlib
+import json
+import re
+from pathlib import Path, PurePosixPath
+from typing import Any, NamedTuple, NoReturn
+from urllib.parse import unquote, urlsplit
+
+from pydantic import BaseModel, ValidationError
+
+from robin_contracts.work import NonEmptyText, PositiveSeconds
+from robin_run_manager.errors import INVALID_REQUEST, Refused
+from robin_run_manager.operator_files import field_problems
+
+# The most line problems that one refusal reports.
+MAX_PROBLEMS = 20
+
+_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
+_UTF16_MARKS = (codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)
+
+
+class SubmittedRecording(BaseModel, frozen=True, extra="forbid"):
+    """One recording in a submitted list: its identity, its audio, and maybe its duration."""
+
+    namespace: NonEmptyText
+    value: NonEmptyText
+    audio_uri: NonEmptyText
+    duration_seconds: PositiveSeconds | None = None
+
+
+class RecordingFile(NamedTuple):
+    """The recordings of a list file, and what Robin observed about the file."""
+
+    recordings: tuple[SubmittedRecording, ...]
+    observed: dict[str, Any]
+
+
+class _LineProblem(Exception):
+    """One line cannot be used. The message says what is wrong and what to do."""
+
+
+def read_recordings_file(path: Path) -> RecordingFile:
+    """Read a `--recordings` file. Each line is one JSON object for one recording."""
+    data = _read_bytes(path)
+    recordings, problems = [], []
+    for number, line in _split_lines(path, data):
+        try:
+            recordings.append((number, _parse_recording(line)))
+        except _LineProblem as problem:
+            problems.append({"line": number, "problem": str(problem)})
+    return _build_recording_file(path, data, recordings, problems, "recordings", {})
+
+
+def read_uris_file(path: Path, namespace: str) -> RecordingFile:
+    """Read a `--uris` file. Each line is a URI or an absolute path in `namespace`.
+
+    A `file://` line must have the spelling that Robin makes from its path, so that one
+    file has one identity.
+    """
+    if not namespace:
+        raise Refused(
+            INVALID_REQUEST,
+            "The namespace must not be empty. Give the name of the collection that the "
+            "recordings belong to.",
+            details={"file": str(path)},
+        )
+    data = _read_bytes(path)
+    recordings, problems = [], []
+    for number, line in _split_lines(path, data):
+        try:
+            uri = _parse_uri(line)
+        except _LineProblem as problem:
+            problems.append({"line": number, "problem": str(problem)})
+            continue
+        recording = SubmittedRecording(namespace=namespace, value=uri, audio_uri=uri)
+        recordings.append((number, recording))
+    return _build_recording_file(path, data, recordings, problems, "uris", {"namespace": namespace})
+
+
+def _read_bytes(path: Path) -> bytes:
+    try:
+        return path.read_bytes()
+    except OSError as error:
+        problem = error.strerror or "it cannot be read"
+    raise Refused(
+        INVALID_REQUEST,
+        f"{path} cannot be read: {problem}.",
+        details={"file": str(path), "problems": [], "truncated": False},
+    )
+
+
+def _split_lines(path: Path, data: bytes) -> list[tuple[int, str]]:
+    """The lines that are not empty, with their numbers from 1."""
+    if data.startswith(codecs.BOM_UTF8):
+        _refuse_file(
+            path,
+            1,
+            "The file starts with a byte order mark. Save it as UTF-8 without a byte order "
+            "mark.",
+        )
+    if data.startswith(_UTF16_MARKS):
+        _refuse_file(path, 1, "The file is UTF-16 text. Save it as UTF-8.")
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        number = data.count(b"\n", 0, error.start) + 1
+        _refuse_file(path, number, f"Line {number} is not UTF-8 text. Save the file as UTF-8.")
+    if "\x00" in text:
+        number = text.count("\n", 0, text.index("\x00")) + 1
+        _refuse_file(
+            path,
+            number,
+            f"Line {number} holds a NUL character. The file may be UTF-16 text. Save it as "
+            "UTF-8.",
+        )
+    lines = text.split("\n")
+    if lines[-1] == "":
+        lines.pop()
+    found = []
+    for number, line in enumerate(lines, start=1):
+        line = line.removesuffix("\r")
+        if line:
+            found.append((number, line))
+    return found
+
+
+def _parse_recording(line: str) -> SubmittedRecording:
+    if not line.strip():
+        raise _LineProblem("The line holds only spaces. Remove it.")
+    try:
+        entry = json.loads(
+            line, object_pairs_hook=_refuse_repeated_keys, parse_constant=_refuse_constant
+        )
+    except _LineProblem:
+        raise
+    except (ValueError, RecursionError):
+        entry = None
+    if not isinstance(entry, dict):
+        raise _LineProblem(
+            "The line is not a JSON object. Give one object with namespace, value, "
+            "audio_uri, and optional duration_seconds."
+        )
+    if "embeddings" in entry:
+        raise _LineProblem(
+            "The entry has embeddings. Remove them: preparation pins the input of a head run."
+        )
+    for key, value in entry.items():
+        if isinstance(value, str) and not _is_storable(value):
+            raise _LineProblem(
+                f"{key} holds a NUL character or a lone surrogate, which Robin cannot "
+                "store. Correct the entry."
+            )
+    try:
+        return SubmittedRecording.model_validate(entry, strict=True)
+    except ValidationError as error:
+        problems = field_problems(error, "entry")
+    raise _LineProblem(
+        "; ".join(f"{problem['field']}: {problem['message']}" for problem in problems)
+        + ". Correct the entry."
+    )
+
+
+def _is_storable(text: str) -> bool:
+    """Whether PostgreSQL can store `text`: no NUL character and no lone surrogate."""
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return "\x00" not in text
+
+
+def _refuse_repeated_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    entry = {}
+    for key, value in pairs:
+        if key in entry:
+            raise _LineProblem(f"The key {key!r} appears more than once. Give each key once.")
+        entry[key] = value
+    return entry
+
+
+def _refuse_constant(name: str) -> NoReturn:
+    raise _LineProblem(f"{name} is not a number that Robin accepts. Give a finite number.")
+
+
+def _parse_uri(line: str) -> str:
+    if not line.strip():
+        raise _LineProblem("The line holds only spaces. Remove it, or give a path or a URI.")
+    if line.startswith("/"):
+        return PurePosixPath(line).as_uri()
+    if _SCHEME.match(line) is None:
+        raise _LineProblem("The line is a relative path. Give an absolute path or a URI.")
+    if not line.lower().startswith("file:"):
+        return line
+    try:
+        path = unquote(urlsplit(line).path)
+    except ValueError:
+        path = ""
+    if not path.startswith("/"):
+        raise _LineProblem(
+            "The line is not a valid file URI. Give an absolute path or a file:/// URI."
+        )
+    robins = PurePosixPath(path).as_uri()
+    if line != robins:
+        raise _LineProblem(
+            f"The file URI is not in the spelling that Robin uses. Write it as {robins}."
+        )
+    return line
+
+
+def _build_recording_file(
+    path: Path,
+    data: bytes,
+    numbered: list[tuple[int, SubmittedRecording]],
+    problems: list[dict],
+    input: str,
+    observed: dict[str, Any],
+) -> RecordingFile:
+    first_line = {}
+    for number, recording in numbered:
+        identity = (recording.namespace, recording.value)
+        if identity in first_line:
+            problems.append({
+                "line": number,
+                "problem": f"The recording {recording.value} in namespace "
+                f"{recording.namespace} is also on line {first_line[identity]}. Give each "
+                "recording once.",
+            })
+        else:
+            first_line[identity] = number
+    if problems:
+        problems.sort(key=lambda problem: problem["line"])
+        first = problems[0]
+        more = f" The file has {len(problems)} problems." if len(problems) > 1 else ""
+        raise Refused(
+            INVALID_REQUEST,
+            f"{path} cannot be submitted. Line {first['line']}: {first['problem']}{more}",
+            details={
+                "file": str(path),
+                "problems": problems[:MAX_PROBLEMS],
+                "truncated": len(problems) > MAX_PROBLEMS,
+            },
+        )
+    if not numbered:
+        raise Refused(
+            INVALID_REQUEST,
+            f"{path} holds no recordings. Give at least one.",
+            details={"file": str(path), "problems": [], "truncated": False},
+        )
+    return RecordingFile(
+        recordings=tuple(recording for _, recording in numbered),
+        observed={
+            "input": input,
+            "file_sha256": f"sha256:{hashlib.sha256(data).hexdigest()}",
+            "file_size_bytes": len(data),
+            **observed,
+        },
+    )
+
+
+def _refuse_file(path: Path, line: int, problem: str) -> NoReturn:
+    raise Refused(
+        INVALID_REQUEST,
+        f"{path} cannot be submitted. {problem}",
+        details={
+            "file": str(path),
+            "problems": [{"line": line, "problem": problem}],
+            "truncated": False,
+        },
+    )

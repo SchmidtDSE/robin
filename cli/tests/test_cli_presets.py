@@ -5,14 +5,16 @@ from pathlib import Path
 
 import pytest
 
+from cli_doubles import write_owl_files
+
 FIXTURES = Path(__file__).parents[2] / "run_manager" / "tests" / "fixtures"
 OWL_CONFIGURATION = FIXTURES / "configuration-owl-v4.yaml"
 
 
 @pytest.fixture
-def owl_registered(robin):
+def owl_registered(robin, tmp_path):
     assert robin("db", "migrate").code == 0
-    assert robin("models", "register", str(FIXTURES / "owl-v4.yaml")).code == 0
+    assert robin("models", "register", "owl/v4", *write_owl_files(tmp_path / "owl")).code == 0
 
 
 def create(robin, name, path=OWL_CONFIGURATION):

@@ -3,8 +3,8 @@
 import pytest
 import yaml
 
-from robin_run_manager.errors import Refused
-from robin_run_manager.profile import ProfileNotFound, load_profile
+from robin_run_manager.errors import NotConfigured, Refused
+from robin_run_manager.profile import load_profile
 
 SECRET = "s3cr3t-value-for-tests"
 ADAPTER_SECRET = "adapter-token-for-tests"
@@ -81,19 +81,19 @@ def test_an_environment_that_is_not_a_plain_name_is_not_found(tmp_path, environm
     write(tmp_path / "inner", "config.yaml", {"database": DATABASE})
     write(tmp_path, "prod.yaml", {"database": DATABASE})
 
-    with pytest.raises(ProfileNotFound, match="environment"):
+    with pytest.raises(NotConfigured, match="environment"):
         load_profile(tmp_path / "inner", environment, ENVIRON)
 
 
 def test_a_missing_environment_file_is_not_found(tmp_path):
     write(tmp_path, "config.yaml", {"database": DATABASE})
 
-    with pytest.raises(ProfileNotFound, match="dev.yaml"):
+    with pytest.raises(NotConfigured, match="dev.yaml"):
         load_profile(tmp_path, "dev", ENVIRON)
 
 
 def test_a_missing_profile_folder_is_not_found(tmp_path):
-    with pytest.raises(ProfileNotFound, match="folder"):
+    with pytest.raises(NotConfigured, match="folder"):
         load_profile(tmp_path / "absent", "dev", ENVIRON)
 
 
@@ -321,3 +321,20 @@ def test_a_relative_ca_bundle_path_is_refused(tmp_path):
     problem = raised.value.details["problems"][0]
     assert problem["field"] == "database.sslrootcert"
     assert "absolute" in problem["message"]
+
+
+def test_recordings_per_task_defaults_to_100(tmp_path):
+    write(tmp_path, "dev.yaml", {"database": DATABASE})
+
+    assert load_profile(tmp_path, "dev", ENVIRON).preparation.recordings_per_task == 100
+
+
+@pytest.mark.parametrize(
+    "preparation", [{"recordings_per_task": 0}, {"recordings_per_task": 5, "x": 1}]
+)
+def test_recordings_per_task_must_be_at_least_1(tmp_path, preparation):
+    write(tmp_path, "dev.yaml", {"database": DATABASE, "preparation": preparation})
+
+    refusal = invalid(tmp_path)
+
+    assert refusal.details["problems"][0]["field"].startswith("preparation.")

@@ -6,6 +6,8 @@ isolated virtual environment and assert two things:
 - Every *required* import for the shape succeeds.
 - Every *forbidden* import raises ``ModuleNotFoundError``.
 
+A shape can also name checks: Python scripts that must exit 0 in the install.
+
 Heavy runtime dependencies are checked per shape. Every entry in
 ``_HEAVY_RUNTIMES`` a shape does not declare must be absent from the
 install, and every one it does declare must be importable: asserting
@@ -40,6 +42,7 @@ class Shape:
     required: tuple[str, ...]
     forbidden_robin: tuple[str, ...]
     runtimes: tuple[str, ...]
+    checks: tuple[str, ...]
 
 
 _ROBIN_COMPONENTS = (
@@ -72,12 +75,25 @@ _HEAVY_RUNTIMES = (
 
 SHAPES: dict[str, Shape] = {}
 
+# The worker reads a built-in model's registry from its installed robin-models, so the
+# wheel must ship each registry, and each must be the one its card names.
+_BUNDLED_REGISTRIES_MATCH_CARDS = """
+import hashlib
+from robin_models import registration
+for model_id in registration.get_built_in_model_ids():
+    location = registration.get_bundled_registry_location(model_id)
+    data = registration.get_bundled_file(location).read_bytes()
+    digest = "sha256:" + hashlib.sha256(data).hexdigest()
+    assert digest == registration.get_bundled_card(model_id).taxa_registry_digest, model_id
+"""
+
 
 def _register(
     name: str,
     install: tuple[str, ...],
     required: tuple[str, ...],
     runtimes: tuple[str, ...] = (),
+    checks: tuple[str, ...] = (),
 ) -> None:
     unknown = [module for module in runtimes if module not in _HEAVY_RUNTIMES]
     if unknown:
@@ -89,6 +105,7 @@ def _register(
         required=required,
         forbidden_robin=forbidden,
         runtimes=runtimes,
+        checks=checks,
     )
 
 
@@ -106,19 +123,24 @@ _register(
 _register(
     "run-manager",
     install=("robin-run-manager",),
-    required=("robin_run_manager", "robin_contracts"),
+    required=("robin_run_manager", "robin_contracts",
+              "robin_models", "robin_models.output_versions"),
     runtimes=("psycopg",),
 )
 _register(
     "run-manager-rds",
     install=("robin-run-manager[rds]",),
-    required=("robin_run_manager", "robin_contracts"),
+    required=("robin_run_manager", "robin_contracts",
+              "robin_models", "robin_models.output_versions"),
     runtimes=("psycopg", "boto3"),
 )
 _register(
     "cli",
     install=("robin-cli",),
-    required=("robin_cli", "robin_run_manager", "robin_contracts"),
+    required=(
+        "robin_cli", "robin_run_manager", "robin_contracts",
+        "robin_models", "robin_models.output_versions",
+    ),
     runtimes=("psycopg",),
 )
 _register(
@@ -185,6 +207,7 @@ _register(
         "robin_models.output_versions",
         "robin_contracts",
     ),
+    checks=(_BUNDLED_REGISTRIES_MATCH_CARDS,),
 )
 _register(
     "meta-owl",
@@ -276,6 +299,12 @@ def check_shape(shape_name: str, wheels_dir: Path, venv: Path) -> None:
         _assert_not_importable(
             python, module, reason=f"not declared by shape {shape.name!r}"
         )
+    for check in shape.checks:
+        result = subprocess.run([str(python), "-I", "-c", check], capture_output=True, text=True)
+        if result.returncode != 0:
+            raise InstallShapeError(
+                f"a check for shape {shape.name!r} failed:\n{result.stderr.strip()}"
+            )
 
 
 def _create_venv(venv: Path) -> None:

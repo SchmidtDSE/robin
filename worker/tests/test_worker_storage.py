@@ -4,7 +4,10 @@ from robin_adapters.artifact_writer.local import LocalArtifactWriter
 from robin_adapters.artifact_writer.ondio import OndioArtifactWriter
 
 from robin_worker import storage
-from robin_worker.storage import TaskFiles
+from robin_models import registration
+from robin_worker.storage import ModelFiles, TaskFiles
+
+OWL_REGISTRY = "robin-models:owl/v4/taxa_registry.csv"
 
 # ---------------------------------------------------------------------------
 # Reading and creating whole files.
@@ -132,3 +135,28 @@ def test_fetching_an_unsupported_scheme_names_the_uri(tmp_path):
 def test_releasing_a_path_it_did_not_return_is_refused(tmp_path):
     with pytest.raises(ValueError):
         TaskFiles(tmp_path / "scratch").release(tmp_path / "other.bin")
+
+
+def test_a_bundled_registry_is_a_model_file_and_not_an_input(tmp_path):
+    task_files = TaskFiles(tmp_path / "scratch")
+
+    fetched = ModelFiles(task_files).fetch(OWL_REGISTRY)
+
+    assert fetched.read_bytes() == registration.get_bundled_file(OWL_REGISTRY).read_bytes()
+    with pytest.raises(ValueError, match=OWL_REGISTRY):
+        task_files.fetch(OWL_REGISTRY)
+
+
+def test_each_release_goes_to_the_provider_that_fetched_the_path(tmp_path):
+    path = tmp_path / "model.bin"
+    path.write_bytes(b"weights")
+    model_files = ModelFiles(TaskFiles(tmp_path / "scratch"))
+    bundled, local = model_files.fetch(OWL_REGISTRY), model_files.fetch(str(path))
+
+    model_files.release(bundled)
+    model_files.release(local)
+
+    with pytest.raises(ValueError):
+        model_files.release(local)
+    with pytest.raises(ValueError):
+        model_files.release(bundled)

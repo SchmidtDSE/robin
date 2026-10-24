@@ -1,15 +1,17 @@
 """The BirdNET v2.4 adapter. Importing this module loads TensorFlow."""
 
-import tempfile
-from collections.abc import Iterator, Mapping, Sequence
-from pathlib import Path
+from collections.abc import Iterator, Mapping
 
 from robin_contracts.cards import AudioGeometry, ModelCard, RunnerResampled
 from robin_contracts.inputs import AudioClip, Input
 from robin_contracts.protocols import JsonScalar, Log, ModelContext
-from robin_contracts.records import ClassScore, WindowOutput
-from robin_contracts.registry import TaxonRegistry
-from robin_contracts.specs import recipe, window_bounds
+from robin_contracts.records import WindowOutput
+from robin_contracts.specs import recipe
+from robin_models._adapter_checks import (
+    check_device,
+    get_batch_size,
+    refuse_a_card_the_model_does_not_follow,
+)
 
 _RUNTIME_MODULES = ("numpy", "scipy", "soundfile", "tensorflow")
 
@@ -27,16 +29,24 @@ except ModuleNotFoundError as error:
         name=error.name,
     ) from error
 
-DEFAULT_BATCH_SIZE = 32
-DEVICE = "cpu"
-TF_DEVICE = "/CPU:0"
+from robin_models._audio_windows import (
+    Bounds,
+    get_window_outputs,
+    refuse_unusable_logits,
+    run_windows,
+)
+from robin_models._saved_model import (
+    create_saved_model_folder,
+    get_signature,
+    require_input,
+    require_output,
+    require_roles,
+)
 
-# Where each pinned file goes in the folder TensorFlow loads.
-SAVED_MODEL_LAYOUT = {
-    "saved_model": Path("saved_model.pb"),
-    "variables_data": Path("variables") / "variables.data-00000-of-00001",
-    "variables_index": Path("variables") / "variables.index",
-}
+OWNER = "model birdnet/v2p4"
+DEFAULT_BATCH_SIZE = 32
+TF_DEVICE = "/CPU:0"
+SIGNATURE = "embeddings"
 
 # The SavedModel's last layer, which turns an embedding into logits.
 CLASSIFIER_KERNEL = "CLASS_DENSE_LAYER/kernel:0"
@@ -66,22 +76,22 @@ BEHAVIOUR = {
 def build(context: ModelContext) -> "BirdnetModel":
     """Check the card, resources and files, load the SavedModel, and return the model."""
     card = context.card
-    _refuse_a_card_birdnet_does_not_follow(card)
-    batch_size = _read_batch_size(context.resources)
-    _read_device(context.resources)
-    _require_roles(context.files, needs_labels=context.registry is not None)
-    folder = _saved_model_folder(context.files, context.scratch_dir)
+    refuse_a_card_the_model_does_not_follow(card, BEHAVIOUR, OWNER)
+    batch_size = get_batch_size(context.resources, DEFAULT_BATCH_SIZE)
+    check_device(context.resources, OWNER)
+    require_roles(context.files, OWNER)
+    folder = create_saved_model_folder(context.files, context.scratch_dir, "birdnet-savedmodel-")
     with tf.device(TF_DEVICE):
         loaded = tf.saved_model.load(str(folder))
-    embeddings = _embeddings_signature(loaded)
-    _require_input(embeddings, round(card.window_duration * card.sample_rate))
-    _require_output(embeddings, card.embedding_dim)
+    embeddings = get_signature(loaded, SIGNATURE, OWNER)
+    require_input(embeddings, SIGNATURE, round(card.window_duration * card.sample_rate), OWNER)
+    require_output(embeddings, SIGNATURE, "embeddings", card.embedding_dim, OWNER)
     labels = kernel = bias = None
     if context.registry is not None:
-        kernel, bias = _classifier_layer(
+        kernel, bias = _get_classifier_layer(
             loaded, card.embedding_dim, len(context.registry.entries)
         )
-        labels = _labels_matching_the_registry(context.files["labels"], context.registry)
+        labels = tuple(entry.label for entry in context.registry.entries)
     return BirdnetModel(
         card=card,
         settings=context.settings,
@@ -96,94 +106,12 @@ def build(context: ModelContext) -> "BirdnetModel":
     )
 
 
-def _refuse_a_card_birdnet_does_not_follow(card: ModelCard) -> None:
-    for field, does in BEHAVIOUR.items():
-        states = getattr(card, field)
-        if states != does:
-            raise ValueError(
-                f"card field {field} is {states!r}, but model birdnet/v2p4 does {does!r}"
-            )
-
-
-def _read_batch_size(resources: Mapping[str, JsonScalar]) -> int:
-    """The `batch_size` resource, or the default."""
-    size = resources.get("batch_size", DEFAULT_BATCH_SIZE)
-    # bool is an int subclass, and True is a type error, not a batch of one.
-    if type(size) is not int or size < 1:
-        raise ValueError(f"resource batch_size must be a positive int, got {size!r}")
-    return size
-
-
-def _read_device(resources: Mapping[str, JsonScalar]) -> None:
-    device = resources.get("device", DEVICE)
-    if device != DEVICE:
-        raise ValueError(
-            f"model birdnet/v2p4 runs only on resource device {DEVICE!r}, got {device!r}"
-        )
-
-
-def _require_roles(files: Mapping[str, Path], *, needs_labels: bool) -> None:
-    roles = [*SAVED_MODEL_LAYOUT, "labels"] if needs_labels else list(SAVED_MODEL_LAYOUT)
-    for role in roles:
-        if role not in files:
-            raise ValueError(
-                f"model birdnet/v2p4 needs a file under the role {role!r}, "
-                f"and got the roles {sorted(files)}"
-            )
-
-
-def _saved_model_folder(files: Mapping[str, Path], scratch_dir: Path) -> Path:
-    """A new folder laid out as TensorFlow expects, linking to the pinned files."""
-    folder = Path(tempfile.mkdtemp(prefix="birdnet-savedmodel-", dir=scratch_dir))
-    for role, place in SAVED_MODEL_LAYOUT.items():
-        link = folder / place
-        link.parent.mkdir(exist_ok=True)
-        link.symlink_to(files[role])
-    return folder
-
-
-def _embeddings_signature(loaded) -> object:
-    """The SavedModel's `embeddings` signature."""
-    signatures = loaded.signatures
-    if "embeddings" not in signatures:
-        raise ValueError(
-            "model birdnet/v2p4 needs the SavedModel signature 'embeddings', "
-            f"and found {sorted(signatures)}"
-        )
-    return signatures["embeddings"]
-
-
-def _require_input(signature, width: int) -> None:
-    inputs = signature.structured_input_signature[1]
-    if list(inputs) != ["inputs"]:
-        raise ValueError(
-            "model birdnet/v2p4 needs the embeddings signature to take one input named 'inputs', "
-            f"and it takes {sorted(inputs)}"
-        )
-    shape = inputs["inputs"].shape.as_list()
-    if shape != [None, width]:
-        raise ValueError(
-            "model birdnet/v2p4 needs the embeddings signature's input shape to be "
-            f"[None, {width}], and it is {shape}"
-        )
-
-
-def _require_output(signature, width: int) -> None:
-    outputs = signature.structured_outputs
-    shape = outputs["embeddings"].shape.as_list() if "embeddings" in outputs else None
-    if shape != [None, width]:
-        raise ValueError(
-            "model birdnet/v2p4 needs the embeddings signature's output 'embeddings' to have "
-            f"shape [None, {width}], and found {shape}"
-        )
-
-
-def _classifier_layer(loaded, embedding_dim: int, labels: int) -> tuple[object, object]:
+def _get_classifier_layer(loaded, embedding_dim: int, labels: int) -> tuple[object, object]:
     """The kernel and bias of the layer that turns an embedding into one logit per label."""
     model = getattr(loaded, "model", None)
     if model is None:
         raise ValueError(
-            "model birdnet/v2p4 needs the loaded SavedModel to have the attribute 'model', "
+            f"{OWNER} needs the loaded SavedModel to have the attribute 'model', "
             "which holds its classifier layer"
         )
     variables = {variable.name: variable for variable in model.variables}
@@ -195,36 +123,15 @@ def _classifier_layer(loaded, embedding_dim: int, labels: int) -> tuple[object, 
 def _require_variable(variables: Mapping[str, object], name: str, shape: list[int]) -> object:
     if name not in variables:
         raise ValueError(
-            f"model birdnet/v2p4 needs the SavedModel variable {name!r}, and found none"
+            f"{OWNER} needs the SavedModel variable {name!r}, and found none"
         )
     found = variables[name].shape.as_list()
     if found != shape:
         raise ValueError(
-            f"model birdnet/v2p4 needs the SavedModel variable {name!r} to have shape {shape}, "
+            f"{OWNER} needs the SavedModel variable {name!r} to have shape {shape}, "
             f"and it is {found}"
         )
     return variables[name]
-
-
-def _labels_matching_the_registry(path: Path, registry: TaxonRegistry) -> tuple[str, ...]:
-    """The registry's labels, once the labels file shipped with the weights equals them."""
-    try:
-        lines = path.read_bytes().decode("utf-8").splitlines()
-    except UnicodeDecodeError as error:
-        raise ValueError(f"model birdnet/v2p4's labels file {path} is not UTF-8") from error
-    labels = tuple(entry.label for entry in registry.entries)
-    if len(lines) != len(labels):
-        raise ValueError(
-            f"model birdnet/v2p4's labels file has {len(lines)} labels, "
-            f"but the registry has {len(labels)}"
-        )
-    for position, (line, label) in enumerate(zip(lines, labels)):
-        if line != label:
-            raise ValueError(
-                f"model birdnet/v2p4's labels file has {line!r} at position {position}, "
-                f"but the registry has {label!r}"
-            )
-    return labels
 
 
 class BirdnetModel:
@@ -258,35 +165,30 @@ class BirdnetModel:
         self._log = log
 
     def run(self, input: Input) -> Iterator[WindowOutput]:
-        """Read, batch and score the recording one window at a time, yielding each in order."""
+        """Read and score the recording a batch at a time, yielding each window in order."""
         if not isinstance(input, AudioClip):
-            raise TypeError(f"model birdnet/v2p4 runs on audio, got a {type(input).__name__}")
-        return self._windows(input.path)
+            raise TypeError(f"{OWNER} runs on audio, got a {type(input).__name__}")
+        return run_windows(
+            input.path,
+            geometry=self._geometry,
+            width=self._width,
+            batch_size=self._batch_size,
+            read_window=self._read_window,
+            run_batch=self._run_batch,
+            log=self._log,
+            owner=OWNER,
+        )
 
-    def _windows(self, path: Path) -> Iterator[WindowOutput]:
-        with sf.SoundFile(str(path)) as audio:
-            if audio.frames == 0:
-                raise ValueError(f"model birdnet/v2p4 cannot run {path}: it has no audio frames")
-            bounds = window_bounds(audio.frames / audio.samplerate, self._geometry)
-            self._log(f"running {len(bounds)} windows of {path.name}")
-            for first in range(0, len(bounds), self._batch_size):
-                batch_bounds = bounds[first : first + self._batch_size]
-                batch = self._batch(audio, batch_bounds)
-                yield from self._window_outputs(batch_bounds, *self._infer(batch))
-
-    def _batch(self, audio: "sf.SoundFile", bounds: Sequence[tuple[float, float]]) -> "np.ndarray":
-        """The windows as rows, each mixed down, resampled and zero-padded at its end."""
-        batch = np.zeros((len(bounds), self._width), dtype=np.float32)
-        for row, (start, end) in zip(batch, bounds):
-            window = _mixed_down(_read_window(audio, start, end))
-            window = _resampled(window, audio.samplerate, self._rate, start)
-            if len(window) > self._width:
-                raise ValueError(
-                    f"model birdnet/v2p4 read {len(window)} samples for the window at {start} s, "
-                    f"more than the {self._width} it takes"
-                )
-            row[: len(window)] = window
-        return batch
+    def _read_window(self, audio: "sf.SoundFile", start: float, end: float) -> "np.ndarray":
+        """The window mixed down and resampled, and not longer than the network takes."""
+        window = _mix_down(_read_frames(audio, start, end))
+        window = _resample_window(window, audio.samplerate, self._rate, start)
+        if len(window) > self._width:
+            raise ValueError(
+                f"{OWNER} read {len(window)} samples for the window at {start} s, "
+                f"more than the {self._width} it takes"
+            )
+        return window
 
     def _infer(self, batch: "np.ndarray") -> tuple["np.ndarray | None", "np.ndarray | None"]:
         """The batch's logits when there are labels, and its embeddings when asked for."""
@@ -298,31 +200,18 @@ class BirdnetModel:
                 # The scores are the model's classifier layer on the embedding, so one pass
                 # gives both.
                 logits = (tf.matmul(embeddings, self._kernel) + self._bias).numpy()
-        return logits, embeddings.numpy() if self._emit_embeddings else None
+        embeddings = embeddings.numpy() if self._emit_embeddings else None
+        return logits, embeddings
 
-    def _window_outputs(
-        self,
-        bounds: Sequence[tuple[float, float]],
-        logits: "np.ndarray | None",
-        embeddings: "np.ndarray | None",
-    ) -> Iterator[WindowOutput]:
-        if logits is None:
-            score_rows = [()] * len(bounds)
-        else:
-            _refuse_unusable_logits(logits, bounds, self._labels)
-            score_rows = [self._scored(row) for row in sigmoid(logits).tolist()]
-        embedding_rows = [None] * len(bounds) if embeddings is None else list(embeddings)
-        for (start, end), scores, embedding in zip(
-            bounds, score_rows, embedding_rows, strict=True
-        ):
-            # Each window gets its own copy, so no two share the batch's memory.
-            embedding = None if embedding is None else embedding.copy()
-            yield WindowOutput(start=start, end=end, scores=scores, embedding=embedding)
-
-    def _scored(self, scores: list[float]) -> tuple[ClassScore, ...]:
-        return tuple(
-            ClassScore(label=label, score=score) for label, score in zip(self._labels, scores)
-        )
+    def _run_batch(self, bounds: Bounds, batch: "np.ndarray") -> Iterator[WindowOutput]:
+        """Score one batch of padded rows, and make one output for each window."""
+        logits, embeddings = self._infer(batch)
+        scores = None
+        if logits is not None:
+            # Checked before the sigmoid's clip, which would turn +inf into a confident score.
+            refuse_unusable_logits(logits, bounds, self._labels, OWNER)
+            scores = get_sigmoid(logits)
+        return get_window_outputs(bounds, scores, embeddings, self._labels)
 
     def after_recording(self) -> None:
         """Nothing to do: a recording leaves no files behind, and the model stays loaded."""
@@ -332,7 +221,7 @@ class BirdnetModel:
         self._loaded = self._embeddings = self._kernel = self._bias = None
 
 
-def _read_window(audio: "sf.SoundFile", start: float, end: float) -> "np.ndarray":
+def _read_frames(audio: "sf.SoundFile", start: float, end: float) -> "np.ndarray":
     """The window's frames, read on their own, as float32 with one column per channel."""
     rate = audio.samplerate
     first = round(start * rate)
@@ -343,46 +232,29 @@ def _read_window(audio: "sf.SoundFile", start: float, end: float) -> "np.ndarray
     )
 
 
-def _mixed_down(frames: "np.ndarray") -> "np.ndarray":
+def _mix_down(frames: "np.ndarray") -> "np.ndarray":
     """One channel as it is, or more averaged in float32, as birdnet 0.2.12's convert_to_mono."""
     if frames.shape[1] == 1:
         return frames[:, 0]
     return np.mean(frames, axis=1, dtype=np.float32)
 
 
-def _resampled(window: "np.ndarray", rate: int, target_rate: int, start: float) -> "np.ndarray":
+def _resample_window(
+    window: "np.ndarray", rate: int, target_rate: int, start: float
+) -> "np.ndarray":
     """The window at the model's rate, as birdnet 0.2.12's resample_array_by_sr."""
     if rate == target_rate:
         return window
     target = round(len(window) / rate * target_rate)
     if target == 0:
         raise ValueError(
-            f"model birdnet/v2p4 cannot resample the window at {start} s: its {len(window)} "
+            f"{OWNER} cannot resample the window at {start} s: its {len(window)} "
             f"frames at {rate} Hz resample to {target} samples at {target_rate} Hz"
         )
     return resample(window, target)
 
 
-def _refuse_unusable_logits(
-    logits: "np.ndarray", bounds: Sequence[tuple[float, float]], labels: Sequence[str]
-) -> None:
-    """Refuse logits not shaped (windows, labels), or not finite."""
-    if logits.shape != (len(bounds), len(labels)):
-        raise ValueError(
-            f"model birdnet/v2p4 gave logits of shape {logits.shape} for {len(bounds)} "
-            f"windows of {len(labels)} labels"
-        )
-    # Checked before the sigmoid's clip, which would turn +inf into a confident score.
-    found = np.argwhere(~np.isfinite(logits))
-    if len(found):
-        window, label = found[0]
-        raise ValueError(
-            f"model birdnet/v2p4 gave the logit {float(logits[window, label])!r} for "
-            f"{labels[label]!r} in the window at {bounds[window][0]} s"
-        )
-
-
-def sigmoid(logits: "np.ndarray") -> "np.ndarray":
+def get_sigmoid(logits: "np.ndarray") -> "np.ndarray":
     """Scores from logits, computed in float32 as birdnet 0.2.12's flat_sigmoid_logaddexp_fast
     is with its default sensitivity: logits are clipped to -15..15 first."""
     y = -np.clip(np.asarray(logits, dtype=np.float32), -15.0, 15.0)

@@ -8,13 +8,13 @@ import pytest
 from psycopg.types.json import Json
 
 from robin_contracts.cards import card_digest
-from robin_contracts.work import PinnedModel
+from robin_contracts.work import AudioInput, PinnedModel
 from robin_run_manager.configuration import (
     Configuration,
     UnresolvedConfiguration,
-    configuration_digest,
+    get_configuration_digest,
     read_configuration,
-    resolve,
+    resolve_configuration,
 )
 from robin_run_manager.database import transaction
 from robin_run_manager.errors import (
@@ -26,8 +26,10 @@ from robin_run_manager.errors import (
     UNKNOWN_MODEL,
     Refused,
 )
-from robin_run_manager.models import read_registration, register_model, show_model
+from robin_run_manager.models import register_model, show_model
 from robin_run_manager.presets import create_preset, list_presets, show_preset
+
+from model_fixtures import read_pinned_model
 
 FIXTURES = Path(__file__).parent / "fixtures"
 OWL_CONFIGURATION = read_configuration(FIXTURES / "configuration-owl-v4.yaml")
@@ -38,7 +40,7 @@ HEAD_CONFIGURATION = read_configuration(FIXTURES / "configuration-songbird-head-
 @pytest.fixture
 def registered(migrated_database):
     for name in ("owl-v4", "perch-v8", "songbird-head-v1"):
-        register_model(migrated_database, read_registration(FIXTURES / f"{name}.yaml"), actor="ana")
+        register_model(migrated_database, read_pinned_model(name), actor="ana")
     return migrated_database
 
 
@@ -157,19 +159,19 @@ def test_a_head_naming_an_unknown_backbone_configuration_is_refused(registered):
 
 
 def test_a_presets_digest_is_the_digest_of_the_resolved_file(registered):
-    owl = read_registration(FIXTURES / "owl-v4.yaml")
+    owl = read_pinned_model("owl-v4")
 
     created = create_preset(registered, "owl-default", OWL_CONFIGURATION, actor="ana")
 
-    assert created.configuration_digest == configuration_digest(
-        resolve(OWL_CONFIGURATION, owl, None)
+    assert created.configuration_digest == get_configuration_digest(
+        resolve_configuration(OWL_CONFIGURATION, owl, AudioInput())
     )
 
 
 def test_a_create_waits_for_a_concurrent_one_and_then_conflicts(registered, database_settings):
-    owl = read_registration(FIXTURES / "owl-v4.yaml")
-    other_configuration = resolve(other_owl_configuration(), owl, None)
-    other_digest = configuration_digest(other_configuration)
+    owl = read_pinned_model("owl-v4")
+    other_configuration = resolve_configuration(other_owl_configuration(), owl, AudioInput())
+    other_digest = get_configuration_digest(other_configuration)
     outcomes = []
 
     def create():
@@ -237,7 +239,7 @@ def test_showing_a_missing_preset_is_not_found(registered):
 
 def test_stored_documents_read_back_with_the_same_digests(migrated_database):
     # A float of 1e16 or more is where a stored number could come back as an int.
-    owl = read_registration(FIXTURES / "owl-v4.yaml")
+    owl = read_pinned_model("owl-v4")
     card = owl.card.model_copy(update={"model_name": "wide", "window_duration": 1e17})
     registered = register_model(migrated_database, owl.model_copy(update={"card": card}), actor="ana")
     file = UnresolvedConfiguration.model_validate(
@@ -251,4 +253,4 @@ def test_stored_documents_read_back_with_the_same_digests(migrated_database):
     stored = PinnedModel.model_validate({"card": shown_model["card"], "files": shown_model["files"]})
     assert card_digest(stored.card) == registered.card_digest
     configuration = Configuration.model_validate(shown_preset["configuration"])
-    assert configuration_digest(configuration) == created.configuration_digest
+    assert get_configuration_digest(configuration) == created.configuration_digest

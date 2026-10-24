@@ -2,7 +2,9 @@
 
 A local location is an absolute path or a `file://` URI with no host. An `s3://`
 location goes through ondio, with credentials from the environment. The work file,
-each model file, each input, and the output root can each use a different store.
+each model file, each input, and the output root can each use a different store. A
+model file can also be a registry that robin-models ships, at a `robin-models:`
+location.
 """
 
 from pathlib import Path
@@ -10,10 +12,12 @@ from pathlib import Path
 import ondio
 from robin_adapters.artifact_writer.local import LocalArtifactWriter
 from robin_adapters.artifact_writer.ondio import OndioArtifactWriter
-from robin_adapters.file_provider.local import LocalFileProvider, local_path
+from robin_adapters.file_provider.local import LocalFileProvider
 from robin_adapters.file_provider.ondio import OndioFileProvider
 from robin_adapters.location import LOCAL_STORE, split_location
+from robin_contracts.local_files import get_local_path
 from robin_contracts.ports import ArtifactWriter, FileProvider
+from robin_models import registration
 
 
 def has_location(uri: str) -> bool:
@@ -23,7 +27,7 @@ def has_location(uri: str) -> bool:
 
 def read_bytes(uri: str) -> bytes:
     if _is_local(uri):
-        return local_path(uri).read_bytes()
+        return get_local_path(uri).read_bytes()
     return ondio.read(_supported(uri))
 
 
@@ -34,7 +38,7 @@ def create(uri: str, data: bytes) -> None:
     existing folder, so a wrong path makes no folders.
     """
     if _is_local(uri):
-        path = local_path(uri)
+        path = get_local_path(uri)
         if not path.parent.is_dir():
             raise FileNotFoundError(f"the folder {path.parent} does not exist")
         uri = str(path)
@@ -46,7 +50,7 @@ def create(uri: str, data: bytes) -> None:
 
 def artifact_writer(output_root: str) -> ArtifactWriter:
     if _is_local(output_root):
-        return LocalArtifactWriter(local_path(output_root))
+        return LocalArtifactWriter(get_local_path(output_root))
     return OndioArtifactWriter(_supported(output_root))
 
 
@@ -85,6 +89,33 @@ class TaskFiles:
         if self._remote is None:
             self._remote = OndioFileProvider(self._scratch)
         return self._remote
+
+
+class ModelFiles:
+    """The `FileProvider` for one task's model files. It wraps `task_files`.
+
+    A `robin-models:` location is the file in this worker's installed robin-models, used
+    where it is and never deleted. Every other location is fetched and released through
+    `task_files`. Inputs use `task_files` alone, so they cannot name a `robin-models:`
+    location.
+    """
+
+    def __init__(self, task_files: TaskFiles) -> None:
+        self._task_files = task_files
+        self._bundled: list[Path] = []
+
+    def fetch(self, uri: str) -> Path:
+        if not registration.is_bundled_location(uri):
+            return self._task_files.fetch(uri)
+        path = registration.get_bundled_file(uri)
+        self._bundled.append(path)
+        return path
+
+    def release(self, path: Path) -> None:
+        if path in self._bundled:
+            self._bundled.remove(path)
+        else:
+            self._task_files.release(path)
 
 
 def _is_local(uri: str) -> bool:

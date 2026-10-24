@@ -15,6 +15,7 @@ from robin_contracts.work import (
     OutputRequests,
     PinnedFile,
     PinnedModel,
+    PositiveSeconds,
     RecordingRef,
     partition,
     recording_work_digest,
@@ -190,6 +191,12 @@ def test_an_output_list_problem_names_no_document(message):
     # The same type checks the outputs of a work and of a configuration.
     with pytest.raises(ValidationError, match=message):
         TypeAdapter(OutputRequests).validate_python(OUTPUT_LIST_PROBLEMS[message])
+
+
+@pytest.mark.parametrize("value", [0, 0.0, -1.5, float("nan"), float("inf")])
+def test_positive_seconds_refuses_zero_and_nan(value):
+    with pytest.raises(ValidationError, match="finite and positive"):
+        TypeAdapter(PositiveSeconds).validate_python(value)
 
 
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])

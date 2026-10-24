@@ -19,6 +19,7 @@ import scipy.signal
 import soundfile
 
 import robin_models.birdnet
+from robin_models import _audio_windows as audio_windows
 from robin_adapters.artifact_writer.local import LocalArtifactWriter
 from robin_adapters.file_provider.local import LocalFileProvider
 from robin_contracts.cards import ModelCard, model_ref, read_card
@@ -333,7 +334,7 @@ def runtime(monkeypatch):
         delattr(robin_models.birdnet, "adapter")
 
 
-def birdnet_files(tmp_path, labels: str | bytes | None = None) -> dict:
+def birdnet_files(tmp_path) -> dict:
     """Small stand-ins for the pinned files. The fake TensorFlow reads none of them."""
     paths = {
         "saved_model": tmp_path / "saved_model.pb",
@@ -342,12 +343,9 @@ def birdnet_files(tmp_path, labels: str | bytes | None = None) -> dict:
     }
     for role, path in paths.items():
         path.write_bytes(role.encode())
-    labels_file = tmp_path / "en_us.txt"
-    text = "\n".join(LABELS) if labels is None else labels
-    labels_file.write_bytes(text if isinstance(text, bytes) else text.encode("utf-8"))
     registry = tmp_path / "taxa_registry.csv"
     registry.write_bytes((RESOURCES / "taxa_registry.csv").read_bytes())
-    return paths | {"labels": labels_file, "taxa_registry": registry}
+    return paths | {"taxa_registry": registry}
 
 
 def birdnet_context(tmp_path, **changes) -> ModelContext:
@@ -439,14 +437,15 @@ def test_overlapping_windows_build(runtime, tmp_path):
         pytest.param({"device": "cpu"}, 32, id="only_the_device"),
     ],
 )
-def test_the_batch_size_is_read_from_the_resources(runtime, resources, expected):
-    assert runtime.adapter._read_batch_size(resources) == expected
+def test_the_batch_size_is_read_from_the_resources(runtime, tmp_path, resources, expected):
+    model = runtime.adapter.build(birdnet_context(tmp_path, resources=resources))
+    assert model._batch_size == expected
 
 
 @pytest.mark.parametrize("value", [0, -1, True, 32.0, "8", None], ids=repr)
-def test_a_batch_size_that_is_not_a_positive_int_is_refused(runtime, value):
+def test_a_batch_size_that_is_not_a_positive_int_is_refused(runtime, tmp_path, value):
     with pytest.raises(ValueError, match="batch_size") as caught:
-        runtime.adapter._read_batch_size({"batch_size": value})
+        runtime.adapter.build(birdnet_context(tmp_path, resources={"batch_size": value}))
     assert repr(value) in str(caught.value)
 
 
@@ -483,16 +482,8 @@ def test_a_missing_savedmodel_file_is_refused_naming_the_role(runtime, tmp_path,
     assert runtime.loads == []
 
 
-def test_with_a_registry_a_missing_labels_file_is_refused_naming_the_role(runtime, tmp_path):
-    files = without(birdnet_files(tmp_path), "labels")
-    with pytest.raises(ValueError, match="'labels'") as caught:
-        runtime.adapter.build(birdnet_context(tmp_path, files=files))
-    assert str(sorted(files)) in str(caught.value)
-    assert runtime.loads == []
-
-
-def test_without_a_registry_neither_labels_nor_registry_file_is_needed(runtime, tmp_path):
-    files = without(birdnet_files(tmp_path), "labels", "taxa_registry")
+def test_without_a_registry_no_registry_file_is_needed(runtime, tmp_path):
+    files = without(birdnet_files(tmp_path), "taxa_registry")
     runtime.adapter.build(birdnet_context(tmp_path, files=files, registry=None))
 
 
@@ -621,54 +612,6 @@ def test_without_a_registry_the_classifier_layer_is_not_looked_for(runtime, tmp_
     runtime.adapter.build(embeddings_only(tmp_path, emit_embeddings=True))
 
 
-# The labels file shipped with the weights.
-
-
-def labels_file_context(tmp_path, labels: str | bytes) -> ModelContext:
-    return birdnet_context(tmp_path, files=birdnet_files(tmp_path, labels=labels))
-
-
-@pytest.mark.parametrize("ending", ["", "\n"], ids=["as_shipped", "trailing_newline"])
-def test_a_labels_file_equal_to_the_registry_builds(runtime, tmp_path, ending):
-    runtime.adapter.build(labels_file_context(tmp_path, "\n".join(LABELS) + ending))
-
-
-@pytest.mark.parametrize(
-    ("lines", "count"),
-    [(LABELS[:-1], 6521), (LABELS + ("Extra species_Extra",), 6523)],
-    ids=["one_too_few", "one_too_many"],
-)
-def test_a_labels_file_of_another_length_is_refused(runtime, tmp_path, lines, count):
-    with pytest.raises(ValueError, match="labels") as caught:
-        runtime.adapter.build(labels_file_context(tmp_path, "\n".join(lines)))
-    assert str(count) in str(caught.value)
-    assert "6522" in str(caught.value)
-
-
-def test_a_labels_file_in_another_order_is_refused_at_the_first_difference(runtime, tmp_path):
-    lines = list(LABELS)
-    lines[10], lines[11] = lines[11], lines[10]
-    with pytest.raises(ValueError, match="position 10") as caught:
-        runtime.adapter.build(labels_file_context(tmp_path, "\n".join(lines)))
-    assert repr(LABELS[10]) in str(caught.value)
-    assert repr(LABELS[11]) in str(caught.value)
-
-
-def test_a_labels_file_with_another_common_name_is_refused(runtime, tmp_path):
-    lines = list(LABELS)
-    lines[0] = lines[0].split("_")[0] + "_Another Name"
-    with pytest.raises(ValueError, match="position 0") as caught:
-        runtime.adapter.build(labels_file_context(tmp_path, "\n".join(lines)))
-    assert repr(LABELS[0]) in str(caught.value)
-    assert repr(lines[0]) in str(caught.value)
-
-
-def test_a_labels_file_that_is_not_utf8_is_refused(runtime, tmp_path):
-    text = "\n".join(LABELS).encode("utf-8") + b"\n\xff"
-    with pytest.raises(ValueError, match="UTF-8"):
-        runtime.adapter.build(labels_file_context(tmp_path, text))
-
-
 def test_a_model_that_fails_to_load_fails_the_build(runtime, tmp_path):
     runtime.load_error = OSError("not a SavedModel")
     with pytest.raises(OSError, match="not a SavedModel"):
@@ -704,7 +647,7 @@ def model_and_noise(runtime, tmp_path, frames: int, rate: int = 48000, **changes
 
 
 def embeddings_only(tmp_path, **changes) -> ModelContext:
-    files = without(birdnet_files(tmp_path), "labels", "taxa_registry")
+    files = without(birdnet_files(tmp_path), "taxa_registry")
     return birdnet_context(tmp_path, files=files, registry=None, **changes)
 
 
@@ -844,7 +787,7 @@ FIVE_LOGITS = np.array([-20, -15, 0, 15, 20], dtype=np.float32)
 
 
 def test_the_sigmoid_is_the_birdnet_librarys_on_the_clip_edges(runtime):
-    result = runtime.adapter.sigmoid(FIVE_LOGITS)
+    result = runtime.adapter.get_sigmoid(FIVE_LOGITS)
     assert result.dtype == np.float32
     assert np.array_equal(result, reference_sigmoid(FIVE_LOGITS))
     assert result[0] == result[1]
@@ -855,7 +798,7 @@ def test_the_sigmoid_is_the_birdnet_librarys_on_the_clip_edges(runtime):
 def test_the_sigmoid_is_the_birdnet_librarys_at_every_point_of_a_fine_grid(runtime):
     grid = np.linspace(-16, 16, 200_001, dtype=np.float32)
     expected = reference_sigmoid(grid)
-    assert np.array_equal(runtime.adapter.sigmoid(grid), expected)
+    assert np.array_equal(runtime.adapter.get_sigmoid(grid), expected)
     # Another float32 sigmoid differs from the library's by a few float32 steps.
     assert not np.array_equal(1 / (1 + np.exp(-np.clip(grid, -15, 15))), expected)
 
@@ -863,7 +806,7 @@ def test_the_sigmoid_is_the_birdnet_librarys_at_every_point_of_a_fine_grid(runti
 def test_the_sigmoid_is_within_five_float32_epsilons_of_the_exact_one(runtime):
     grid = np.linspace(-16, 16, 200_001, dtype=np.float32)
     exact = 1 / (1 + np.exp(-np.clip(grid.astype(np.float64), -15, 15)))
-    relative_error = np.abs(runtime.adapter.sigmoid(grid) - exact) / exact
+    relative_error = np.abs(runtime.adapter.get_sigmoid(grid) - exact) / exact
     # On AVX-512 CPUs numpy's float32 exp may be off by 4 ULP. The addition and
     # the division each add at most half an epsilon.
     assert relative_error.max() <= 5 * np.finfo(np.float32).eps
@@ -1061,7 +1004,7 @@ class RecordingSoundfile:
 
 def test_run_reads_nothing_until_it_is_iterated(runtime, tmp_path, monkeypatch):
     recorder = RecordingSoundfile()
-    monkeypatch.setattr(runtime.adapter, "sf", recorder)
+    monkeypatch.setattr(audio_windows, "sf", recorder)
     model, _, path = model_and_noise(runtime, tmp_path, WINDOW)
     windows = model.run(AudioClip(path=path))
     assert recorder.called == []
@@ -1073,7 +1016,7 @@ def test_run_refuses_an_input_that_is_not_audio_before_reading_anything(
     runtime, tmp_path, monkeypatch
 ):
     recorder = RecordingSoundfile()
-    monkeypatch.setattr(runtime.adapter, "sf", recorder)
+    monkeypatch.setattr(audio_windows, "sf", recorder)
     model = runtime.adapter.build(birdnet_context(tmp_path))
     embeddings = Embeddings(
         starts=np.array([0.0]),

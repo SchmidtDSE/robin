@@ -19,6 +19,9 @@ UNKNOWN_MODEL = "unknown_model"
 UNKNOWN_CONFIGURATION = "unknown_configuration"
 INVALID_CURSOR = "invalid_cursor"
 INVALID_CONFIGURATION = "invalid_configuration"
+UNKNOWN_PRESET = "unknown_preset"
+UNKNOWN_OUTPUT_VERSION = "unknown_output_version"
+OUTPUT_VERSION_NOT_CURRENT = "output_version_not_current"
 
 REFUSAL_REASONS = (
     NOT_AUTHENTICATED,
@@ -36,6 +39,9 @@ REFUSAL_REASONS = (
     UNKNOWN_CONFIGURATION,
     INVALID_CURSOR,
     INVALID_CONFIGURATION,
+    UNKNOWN_PRESET,
+    UNKNOWN_OUTPUT_VERSION,
+    OUTPUT_VERSION_NOT_CURRENT,
 )
 
 

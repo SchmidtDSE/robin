@@ -23,25 +23,25 @@ BirdNET's files are in the archive `BirdNET_v2.4_protobuf.zip`, in Zenodo record
 | `saved_model` | `audio-model/saved_model.pb` | `63a03e31f3bc4bbd3ac03aeb261b5bf529c173c652d77df4d9b0c0b39f09122d` | 6,929,070 |
 | `variables_data` | `audio-model/variables/variables.data-00000-of-00001` | `b05a11f1d7501351c2d48ef9aa96803a54ac76ba23e3370d7bab138d91609418` | 51,445,883 |
 | `variables_index` | `audio-model/variables/variables.index` | `5ac18d1811c430fecc5286ea1792a3363cb5906b390105743c122f1e2812106e` | 15,092 |
-| `labels` | `labels/en_us.txt` | `b50b77b7c3dfe40cd637e8cccdca0173a0a4ddee8867b830ff3c1a566f477f16` | 259,740 |
 | `taxa_registry` | bundled: `robin_models/birdnet/resources/taxa_registry.csv` | `b758a58bee475d45b1fb04a8f42cbaa13c794d2dc782f0e86968e6c1515d4c2d` | 838,069 |
 
-`labels` and `taxa_registry` are needed only for scores.
+`taxa_registry` is needed only for scores.
 
 ### How to use them
 
 robin never rehosts these files. Download the archive from Zenodo, unpack it, and pin each file
 by its path, digest and size. The engine checks every digest and size before the model is built.
 
-A work that wants only embeddings should pin neither `taxa_registry` nor `labels`. A pinned
-registry makes the adapter compute scores, at the cost of one matrix multiply per batch, and the
-engine discards them when they weren't asked for.
+A work that wants only embeddings should not pin `taxa_registry`. A pinned registry makes the
+adapter compute scores, at the cost of one matrix multiply per batch, and the engine discards them
+when they weren't asked for.
 
 ### The registry
 
 The bundled registry is copied byte for byte from taxa_bureau commit `1213658`,
-`taxa_registries/birdnet_taxa_registry.csv`. Its labels equal `labels/en_us.txt` line for line,
-and the adapter checks that when it is built.
+`taxa_registries/birdnet_taxa_registry.csv`. Its labels are the lines of the archive's
+`labels/en_us.txt`, in the same order. When the adapter is built, it checks that the classifier
+layer gives one score for each registry entry.
 
 ### Running it
 
@@ -87,24 +87,24 @@ Paths are inside the unpacked archive.
 | `saved_model` | `saved_model.pb` | `8d603a05e7712c070447815e8835490d4a9b951310ecc60e4ec9ab1b50730a72` | 3,881,694 |
 | `variables_data` | `variables/variables.data-00000-of-00001` | `b1c81c99b09d8ac37c55ac09ff14e3dd4c98f9f8de341d7d99161ebc9fe41aad` | 95,806,615 |
 | `variables_index` | `variables/variables.index` | `93fe310af9edf5f2662c3a32c75b9a96c89fe2b9905f45e5d1213adba4737a67` | 8,406 |
-| `labels` | `assets/label.csv` | `0c85cbc1d8391b67641a307d5f2219f96366db8ed229fc13d281a2e681ce83cc` | 97,298 |
 | `taxa_registry` | bundled: `robin_models/perch/resources/taxa_registry.csv` | `ca28f370cb5924af9966fee9fcd0a12d57632bba85a01a3f5908f9011ef99fd9` | 1,074,422 |
 
-`labels` and `taxa_registry` are needed only for scores.
+`taxa_registry` is needed only for scores.
 
 ### How to use them
 
 robin never rehosts these files. Download the archive from Kaggle, unpack it, and pin each file
 by its path, digest and size. The engine checks every digest and size before the model is built.
 
-A work that wants only embeddings should pin neither `taxa_registry` nor `labels`. Unlike
-BirdNET, a pinned registry costs no extra computation: one call returns both outputs.
+A work that wants only embeddings should not pin `taxa_registry`. Unlike BirdNET, a pinned
+registry costs no extra computation: one call returns both outputs.
 
 ### The registry
 
 The bundled registry is copied byte for byte from taxa_bureau commit `1213658`,
-`taxa_registries/perch-v8_taxa_registry.csv`. Its labels equal the lines of `assets/label.csv`
-after its `ebird2021` header, and the adapter checks that when it is built. 15 of its 10,932 eBird
+`taxa_registries/perch-v8_taxa_registry.csv`. Its labels are the lines of the archive's
+`assets/label.csv` after its `ebird2021` header, in the same order. When the adapter is built, it
+checks that the `label` output gives one score for each registry entry. 15 of its 10,932 eBird
 codes have no GBIF taxon, and are published as `unresolved`.
 
 ### Running it

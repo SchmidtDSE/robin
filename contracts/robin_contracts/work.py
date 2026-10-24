@@ -69,6 +69,8 @@ def _one_per_kind_and_satisfiable(
 BytesDigest = Annotated[str, AfterValidator(_bytes_digest)]
 CanonicalDigest = Annotated[str, AfterValidator(_canonical_digest)]
 NonEmptyText = Annotated[str, AfterValidator(_non_empty)]
+# A duration in seconds: finite and greater than zero.
+PositiveSeconds = Annotated[float, AfterValidator(_positive_duration)]
 # Values by name, each with a canonical encoding: settings and resources.
 FiniteScalarMap = Annotated[Mapping[str, JsonScalar], AfterValidator(_finite_values)]
 OutputRequests = Annotated[
@@ -97,7 +99,7 @@ class RecordingRef(BaseModel, frozen=True, extra="forbid"):
     namespace: NonEmptyText
     value: NonEmptyText
     audio_uri: NonEmptyText
-    duration_seconds: Annotated[float, AfterValidator(_positive_duration)] | None = None
+    duration_seconds: PositiveSeconds | None = None
     embeddings: InputArtifact | None = None
 
 

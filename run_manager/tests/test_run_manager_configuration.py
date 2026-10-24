@@ -8,22 +8,24 @@ from pathlib import Path
 import pytest
 
 from robin_contracts.cards import card_digest, model_ref
-from robin_contracts.work import InferenceWork, PinnedModel, RecordingRef
+from robin_contracts.work import AudioInput, InferenceWork, PinnedModel, RecordingRef
 from robin_run_manager.configuration import (
-    Backbone,
+    Configuration,
     UnresolvedConfiguration,
-    configuration_digest,
+    get_configuration_digest,
+    get_embedding_input,
     read_configuration,
-    resolve,
-    work_input,
+    resolve_configuration,
 )
 from robin_run_manager.errors import INVALID_CONFIGURATION, INVALID_REQUEST, Refused
-from robin_run_manager.models import read_registration
+
+from model_fixtures import read_pinned_model
 
 FIXTURES = Path(__file__).parent / "fixtures"
-OWL = read_registration(FIXTURES / "owl-v4.yaml")
-PERCH = read_registration(FIXTURES / "perch-v8.yaml")
-HEAD = read_registration(FIXTURES / "songbird-head-v1.yaml")
+OWL = read_pinned_model("owl-v4")
+PERCH = read_pinned_model("perch-v8")
+HEAD = read_pinned_model("songbird-head-v1")
+AUDIO = AudioInput()
 
 # The digest of configuration-owl-v4.yaml. It must not change: runs and presets store it.
 GOLDEN_DIGEST = "sha256:v1:e5227f7649736eee7a8cfcad2d8a59b37de4e261617c49f66de62c4756ba0b5b"
@@ -53,7 +55,12 @@ def owl_file(**changes) -> UnresolvedConfiguration:
 
 
 def perch_configuration():
-    return resolve(read_configuration(FIXTURES / "configuration-perch-v8.yaml"), PERCH, None)
+    file = read_configuration(FIXTURES / "configuration-perch-v8.yaml")
+    return resolve_configuration(file, PERCH, AUDIO)
+
+
+def get_audio_digest(file: UnresolvedConfiguration, model: PinnedModel) -> str:
+    return get_configuration_digest(resolve_configuration(file, model, AUDIO))
 
 
 def head_file(backbone_digest: str, **changes) -> UnresolvedConfiguration:
@@ -78,7 +85,7 @@ def refused_code(call) -> str:
 
 
 def test_the_documented_example_reads_and_resolves(tmp_path):
-    spec = resolve(read_configuration(write(tmp_path, EXAMPLE_FILE)), OWL, None)
+    spec = resolve_configuration(read_configuration(write(tmp_path, EXAMPLE_FILE)), OWL, AUDIO)
 
     assert spec.outputs[0].contract_id == "robin.scores.parquet/1"
     assert spec.model.name == "owl" and spec.model.version == "v4"
@@ -87,9 +94,10 @@ def test_the_documented_example_reads_and_resolves(tmp_path):
 
 
 def test_the_golden_file_gives_the_golden_digest():
-    spec = resolve(read_configuration(FIXTURES / "configuration-owl-v4.yaml"), OWL, None)
+    file = read_configuration(FIXTURES / "configuration-owl-v4.yaml")
+    spec = resolve_configuration(file, OWL, AUDIO)
 
-    assert configuration_digest(spec) == GOLDEN_DIGEST
+    assert get_configuration_digest(spec) == GOLDEN_DIGEST
 
 
 @pytest.mark.parametrize(
@@ -181,9 +189,9 @@ input:
   kind: audio
 model: owl/v4
 """
-    spec = resolve(read_configuration(write(tmp_path, reordered)), OWL, None)
+    file = read_configuration(write(tmp_path, reordered))
 
-    assert configuration_digest(spec) == configuration_digest(resolve(owl_file(), OWL, None))
+    assert get_audio_digest(file, OWL) == get_audio_digest(owl_file(), OWL)
 
 
 def test_another_output_order_gives_the_same_digest():
@@ -193,9 +201,7 @@ def test_another_output_order_gives_the_same_digest():
     one = UnresolvedConfiguration.model_validate(fields | {"outputs": [scores, embeddings]})
     other = UnresolvedConfiguration.model_validate(fields | {"outputs": [embeddings, scores]})
 
-    assert configuration_digest(resolve(one, PERCH, None)) == configuration_digest(
-        resolve(other, PERCH, None)
-    )
+    assert get_audio_digest(one, PERCH) == get_audio_digest(other, PERCH)
 
 
 def test_a_moved_model_file_gives_the_same_digest():
@@ -203,9 +209,7 @@ def test_a_moved_model_file_gives_the_same_digest():
     files["weights"] = files["weights"].model_copy(update={"uri": "s3://elsewhere/w.h5"})
     moved = OWL.model_copy(update={"files": files})
 
-    assert configuration_digest(resolve(owl_file(), moved, None)) == configuration_digest(
-        resolve(owl_file(), OWL, None)
-    )
+    assert get_audio_digest(owl_file(), moved) == get_audio_digest(owl_file(), OWL)
 
 
 def test_another_file_digest_gives_another_digest():
@@ -213,13 +217,11 @@ def test_another_file_digest_gives_another_digest():
     files["weights"] = files["weights"].model_copy(update={"digest": "sha256:" + "9" * 64})
     changed = OWL.model_copy(update={"files": files})
 
-    assert configuration_digest(resolve(owl_file(), changed, None)) != configuration_digest(
-        resolve(owl_file(), OWL, None)
-    )
+    assert get_audio_digest(owl_file(), changed) != get_audio_digest(owl_file(), OWL)
 
 
 def test_a_configuration_holds_no_file_locations():
-    spec = resolve(owl_file(), OWL, None)
+    spec = resolve_configuration(owl_file(), OWL, AUDIO)
 
     assert "s3://" not in str(spec.model_dump(mode="json"))
 
@@ -254,9 +256,9 @@ def test_a_configuration_holds_no_file_locations():
     ],
 )
 def test_a_shared_check_refuses_with_its_code(changes, code):
-    backbone = Backbone(perch_configuration(), PERCH) if "input" in changes else None
+    work_input = get_embedding_input(perch_configuration(), PERCH) if "input" in changes else AUDIO
 
-    assert refused_code(lambda: resolve(owl_file(**changes), OWL, backbone)) == code
+    assert refused_code(lambda: resolve_configuration(owl_file(**changes), OWL, work_input)) == code
 
 
 def test_a_registry_the_card_does_not_name_is_refused():
@@ -264,15 +266,18 @@ def test_a_registry_the_card_does_not_name_is_refused():
     files["taxa_registry"] = files["taxa_registry"].model_copy(update={"digest": "sha256:" + "8" * 64})
     model = OWL.model_copy(update={"files": files})
 
-    assert refused_code(lambda: resolve(owl_file(), model, None)) == "registry_disagrees_with_card"
+    code = refused_code(lambda: resolve_configuration(owl_file(), model, AUDIO))
+
+    assert code == "registry_disagrees_with_card"
 
 
 def test_a_head_resolves_from_its_backbone_configuration():
     backbone = perch_configuration()
 
-    spec = resolve(head_file(configuration_digest(backbone)), HEAD, Backbone(backbone, PERCH))
+    work_input = get_embedding_input(backbone, PERCH)
+    spec = resolve_configuration(head_file(get_configuration_digest(backbone)), HEAD, work_input)
 
-    assert spec.input.backbone_configuration == configuration_digest(backbone)
+    assert spec.input.backbone_configuration == get_configuration_digest(backbone)
 
 
 def test_a_backbone_configuration_without_embeddings_is_refused():
@@ -280,22 +285,20 @@ def test_a_backbone_configuration_without_embeddings_is_refused():
     scores_only = UnresolvedConfiguration.model_validate(
         scores_only.model_dump() | {"outputs": [scores_only.model_dump()["outputs"][0]]}
     )
-    backbone = resolve(scores_only, PERCH, None)
+    backbone = resolve_configuration(scores_only, PERCH, AUDIO)
 
-    code = refused_code(
-        lambda: resolve(head_file(configuration_digest(backbone)), HEAD, Backbone(backbone, PERCH))
-    )
+    code = refused_code(lambda: get_embedding_input(backbone, PERCH))
 
     assert code == "backbone_requests_no_embeddings"
 
 
-def other_backbone(**card_changes) -> Backbone:
+def make_other_backbone(**card_changes) -> tuple[Configuration, PinnedModel]:
     """A perch-like backbone model with a changed card, and its configuration."""
     card = PERCH.card.model_copy(update=card_changes)
     model = PERCH.model_copy(update={"card": card})
     file = read_configuration(FIXTURES / "configuration-perch-v8.yaml")
     file = UnresolvedConfiguration.model_validate(file.model_dump() | {"model": model_ref(card).id})
-    return Backbone(resolve(file, model, None), model)
+    return resolve_configuration(file, model, AUDIO), model
 
 
 @pytest.mark.parametrize(
@@ -306,23 +309,26 @@ def other_backbone(**card_changes) -> Backbone:
     ],
 )
 def test_a_backbone_that_is_not_the_heads_is_refused(card_changes):
-    backbone = other_backbone(**card_changes)
+    backbone, model = make_other_backbone(**card_changes)
+    work_input = get_embedding_input(backbone, model)
 
-    code = refused_code(
-        lambda: resolve(head_file(configuration_digest(backbone.configuration)), HEAD, backbone)
-    )
+    file = head_file(get_configuration_digest(backbone))
+
+    code = refused_code(lambda: resolve_configuration(file, HEAD, work_input))
 
     assert code == "head_backbone_disagrees"
 
 
 def test_a_head_of_another_width_than_its_backbone_is_refused():
-    spec, model = other_backbone(embedding_dim=1024)
+    spec, model = make_other_backbone(embedding_dim=1024)
     head = HEAD.model_copy(
         update={"card": HEAD.card.model_copy(update={"backbone": model_ref(model.card)})}
     )
 
     code = refused_code(
-        lambda: resolve(head_file(configuration_digest(spec)), head, Backbone(spec, model))
+        lambda: resolve_configuration(
+            head_file(get_configuration_digest(spec)), head, get_embedding_input(spec, model)
+        )
     )
 
     assert code == "head_backbone_disagrees"
@@ -330,9 +336,11 @@ def test_a_head_of_another_width_than_its_backbone_is_refused():
 
 def test_a_head_with_settings_is_refused():
     backbone = perch_configuration()
-    file = head_file(configuration_digest(backbone), settings={"window_overlap": 1.0})
+    file = head_file(get_configuration_digest(backbone), settings={"window_overlap": 1.0})
 
-    code = refused_code(lambda: resolve(file, HEAD, Backbone(backbone, PERCH)))
+    work_input = get_embedding_input(backbone, PERCH)
+
+    code = refused_code(lambda: resolve_configuration(file, HEAD, work_input))
 
     assert code == "setting_undeclared"
 
@@ -345,12 +353,12 @@ def test_a_head_with_settings_is_refused():
 def valid_configurations():
     backbone = perch_configuration()
     return [
-        (owl_file(), OWL, None),
-        (read_configuration(FIXTURES / "configuration-perch-v8.yaml"), PERCH, None),
+        (owl_file(), OWL, AUDIO),
+        (read_configuration(FIXTURES / "configuration-perch-v8.yaml"), PERCH, AUDIO),
         (
             read_configuration(FIXTURES / "configuration-songbird-head-v1.yaml"),
             HEAD,
-            Backbone(backbone, PERCH),
+            get_embedding_input(backbone, PERCH),
         ),
     ]
 
@@ -358,14 +366,13 @@ def valid_configurations():
 def test_the_head_fixture_names_the_perch_fixture():
     head = read_configuration(FIXTURES / "configuration-songbird-head-v1.yaml")
 
-    assert head.input.backbone_configuration == configuration_digest(perch_configuration())
+    assert head.input.backbone_configuration == get_configuration_digest(perch_configuration())
 
 
 @pytest.mark.parametrize("index", range(3), ids=["owl", "perch", "head"])
 def test_each_valid_configuration_builds_an_inference_work(index):
-    file, model, backbone = valid_configurations()[index]
-    spec = resolve(file, model, backbone)
-    input = work_input(spec.input, backbone)
+    file, model, input = valid_configurations()[index]
+    spec = resolve_configuration(file, model, input)
     embeddings = None
     if input.kind == "embedding_artifact":
         embeddings = {"uri": "s3://b/42.parquet", "checksum": "sha256:" + "0" * 64}

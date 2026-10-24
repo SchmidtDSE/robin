@@ -12,7 +12,7 @@ card:
   score_domain: sigmoid
   taxa_registry_digest: sha256:3333333333333333333333333333333333333333333333333333333333333333
 files:
-  weights:
+  graph:
     uri: s3://robin-models/songbird-head/v1/head.onnx
     digest: sha256:4444444444444444444444444444444444444444444444444444444444444444
     size_bytes: 65536

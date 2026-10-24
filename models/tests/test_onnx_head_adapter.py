@@ -267,8 +267,8 @@ def test_a_context_with_no_registry_is_refused_naming_the_registry_role(runtime,
     ],
 )
 def test_the_batch_size_is_read_from_the_resources(runtime, tmp_path, resources, expected):
-    assert runtime.adapter._read_batch_size(resources) == expected
-    runtime.adapter.build(head_context(tmp_path, resources=resources))
+    model = runtime.adapter.build(head_context(tmp_path, resources=resources))
+    assert model._batch_size == expected
 
 
 @pytest.mark.parametrize("value", [0, -1, True, 256.0, "256"], ids=repr)

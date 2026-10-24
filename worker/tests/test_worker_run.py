@@ -105,6 +105,31 @@ def test_a_model_file_at_the_wrong_digest_fails_the_whole_work(builder):
     assert result.result.failure.stage == "acquire_model"
 
 
+@pytest.mark.parametrize(
+    ("location", "code"),
+    [
+        # The bytes robin-models ships are not the test model's registry.
+        pytest.param("robin-models:owl/v4/taxa_registry.csv", "model_file_digest_mismatch",
+                     id="other_bytes"),
+        pytest.param("robin-models:owl/v9/taxa_registry.csv", "model_file_unavailable",
+                     id="not_shipped"),
+    ],
+)
+def test_a_bundled_registry_this_worker_cannot_match_fails_the_whole_work(
+    builder, location, code
+):
+    builder.files["taxa_registry"] = builder.files["taxa_registry"].model_copy(
+        update={"uri": location}
+    )
+    builder.write()
+
+    exit_code, result = run_and_read(builder)
+
+    assert exit_code == 0
+    assert result.result.outcome == "failure"
+    assert (result.result.failure.stage, result.result.failure.code) == ("acquire_model", code)
+
+
 # ---------------------------------------------------------------------------
 # Refusals before inference.
 # ---------------------------------------------------------------------------

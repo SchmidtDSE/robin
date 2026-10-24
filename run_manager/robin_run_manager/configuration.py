@@ -8,12 +8,12 @@ This module does no database work: the callers look up the models.
 
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Annotated, Literal, NamedTuple, NoReturn
+from typing import Annotated, Literal, NoReturn
 
 from pydantic import BaseModel, Field, ValidationError
 
 from robin_contracts.canonical import sha256_v1
-from robin_contracts.cards import ModelCard, card_digest, model_ref
+from robin_contracts.cards import ModelCard, card_digest
 from robin_contracts.output_contracts import EmbeddingsRequest
 from robin_contracts.request_checks import check_request_for_problem
 from robin_contracts.work import (
@@ -76,13 +76,6 @@ class Configuration(BaseModel, frozen=True, extra="forbid"):
     outputs: OutputRequests
 
 
-class Backbone(NamedTuple):
-    """For a head: the stored backbone configuration that its input names, and its model."""
-
-    configuration: Configuration
-    model: PinnedModel
-
-
 def read_configuration(path: Path) -> UnresolvedConfiguration:
     """Read a configuration file.
 
@@ -93,33 +86,27 @@ def read_configuration(path: Path) -> UnresolvedConfiguration:
     try:
         return UnresolvedConfiguration.model_validate(loaded)
     except ValidationError as error:
-        problems = field_problems(error, "file")
-    raise Refused(
-        INVALID_CONFIGURATION,
-        f"{path} is not a valid configuration.",
-        details={"file": str(path), "problems": problems},
-    )
+        # The details give each problem, so the Pydantic error adds nothing.
+        raise Refused(
+            INVALID_CONFIGURATION,
+            f"{path} is not a valid configuration.",
+            details={"file": str(path), "problems": field_problems(error, "file")},
+        ) from None
 
 
-def resolve(
+def resolve_configuration(
     unresolved: UnresolvedConfiguration,
     model: PinnedModel,
-    backbone: Backbone | None,
+    work_input: AudioInput | EmbeddingArtifactInput,
 ) -> Configuration:
-    """Check `unresolved` against its model, and its backbone for a head, and resolve it.
+    """Check `unresolved` against its model and resolve it.
 
-    `model` is the registered model that `unresolved` names. For a head, `backbone` is the
-    stored configuration that its input names.
+    `model` is the registered model that `unresolved` names. `work_input` is what the
+    engine reads: the audio input as written, or for a head, the input that
+    `get_embedding_input` gives for its backbone.
     Raises `Refused` with `invalid_configuration`.
     """
-    model_id = model_ref(model.card).id
-    if unresolved.model != model_id:
-        raise ValueError(f"the configuration names {unresolved.model}, not {model_id}")
-    if isinstance(unresolved.input, BackboneInput) != (backbone is not None):
-        raise ValueError("give a backbone exactly when the input is a backbone configuration")
-    problem = check_request_for_problem(
-        model, work_input(unresolved.input, backbone), unresolved.settings, unresolved.outputs
-    )
+    problem = check_request_for_problem(model, work_input, unresolved.settings, unresolved.outputs)
     if problem is not None:
         _refuse(problem.code, problem.detail)
     return Configuration(
@@ -137,33 +124,30 @@ def resolve(
     )
 
 
-def work_input(
-    input: AudioInput | BackboneInput,
-    backbone: Backbone | None,
-) -> AudioInput | EmbeddingArtifactInput:
-    """The input of the work: audio, or the embeddings that the backbone configuration saves.
+def get_embedding_input(
+    backbone: Configuration, backbone_model: PinnedModel
+) -> EmbeddingArtifactInput:
+    """The input of a head: the embeddings that its backbone configuration saves.
 
     Raises `Refused` with `invalid_configuration` if the backbone saves no embeddings.
     """
-    if isinstance(input, AudioInput):
-        return input
-    embeddings = next(
-        (o for o in backbone.configuration.outputs if isinstance(o, EmbeddingsRequest)), None
-    )
-    if embeddings is None or not isinstance(backbone.model.card, ModelCard):
+    embeddings = next((o for o in backbone.outputs if isinstance(o, EmbeddingsRequest)), None)
+    if embeddings is None:
         _refuse(
             BACKBONE_REQUESTS_NO_EMBEDDINGS,
-            f"backbone configuration {input.backbone_configuration} requests no embeddings, "
-            "so a head cannot read its output",
+            f"backbone configuration {get_configuration_digest(backbone)} requests no "
+            "embeddings, so a head cannot read its output",
         )
+    # A stored head configuration cannot request embeddings, so this backbone is a model.
+    assert isinstance(backbone_model.card, ModelCard)
     return EmbeddingArtifactInput(
         contract_id=embeddings.contract_id,
-        backbone=backbone.model.card,
-        backbone_settings=backbone.configuration.settings,
+        backbone=backbone_model.card,
+        backbone_settings=backbone.settings,
     )
 
 
-def configuration_digest(configuration: Configuration) -> str:
+def get_configuration_digest(configuration: Configuration) -> str:
     """The identity of a configuration."""
     return sha256_v1(configuration.model_dump(mode="json"))
 

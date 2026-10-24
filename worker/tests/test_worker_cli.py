@@ -7,9 +7,9 @@ import sys
 import time
 
 import pytest
-from robin_adapters.file_provider.local import local_path
 from robin_adapters.location import split_location
 from robin_contracts.canonical import checksum_file
+from robin_contracts.local_files import get_local_path
 from robin_contracts.tasks import InferenceTaskResult, ModelOutputVersion, task_result_problem
 from robin_models.output_versions import OUTPUT_VERSIONS
 
@@ -57,7 +57,7 @@ def test_the_worker_runs_a_task_end_to_end(tmp_path, builder, test_model_site):
     assert result.result.outcome == "completed"
     assert result.robin_release == "test-release"
     assert problem_of(result, task, builder) is None
-    paths = [local_path(artifact.uri) for artifact in result.result.artifacts]
+    paths = [get_local_path(artifact.uri) for artifact in result.result.artifacts]
     assert len(paths) == 2 and all(path.is_file() for path in paths)
 
 

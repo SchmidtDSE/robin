@@ -171,6 +171,9 @@ def test_refusal_reasons_keep_their_published_values():
         "unknown_configuration",
         "invalid_cursor",
         "invalid_configuration",
+        "unknown_preset",
+        "unknown_output_version",
+        "output_version_not_current",
     )
     assert declared == set(errors.REFUSAL_REASONS)
 

@@ -45,11 +45,11 @@ def one_packaged_migration(monkeypatch, tmp_path):
     monkeypatch.setattr(migrations, "packaged_migrations", lambda: packaged)
 
 
-def test_the_schema_folder_holds_the_models_and_presets_migration():
+def test_the_schema_folder_holds_the_release_migrations():
     # Read directly: the fixture above replaces packaged_migrations.
     found = load_migrations(files("robin_run_manager") / "schema")
 
-    assert [migration.name for migration in found] == ["0001_models_and_presets"]
+    assert [migration.name for migration in found] == ["0001_models_and_presets", "0002_runs"]
 
 
 def test_migrate_applies_every_migration_to_an_empty_database(database):

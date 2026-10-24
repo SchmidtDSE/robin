@@ -23,10 +23,18 @@ card:
   embedding_dim: 1280
   embedding_dtype: float32
 files:
-  weights:
-    uri: s3://robin-models/perch/v8/saved_model.tar
+  saved_model:
+    uri: s3://robin-models/perch/v8/saved_model.pb
     digest: sha256:2222222222222222222222222222222222222222222222222222222222222222
     size_bytes: 4194304
+  variables_data:
+    uri: s3://robin-models/perch/v8/variables/variables.data-00000-of-00001
+    digest: sha256:2222222222222222222222222222222222222222222222222222222222222223
+    size_bytes: 4194304
+  variables_index:
+    uri: s3://robin-models/perch/v8/variables/variables.index
+    digest: sha256:2222222222222222222222222222222222222222222222222222222222222224
+    size_bytes: 8192
   taxa_registry:
     uri: s3://robin-models/perch/v8/taxa_registry.csv
     digest: sha256:ca28f370cb5924af9966fee9fcd0a12d57632bba85a01a3f5908f9011ef99fd9

@@ -25,16 +25,12 @@ from pydantic import (
     model_validator,
 )
 
-from robin_run_manager.errors import INVALID_PROFILE, Refused
+from robin_run_manager.errors import INVALID_PROFILE, NotConfigured, Refused
 from robin_run_manager.operator_files import field_problems
 
 SHARED_FILE = "config.yaml"
 _ENVIRONMENT = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 _REFERENCE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
-
-
-class ProfileNotFound(Exception):
-    """The profile folder, the environment, or the environment file is missing."""
 
 
 class DatabaseSettings(BaseModel):
@@ -103,8 +99,17 @@ class PortSettings(BaseModel):
         yield "fields", sorted(self.model_extra or {})
 
 
+class PreparationSettings(BaseModel):
+    """How preparation cuts a run's claimed recordings into tasks."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    # A change applies only to runs that are prepared after it.
+    recordings_per_task: int = Field(default=100, ge=1)
+
+
 class Profile(BaseModel):
-    """One deployment: its database and the adapters that its ports use."""
+    """One deployment: its database, the adapters that its ports use, and its preparation."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -112,6 +117,7 @@ class Profile(BaseModel):
     storage: PortSettings | None = None
     launcher: PortSettings | None = None
     catalogs: dict[Annotated[str, Field(min_length=1)], PortSettings] = Field(default_factory=dict)
+    preparation: PreparationSettings = Field(default_factory=PreparationSettings)
 
     @model_validator(mode="after")
     def _sagemaker_needs_s3(self) -> "Profile":
@@ -127,19 +133,19 @@ class Profile(BaseModel):
 def load_profile(directory: Path, environment: str, environ: Mapping[str, str]) -> Profile:
     """Load the profile in `directory` for `environment`.
 
-    Raise `ProfileNotFound` if the folder, the environment, or its file is missing.
+    Raise `NotConfigured` if the folder, the environment, or its file is missing.
     Raise `Refused` with `invalid_profile` if the files exist but are not a valid profile.
     """
     if _ENVIRONMENT.fullmatch(environment) is None or environment == "config":
-        raise ProfileNotFound(
+        raise NotConfigured(
             f"The environment {environment!r} is not a valid name. Use 1 to 64 "
             "lowercase letters, digits, '_', or '-', and not 'config'."
         )
     if not directory.is_dir():
-        raise ProfileNotFound(f"The profile folder {directory} does not exist.")
+        raise NotConfigured(f"The profile folder {directory} does not exist.")
     environment_file = directory / f"{environment}.yaml"
     if not environment_file.is_file():
-        raise ProfileNotFound(
+        raise NotConfigured(
             f"The profile {directory} has no {environment_file.name} for environment "
             f"{environment!r}."
         )

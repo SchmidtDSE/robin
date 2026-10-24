@@ -93,8 +93,11 @@ def _run(
     _check_output_version(task, versions)
     scratch = Path(tempfile.mkdtemp(prefix="robin-worker-"))
     try:
-        files = storage.TaskFiles(scratch)  # one provider serves both ports
-        return run_work(task.work, model_files=files, inputs=files, artifacts=writer, log=log)
+        files = storage.TaskFiles(scratch)
+        model_files = storage.ModelFiles(files)
+        return run_work(
+            task.work, model_files=model_files, inputs=files, artifacts=writer, log=log
+        )
     finally:
         _remove_scratch(scratch, log=log)
 

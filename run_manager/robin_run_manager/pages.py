@@ -1,8 +1,9 @@
 """Lists in pages: `{"items": [...], "next_cursor": ...}`.
 
-Each list has a fixed order by a unique text key. A cursor holds the last key of a page
-and a scope: a digest of the list's name and filters, so that a cursor cannot be used
-with another list or other filters. The set of rows is not frozen between pages.
+Each list has a fixed order by a unique text key. A key with more than one part is a
+JSON list of strings. A cursor holds the last key of a page and a scope: a digest of
+the list's name and filters, so that a cursor cannot be used with another list or other
+filters. The set of rows is not frozen between pages.
 """
 
 import base64
@@ -41,6 +42,26 @@ class Paging:
     after: str | None
     limit: int
     _scope: str
+
+    def parse_after_key(self, *parsers: Callable[[str], Any]) -> tuple[Any, ...] | None:
+        """The cursor's key, each part read by its parser. Returns None on the first page."""
+        if self.after is None:
+            return None
+        try:
+            parts = json.loads(self.after)
+        except (ValueError, RecursionError):
+            parts = None
+        if (
+            not isinstance(parts, list)
+            or len(parts) != len(parsers)
+            or not all(isinstance(part, str) for part in parts)
+        ):
+            raise Refused(INVALID_CURSOR, "The cursor is not one that Robin made.")
+        try:
+            return tuple(parse(part) for parse, part in zip(parsers, parts))
+        except ValueError:
+            pass
+        raise Refused(INVALID_CURSOR, "The cursor is not one that Robin made.")
 
     def make_page(
         self,

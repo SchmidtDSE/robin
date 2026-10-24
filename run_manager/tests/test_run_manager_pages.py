@@ -8,12 +8,14 @@ import pytest
 
 from robin_run_manager.configuration import read_configuration
 from robin_run_manager.errors import INVALID_CURSOR, INVALID_REQUEST, Refused
-from robin_run_manager.models import list_models, read_registration, register_model
+from robin_run_manager.models import list_models, register_model
 from robin_run_manager.pages import start_page
 from robin_run_manager.presets import create_preset, list_presets
 
+from model_fixtures import read_pinned_model
+
 FIXTURES = Path(__file__).parent / "fixtures"
-OWL = read_registration(FIXTURES / "owl-v4.yaml")
+OWL = read_pinned_model("owl-v4")
 VERSIONS = ("v4", "v5", "v6", "v7", "v8")
 
 
@@ -146,5 +148,47 @@ def test_a_cursor_whose_key_is_not_text_is_an_invalid_cursor(migrated_database, 
 
     with pytest.raises(Refused) as refused:
         list_models(migrated_database, limit=2, cursor=forged)
+
+    assert refused.value.reason == INVALID_CURSOR
+
+
+def make_paging_after(after: str):
+    """A `Paging` for list "x" whose cursor holds `after`."""
+    first = start_page("x", None, 1, {})
+    page = first.make_page([1, 2], key=str, item=lambda row: {})
+    real = json.loads(base64.urlsafe_b64decode(page.next_cursor))
+    forged = base64.urlsafe_b64encode(
+        json.dumps({"after": after, "scope": real["scope"]}).encode()
+    ).decode()
+    return start_page("x", forged, 1, {})
+
+
+def test_parse_after_key_reads_a_key_of_two_parts():
+    paging = make_paging_after(json.dumps(["2026-10-22T09:00:00+00:00", "7"]))
+
+    assert paging.parse_after_key(str, int) == ("2026-10-22T09:00:00+00:00", 7)
+    assert start_page("x", None, 1, {}).parse_after_key(str, int) is None
+
+
+@pytest.mark.parametrize(
+    "after", ["plain text", json.dumps(["one"]), json.dumps(["a", "b", "c"]), json.dumps(["a", 2])]
+)
+def test_parse_after_key_refuses_a_key_that_is_not_a_list(after):
+    with pytest.raises(Refused) as refused:
+        make_paging_after(after).parse_after_key(str, str)
+
+    assert refused.value.reason == INVALID_CURSOR
+
+
+def test_parse_after_key_refuses_a_part_that_its_parser_refuses():
+    with pytest.raises(Refused) as refused:
+        make_paging_after(json.dumps(["a", "not a number"])).parse_after_key(str, int)
+
+    assert refused.value.reason == INVALID_CURSOR
+
+
+def test_parse_after_key_refuses_a_deeply_nested_key():
+    with pytest.raises(Refused) as refused:
+        make_paging_after("[" * 100000).parse_after_key(str, str)
 
     assert refused.value.reason == INVALID_CURSOR

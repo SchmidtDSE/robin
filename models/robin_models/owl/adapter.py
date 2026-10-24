@@ -11,6 +11,12 @@ from robin_contracts.inputs import AudioClip, Input
 from robin_contracts.protocols import JsonScalar, Log, ModelContext
 from robin_contracts.records import ClassScore, WindowOutput
 from robin_contracts.specs import recipe, window_bounds
+from robin_models._adapter_checks import (
+    check_device,
+    get_batch_size,
+    refuse_a_card_the_model_does_not_follow,
+)
+from robin_models.registration import WEIGHTS_ROLE
 
 # Must be set before TensorFlow is imported: the weights are a Keras 2 file.
 os.environ.setdefault("TF_USE_LEGACY_KERAS", "1")
@@ -31,10 +37,9 @@ except ModuleNotFoundError as error:
         name=error.name,
     ) from error
 
+OWNER = "model owl/v4"
 # Batch size changes the scores at float32 rounding level, and nothing else.
 DEFAULT_BATCH_SIZE = 64
-
-DEVICE = "cpu"
 TF_DEVICE = "/CPU:0"
 
 # What OWL does whatever its card says. sox_tensorflow renders at 8 kHz from the first
@@ -55,15 +60,15 @@ BEHAVIOUR = {
 def build(context: ModelContext) -> "OwlModel":
     """Check the card, resources and files, load the weights, and return the model."""
     card = context.card
-    _refuse_a_card_owl_does_not_follow(card)
-    batch_size = _read_batch_size(context.resources)
-    _read_device(context.resources)
+    refuse_a_card_the_model_does_not_follow(card, BEHAVIOUR, OWNER)
+    batch_size = get_batch_size(context.resources, DEFAULT_BATCH_SIZE)
+    check_device(context.resources, OWNER)
     if context.registry is None:
-        raise ValueError("model owl/v4 needs a registry to name its outputs, and got none")
-    weights = context.files.get("weights")
+        raise ValueError(f"{OWNER} needs a registry to name its outputs, and got none")
+    weights = context.files.get(WEIGHTS_ROLE)
     if weights is None:
         raise ValueError(
-            "model owl/v4 needs a file under the role 'weights', "
+            f"{OWNER} needs a file under the role {WEIGHTS_ROLE!r}, "
             f"and got the roles {sorted(context.files)}"
         )
     with tf.device(TF_DEVICE):
@@ -80,13 +85,6 @@ def build(context: ModelContext) -> "OwlModel":
     )
 
 
-def _refuse_a_card_owl_does_not_follow(card: ModelCard) -> None:
-    for field, does in BEHAVIOUR.items():
-        states = getattr(card, field)
-        if states != does:
-            raise ValueError(f"card field {field} is {states!r}, but model owl/v4 does {does!r}")
-
-
 def _refuse_a_spectrogram_shape_the_network_does_not_take(card: ModelCard, network) -> None:
     # The network's input is (batch, height, width, channels).
     takes = tuple(network.input_shape[1:3])
@@ -95,21 +93,6 @@ def _refuse_a_spectrogram_shape_the_network_does_not_take(card: ModelCard, netwo
         raise ValueError(
             f"card field spectrogram_shape is {states!r}, but the loaded network takes {takes!r}"
         )
-
-
-def _read_batch_size(resources: Mapping[str, JsonScalar]) -> int:
-    """The `batch_size` resource, or the default."""
-    size = resources.get("batch_size", DEFAULT_BATCH_SIZE)
-    # bool is an int subclass, and True is a type error, not a batch of one.
-    if type(size) is not int or size < 1:
-        raise ValueError(f"resource batch_size must be a positive int, got {size!r}")
-    return size
-
-
-def _read_device(resources: Mapping[str, JsonScalar]) -> None:
-    device = resources.get("device", DEVICE)
-    if device != DEVICE:
-        raise ValueError(f"model owl/v4 runs only on resource device {DEVICE!r}, got {device!r}")
 
 
 class OwlModel:
@@ -138,31 +121,15 @@ class OwlModel:
     def run(self, input: Input) -> Iterator[WindowOutput]:
         """Render every window's spectrogram, then yield each window's scores in order."""
         if not isinstance(input, AudioClip):
-            raise TypeError(f"model owl/v4 runs on audio, got a {type(input).__name__}")
-        return self._windows(input.path)
+            raise TypeError(f"{OWNER} runs on audio, got a {type(input).__name__}")
+        return self._run_windows(input.path)
 
-    def _windows(self, audio: Path) -> Iterator[WindowOutput]:
-        geometry = self._geometry
-        bounds = window_bounds(sf.info(str(audio)).duration, geometry)
+    def _run_windows(self, path: Path) -> Iterator[WindowOutput]:
+        bounds = window_bounds(sf.info(str(path)).duration, self._geometry)
         # An empty path list would reach TensorFlow as a float32 dataset, which it cannot read.
         if not bounds:
             return
-        # Set before rendering, so after_recording removes a partly rendered recording.
-        self._png_dir = Path(tempfile.mkdtemp(prefix="owl-spectrograms-", dir=self._scratch_dir))
-        self._log(f"rendering {len(bounds)} spectrograms for {audio.name}")
-        paths = []
-        for index, (start, _) in enumerate(bounds):
-            dest = self._png_dir / f"{index}.png"
-            # A render failure raises: skipping the window would leave a hole in the recording.
-            spectrogram_from_flac(
-                str(audio),
-                start_time=start,
-                duration=geometry.window_duration,
-                shape=tuple(self._card.spectrogram_shape),
-                dest=str(dest),
-            )
-            paths.append(str(dest))
-
+        paths = self._render_spectrograms(path, bounds)
         for index, scores in _predict(self._network, paths, self._batch_size):
             start, end = bounds[index]
             # Every label in output order, unfiltered: the engine keeps what was asked
@@ -172,6 +139,27 @@ class OwlModel:
                 for label, score in zip(self._labels, scores, strict=True)
             )
             yield WindowOutput(start=start, end=end, scores=scored)
+
+    def _render_spectrograms(
+        self, path: Path, bounds: Sequence[tuple[float, float]]
+    ) -> list[str]:
+        """Render each window's spectrogram as a PNG file, and return the paths in order."""
+        # Set before rendering, so after_recording removes a partly rendered recording.
+        self._png_dir = Path(tempfile.mkdtemp(prefix="owl-spectrograms-", dir=self._scratch_dir))
+        self._log(f"rendering {len(bounds)} spectrograms for {path.name}")
+        pngs = []
+        for index, (start, _) in enumerate(bounds):
+            dest = self._png_dir / f"{index}.png"
+            # A render failure raises: skipping the window would leave a hole in the recording.
+            spectrogram_from_flac(
+                str(path),
+                start_time=start,
+                duration=self._geometry.window_duration,
+                shape=tuple(self._card.spectrogram_shape),
+                dest=str(dest),
+            )
+            pngs.append(str(dest))
+        return pngs
 
     def after_recording(self) -> None:
         """Remove the recording's spectrograms. The network stays loaded."""

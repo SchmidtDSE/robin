@@ -5,10 +5,12 @@ from pathlib import Path
 
 from robin_contracts.cards import HeadCard, ModelCard
 from robin_contracts.inputs import Embeddings, Input
-from robin_contracts.protocols import JsonScalar, Log, ModelContext
+from robin_contracts.protocols import Log, ModelContext
 from robin_contracts.records import ClassScore, WindowOutput
 from robin_contracts.registry import TaxonRegistry
 from robin_contracts.work import REGISTRY_ROLE
+from robin_models._adapter_checks import check_device, get_batch_size
+from robin_models.registration import GRAPH_ROLE
 
 _RUNTIME_MODULES = ("numpy", "onnxruntime")
 
@@ -25,9 +27,8 @@ except ModuleNotFoundError as error:
     ) from error
 
 RUNTIME = "onnx"
-GRAPH_ROLE = "graph"
+OWNER = "head runtime onnx"
 DEFAULT_BATCH_SIZE = 256
-DEVICE = "cpu"
 PROVIDERS = ["CPUExecutionProvider"]
 FLOAT32 = "tensor(float)"
 
@@ -36,8 +37,8 @@ def build(context: ModelContext) -> "OnnxHead":
     """Check the card, resources and files, load the graph, check it, and return the head."""
     card = context.card
     _refuse_a_card_this_runtime_does_not_run(card)
-    batch_size = _read_batch_size(context.resources)
-    _read_device(context.resources)
+    batch_size = get_batch_size(context.resources, DEFAULT_BATCH_SIZE)
+    check_device(context.resources, OWNER)
     _require_roles(context.files, context.registry)
     session = onnxruntime.InferenceSession(str(context.files[GRAPH_ROLE]), providers=PROVIDERS)
     labels = tuple(entry.label for entry in context.registry.entries)
@@ -65,23 +66,6 @@ def _refuse_a_card_this_runtime_does_not_run(card: ModelCard | HeadCard) -> None
         raise ValueError(
             f"head runtime onnx runs a card whose runtime is {RUNTIME!r}, "
             f"and this card's is {card.runtime!r}"
-        )
-
-
-def _read_batch_size(resources: Mapping[str, JsonScalar]) -> int:
-    """The `batch_size` resource, or the default."""
-    size = resources.get("batch_size", DEFAULT_BATCH_SIZE)
-    # bool is an int subclass, and True is a type error, not a batch of one.
-    if type(size) is not int or size < 1:
-        raise ValueError(f"resource batch_size must be a positive int, got {size!r}")
-    return size
-
-
-def _read_device(resources: Mapping[str, JsonScalar]) -> None:
-    device = resources.get("device", DEVICE)
-    if device != DEVICE:
-        raise ValueError(
-            f"head runtime onnx runs only on resource device {DEVICE!r}, got {device!r}"
         )
 
 

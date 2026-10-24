@@ -30,3 +30,17 @@ def write_profile(folder, database_settings, **changes):
     (folder / "config.yaml").write_text(yaml.safe_dump(sections))
     (folder / "test.yaml").write_text("{}\n")
     return folder
+
+
+def write_owl_files(folder, weights=b"bytes that stand for the weights"):
+    """Write OWL's weights and its bundled registry, and return `models register`'s arguments."""
+    from importlib.resources import files
+
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "weights.h5").write_bytes(weights)
+    registry = files("robin_models.owl") / "resources" / "taxa_registry.csv"
+    (folder / "taxa_registry.csv").write_bytes(registry.read_bytes())
+    return [
+        "--file", f"weights={folder / 'weights.h5'}",
+        "--file", f"taxa_registry={folder / 'taxa_registry.csv'}",
+    ]

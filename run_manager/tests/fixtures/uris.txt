@@ -1,0 +1,3 @@
+/data/survey/site 1/0500.wav
+/data/survey/site 1/0600.wav
+s3://audio/site-2/0500.wav

@@ -21,6 +21,7 @@ import scipy.signal
 import soundfile
 
 import robin_models.perch
+from robin_models import _audio_windows as audio_windows
 from robin_adapters.artifact_writer.local import LocalArtifactWriter
 from robin_adapters.file_provider.local import LocalFileProvider
 from robin_contracts.cards import ModelCard, model_ref, read_card
@@ -312,13 +313,7 @@ def runtime(monkeypatch):
         delattr(robin_models.perch, "adapter")
 
 
-def labels_text(codes=LABELS, header: str | None = "ebird2021", newline: str = "\r\n") -> str:
-    """A labels file as shipped: a header, then one code per line, each line ending in CRLF."""
-    lines = list(codes) if header is None else [header, *codes]
-    return newline.join(lines) + newline
-
-
-def perch_files(tmp_path, labels: str | bytes | None = None) -> dict:
+def perch_files(tmp_path) -> dict:
     """Small stand-ins for the pinned files. The fake TensorFlow reads none of them."""
     paths = {
         "saved_model": tmp_path / "saved_model.pb",
@@ -327,12 +322,9 @@ def perch_files(tmp_path, labels: str | bytes | None = None) -> dict:
     }
     for role, path in paths.items():
         path.write_bytes(role.encode())
-    labels_file = tmp_path / "label.csv"
-    text = labels_text() if labels is None else labels
-    labels_file.write_bytes(text if isinstance(text, bytes) else text.encode("utf-8"))
     registry = tmp_path / "taxa_registry.csv"
     registry.write_bytes((RESOURCES / "taxa_registry.csv").read_bytes())
-    return paths | {"labels": labels_file, "taxa_registry": registry}
+    return paths | {"taxa_registry": registry}
 
 
 def perch_context(tmp_path, **changes) -> ModelContext:
@@ -357,7 +349,7 @@ def without(files: dict, *roles: str) -> dict:
 
 
 def embeddings_only(tmp_path, **changes) -> ModelContext:
-    files = without(perch_files(tmp_path), "labels", "taxa_registry")
+    files = without(perch_files(tmp_path), "taxa_registry")
     return perch_context(tmp_path, files=files, registry=None, **changes)
 
 
@@ -483,15 +475,7 @@ def test_a_missing_savedmodel_file_is_refused_naming_the_role(runtime, tmp_path,
     assert runtime.loads == []
 
 
-def test_with_a_registry_a_missing_labels_file_is_refused_naming_the_role(runtime, tmp_path):
-    files = without(perch_files(tmp_path), "labels")
-    with pytest.raises(ValueError, match="'labels'") as caught:
-        runtime.adapter.build(perch_context(tmp_path, files=files))
-    assert str(sorted(files)) in str(caught.value)
-    assert runtime.loads == []
-
-
-def test_without_a_registry_neither_labels_nor_registry_file_is_needed(runtime, tmp_path):
+def test_without_a_registry_no_registry_file_is_needed(runtime, tmp_path):
     runtime.adapter.build(embeddings_only(tmp_path))
 
 
@@ -594,75 +578,6 @@ def test_without_a_registry_the_label_output_is_not_checked(runtime, tmp_path, s
     else:
         runtime.output_shapes["label"] = shape
     runtime.adapter.build(embeddings_only(tmp_path))
-
-
-# The labels file shipped with the weights.
-
-
-def labels_file_context(tmp_path, labels: str | bytes) -> ModelContext:
-    return perch_context(tmp_path, files=perch_files(tmp_path, labels=labels))
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        pytest.param(labels_text(), id="crlf_as_shipped"),
-        pytest.param(labels_text(newline="\n"), id="lf"),
-        pytest.param(labels_text(newline="\n")[:-1], id="lf_without_a_final_newline"),
-    ],
-)
-def test_a_labels_file_equal_to_the_registry_builds(runtime, tmp_path, text):
-    runtime.adapter.build(labels_file_context(tmp_path, text))
-
-
-@pytest.mark.parametrize(
-    ("header", "first"),
-    [(None, LABELS[0]), ("ebird2022", "ebird2022")],
-    ids=["no_header", "another_header"],
-)
-def test_a_labels_file_without_its_header_is_refused_naming_its_first_line(
-    runtime, tmp_path, header, first
-):
-    with pytest.raises(ValueError, match="ebird2021") as caught:
-        runtime.adapter.build(labels_file_context(tmp_path, labels_text(header=header)))
-    assert repr(first) in str(caught.value)
-
-
-@pytest.mark.parametrize(
-    ("codes", "count"),
-    [(LABELS[:-1], 10931), (LABELS + ("extra1",), 10933)],
-    ids=["one_too_few", "one_too_many"],
-)
-def test_a_labels_file_of_another_length_is_refused(runtime, tmp_path, codes, count):
-    with pytest.raises(ValueError, match="labels") as caught:
-        runtime.adapter.build(labels_file_context(tmp_path, labels_text(codes)))
-    assert str(count) in str(caught.value)
-    assert "10932" in str(caught.value)
-
-
-def test_a_labels_file_in_another_order_is_refused_at_the_first_difference(runtime, tmp_path):
-    codes = list(LABELS)
-    codes[10], codes[11] = codes[11], codes[10]
-    with pytest.raises(ValueError, match="position 10") as caught:
-        runtime.adapter.build(labels_file_context(tmp_path, labels_text(codes)))
-    assert repr(LABELS[10]) in str(caught.value)
-    assert repr(LABELS[11]) in str(caught.value)
-
-
-def test_a_labels_file_with_another_code_is_refused(runtime, tmp_path):
-    codes = list(LABELS)
-    codes[500] = "zzzzzz1"
-    with pytest.raises(ValueError, match="position 500") as caught:
-        runtime.adapter.build(labels_file_context(tmp_path, labels_text(codes)))
-    assert repr(LABELS[500]) in str(caught.value)
-    assert "'zzzzzz1'" in str(caught.value)
-
-
-def test_a_labels_file_that_is_not_utf8_is_refused(runtime, tmp_path):
-    text = labels_text().encode("utf-8") + b"\xff\r\n"
-    with pytest.raises(ValueError, match="UTF-8") as caught:
-        runtime.adapter.build(labels_file_context(tmp_path, text))
-    assert "label.csv" in str(caught.value)
 
 
 def test_a_model_that_fails_to_load_fails_the_build(runtime, tmp_path):
@@ -840,7 +755,7 @@ def float64_sigmoid(x: np.ndarray) -> np.ndarray:
 def test_the_sigmoid_is_within_one_float32_step_and_raises_no_warning(runtime):
     with warnings.catch_warnings(), np.errstate(all="raise"):
         warnings.simplefilter("error")
-        got = runtime.adapter.sigmoid(SEVEN_LOGITS)
+        got = runtime.adapter.get_sigmoid(SEVEN_LOGITS)
     want = float64_sigmoid(SEVEN_LOGITS)
     assert got.dtype == np.float32
     assert not np.isnan(got).any()
@@ -853,7 +768,7 @@ def test_every_score_is_between_0_and_1_on_a_fine_grid(runtime):
     grid = np.linspace(-200, 200, 400_001, dtype=np.float32)
     with warnings.catch_warnings(), np.errstate(all="raise"):
         warnings.simplefilter("error")
-        scores = runtime.adapter.sigmoid(grid)
+        scores = runtime.adapter.get_sigmoid(grid)
     assert scores.dtype == np.float32
     assert ((scores >= 0) & (scores <= 1)).all()
 
@@ -862,7 +777,7 @@ def test_run_gives_the_sigmoid_of_the_logits_exactly(runtime, tmp_path):
     runtime.logits = lambda batch: np.resize(SEVEN_LOGITS, (len(batch), 10932))
     model, _, path = model_and_noise(runtime, tmp_path, WINDOW)
     [window] = run(model, path)
-    expected = runtime.adapter.sigmoid(np.resize(SEVEN_LOGITS, 10932)).tolist()
+    expected = runtime.adapter.get_sigmoid(np.resize(SEVEN_LOGITS, 10932)).tolist()
     assert [score.score for score in window.scores] == expected
 
 
@@ -877,14 +792,14 @@ def test_outputs_are_read_by_name_whatever_their_order(runtime, tmp_path):
     logits = call.returned["label"]._values
     embeddings = call.returned["embedding"]._values
     for window, row, embedding in zip(windows, logits, embeddings, strict=True):
-        assert [s.score for s in window.scores] == runtime.adapter.sigmoid(row).tolist()
+        assert [s.score for s in window.scores] == runtime.adapter.get_sigmoid(row).tolist()
         assert np.array_equal(window.embedding, embedding)
 
 
 def test_every_window_scores_every_label_once_in_registry_order(runtime, tmp_path):
     model, _, path = model_and_noise(runtime, tmp_path, 2 * WINDOW)
     windows = run(model, path)
-    expected = runtime.adapter.sigmoid(fake_logits(rows_given_to(runtime)))
+    expected = runtime.adapter.get_sigmoid(fake_logits(rows_given_to(runtime)))
     for window, scores in zip(windows, expected, strict=True):
         assert tuple(score.label for score in window.scores) == LABELS
         assert all(type(score.score) is float for score in window.scores)
@@ -1028,7 +943,7 @@ class RecordingSoundfile:
 
 def test_run_reads_nothing_until_it_is_iterated(runtime, tmp_path, monkeypatch):
     recorder = RecordingSoundfile()
-    monkeypatch.setattr(runtime.adapter, "sf", recorder)
+    monkeypatch.setattr(audio_windows, "sf", recorder)
     model, _, path = model_and_noise(runtime, tmp_path, WINDOW)
     windows = model.run(AudioClip(path=path))
     assert recorder.called == []
@@ -1040,7 +955,7 @@ def test_run_refuses_an_input_that_is_not_audio_before_reading_anything(
     runtime, tmp_path, monkeypatch
 ):
     recorder = RecordingSoundfile()
-    monkeypatch.setattr(runtime.adapter, "sf", recorder)
+    monkeypatch.setattr(audio_windows, "sf", recorder)
     model = runtime.adapter.build(perch_context(tmp_path))
     embeddings = Embeddings(
         starts=np.array([0.0]),

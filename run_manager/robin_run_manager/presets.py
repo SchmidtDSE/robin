@@ -2,27 +2,11 @@
 
 from dataclasses import dataclass
 
-import psycopg
-from psycopg.types.json import Json
-
-from robin_run_manager.configuration import (
-    Backbone,
-    BackboneInput,
-    Configuration,
-    UnresolvedConfiguration,
-    configuration_digest,
-    resolve,
-)
+from robin_run_manager.configuration import Configuration, UnresolvedConfiguration
 from robin_run_manager.database import Database, transaction
-from robin_run_manager.errors import (
-    INVALID_REQUEST,
-    NOT_FOUND,
-    PRESET_CONFLICT,
-    UNKNOWN_CONFIGURATION,
-    Refused,
-)
-from robin_run_manager.models import stored_model
+from robin_run_manager.errors import INVALID_REQUEST, NOT_FOUND, PRESET_CONFLICT, Refused
 from robin_run_manager.pages import DEFAULT_LIMIT, Page, start_page
+from robin_run_manager.stored_configurations import add_configuration
 
 
 _SELECT = (
@@ -52,17 +36,7 @@ def create_preset(
     if not name.strip():
         raise Refused(INVALID_REQUEST, "A preset name must not be empty.", details={"name": name})
     with transaction(database) as connection:
-        model = stored_model(connection, unresolved.model)
-        backbone = None
-        if isinstance(unresolved.input, BackboneInput):
-            backbone = _stored_configuration(connection, unresolved.input.backbone_configuration)
-        configuration = resolve(unresolved, model, backbone)
-        digest = configuration_digest(configuration)
-        connection.execute(
-            "INSERT INTO configurations (digest, model_id, configuration) VALUES (%s, %s, %s) "
-            "ON CONFLICT (digest) DO NOTHING",
-            (digest, unresolved.model, Json(configuration.model_dump(mode="json"))),
-        )
+        _, digest = add_configuration(connection, unresolved)
         inserted = connection.execute(
             "INSERT INTO presets (name, configuration_digest, created_by) VALUES (%s, %s, %s) "
             "ON CONFLICT (name) DO NOTHING RETURNING name",
@@ -81,23 +55,6 @@ def create_preset(
                 details={"name": name, "configuration_digest": stored},
             )
     return Created(name=name, configuration_digest=digest, created=inserted is not None)
-
-
-def _stored_configuration(connection: psycopg.Connection, digest: str) -> Backbone:
-    row = connection.execute(
-        "SELECT model_id, configuration FROM configurations WHERE digest = %s", (digest,)
-    ).fetchone()
-    if row is None:
-        raise Refused(
-            UNKNOWN_CONFIGURATION,
-            f"No stored configuration has the digest {digest}. Check backbone_configuration "
-            "in the file.",
-            details={"configuration_digest": digest},
-        )
-    return Backbone(
-        configuration=Configuration.model_validate(row["configuration"]),
-        model=stored_model(connection, row["model_id"]),
-    )
 
 
 def list_presets(

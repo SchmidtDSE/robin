@@ -2,7 +2,7 @@
 model: songbird-head/v1
 input:
   kind: embedding_artifact
-  backbone_configuration: "sha256:v1:c4783b5a3627e91c9314cce17603d83ba6782454fb11be4c7821f806374af1c7"
+  backbone_configuration: "sha256:v1:a71af6a010f74d8d068c00d28e6d6468c779636b2f372a480d192b90f44b7373"
 outputs:
   - kind: scores
     contract_id: robin.scores.parquet/1

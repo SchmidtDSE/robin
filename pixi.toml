@@ -26,6 +26,7 @@ moto = { version = ">=5.2.3,<5.3", extras = ["s3"] }
 
 [feature.local.pypi-dependencies]
 robin-contracts = { path = "contracts", editable = true }
+robin-models = { path = "models", editable = true }
 robin-run-manager = { path = "run_manager", editable = true }
 robin-cli = { path = "cli", editable = true }
 

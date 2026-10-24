@@ -154,6 +154,16 @@ def test_other_run_manager_modules_importing_adapters_is_rejected(tmp_path):
     assert violations, "only robin_run_manager.compose may import robin_adapters"
 
 
+def test_run_manager_importing_models_is_accepted(tmp_path):
+    module = _write_module(
+        tmp_path,
+        "robin_run_manager.versions",
+        ["from robin_models.output_versions import OUTPUT_VERSIONS"],
+    )
+    violations = check_file(module, tmp_path)
+    assert not violations, f"robin_run_manager may import robin_models: {violations}"
+
+
 def test_cli_importing_run_manager_is_accepted(tmp_path):
     module = _write_module(
         tmp_path, "robin_cli.main", ["from robin_run_manager.database import open_database"]

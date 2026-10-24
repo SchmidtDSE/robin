@@ -296,14 +296,15 @@ def test_a_built_model_satisfies_the_protocol_and_restates_nothing_from_its_card
         pytest.param({"device": "cpu"}, 64, id="only_the_device"),
     ],
 )
-def test_the_batch_size_is_read_from_the_resources(runtime, resources, expected):
-    assert runtime.adapter._read_batch_size(resources) == expected
+def test_the_batch_size_is_read_from_the_resources(runtime, tmp_path, resources, expected):
+    model = runtime.adapter.build(owl_context(tmp_path, resources=resources))
+    assert model._batch_size == expected
 
 
 @pytest.mark.parametrize("value", [0, -1, True, 1.5, "8", None], ids=repr)
-def test_a_batch_size_that_is_not_a_positive_int_is_refused(runtime, value):
+def test_a_batch_size_that_is_not_a_positive_int_is_refused(runtime, tmp_path, value):
     with pytest.raises(ValueError, match="batch_size") as caught:
-        runtime.adapter._read_batch_size({"batch_size": value})
+        runtime.adapter.build(owl_context(tmp_path, resources={"batch_size": value}))
     assert repr(value) in str(caught.value)
 
 
