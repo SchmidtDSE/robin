@@ -74,9 +74,9 @@ class RecordingOutputs:
         writers = _WindowWriters()
         try:
             if self._scores is not None:
-                writers.add(self._scores_writer(folder, recording))
+                writers.add(self._create_scores_writer(folder, recording))
             if self._embeddings is not None:
-                writers.add(self._embeddings_writer(folder, recording))
+                writers.add(self._create_embeddings_writer(folder, recording))
         except BaseException:
             writers.release()
             raise
@@ -103,14 +103,14 @@ class RecordingOutputs:
             temporary=folder,
         )
 
-    def _scores_writer(self, folder: Path, recording: RecordingRef) -> ScoresWriter:
+    def _create_scores_writer(self, folder: Path, recording: RecordingRef) -> ScoresWriter:
         return ScoresWriter(
             folder / FILE_NAMES["scores"],
             recording=recording,
             metadata=self._header(SCORES_CONTRACT_ID, recording) | self._score_keys(),
         )
 
-    def _embeddings_writer(self, folder: Path, recording: RecordingRef) -> EmbeddingsWriter:
+    def _create_embeddings_writer(self, folder: Path, recording: RecordingRef) -> EmbeddingsWriter:
         # Emitted at the card's embedding_dtype and stored at the recipe's width, which
         # is inside the recipe fingerprint; a request naming a different storage width
         # was refused before inference.

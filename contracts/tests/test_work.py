@@ -17,7 +17,7 @@ from robin_contracts.work import (
     PinnedModel,
     PositiveSeconds,
     RecordingRef,
-    partition,
+    get_recording_batches,
     recording_work_digest,
     work_digest,
 )
@@ -454,20 +454,20 @@ def test_digest_fields_reject_the_wrong_family():
 
 @pytest.mark.parametrize(("count", "batch_size"), [(7, 3), (6, 3), (1, 1), (3, 10)])
 def test_partition_covers_every_index_exactly_once(count, batch_size):
-    batches = partition(count, batch_size)
+    batches = get_recording_batches(count, batch_size)
 
     assert [index for batch in batches for index in batch] == list(range(count))
     assert all(len(batch) <= batch_size for batch in batches)
 
 
 def test_partition_of_nothing_is_no_batches():
-    assert partition(0, 10) == ()
+    assert get_recording_batches(0, 10) == ()
 
 
 @pytest.mark.parametrize("batch_size", [0, -1])
 def test_partition_refuses_a_non_positive_batch_size(batch_size):
     with pytest.raises(ValueError):
-        partition(10, batch_size)
+        get_recording_batches(10, batch_size)
 
     with pytest.raises(ValueError):
-        partition(-1, 10)
+        get_recording_batches(-1, 10)

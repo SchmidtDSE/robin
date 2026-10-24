@@ -188,7 +188,7 @@ def refusal(
     error = caught.value
     assert error.stage == errors.READ_INPUT_ARTIFACT
     assert error.recording == recording
-    assert errors.named(recording) in error.detail
+    assert errors.get_recording_name(recording) in error.detail
     return error
 
 

@@ -34,12 +34,13 @@ from robin_inference_engine.artifacts.metadata import (
 )
 from robin_inference_engine.artifacts.staging import (
     StagedArtifact,
-    invalid_schema,
+    get_single_field,
+    invalid_schema_error,
     open_parquet,
     read_batches,
     require_checksum,
     require_contract,
-    unreadable,
+    unreadable_error,
 )
 
 CONTRACT_ID: EmbeddingsContractId = get_args(EmbeddingsContractId)[0]
@@ -128,7 +129,7 @@ class EmbeddingsWriter:
         if window.embedding is None:
             return
         self._require_declared_width(window)
-        stored = self._narrowed(window)
+        stored = self._narrow(window)
         self._pending["window_start_s"].append(window.start)
         self._pending["window_end_s"].append(window.end)
         self._pending[_EMBEDDING_FIELD].append(stored)
@@ -178,7 +179,7 @@ class EmbeddingsWriter:
                 f"is {window.embedding.size} wide"
             )
 
-    def _narrowed(self, window: AcceptedWindow) -> np.ndarray:
+    def _narrow(self, window: AcceptedWindow) -> np.ndarray:
         """The vector at its stored width, refused if narrowing made it infinite."""
         with np.errstate(over="ignore"):  # detected and refused below
             stored = window.embedding.astype(self._value_dtype)
@@ -241,7 +242,7 @@ def read_embeddings(path: Path, *, expected_checksum: str) -> Iterator[Embedding
         actual = checksum_file(path)
         handle = pa.OSFile(str(path), "rb")
     except OSError as exc:
-        raise unreadable(path.name, exc) from exc
+        raise unreadable_error(path.name, exc) from exc
     with handle:
         require_checksum(path.name, actual=actual, expected=expected_checksum)
         file = open_parquet(handle, path.name)
@@ -280,7 +281,7 @@ def _require_schema(schema: pa.Schema, header: Mapping[str, str]) -> None:
     storage_dtype = _declared_storage_dtype(header)
     for field in embeddings_schema(dim, storage_dtype):
         # Matched by name; additional and reordered columns are accepted.
-        actual = _matching_field(schema, field.name)
+        actual = get_single_field(schema, field.name, contract_id=CONTRACT_ID)
         if actual.nullable != field.nullable:
             raise _invalid_schema(
                 f"{field.name!r} is nullable={actual.nullable}, not "
@@ -291,19 +292,6 @@ def _require_schema(schema: pa.Schema, header: Mapping[str, str]) -> None:
         if field.name == _EMBEDDING_FIELD:
             raise _invalid_schema(_embedding_detail(actual.type, dim, storage_dtype))
         raise _invalid_schema(f"{field.name!r} is {actual.type}, not {field.type}")
-
-
-def _matching_field(schema: pa.Schema, name: str) -> pa.Field:
-    """The one column with this name. Arrow permits a repeat; this contract does not."""
-    positions = schema.get_all_field_indices(name)
-    if not positions:
-        raise _invalid_schema(f"{name!r} is not one of {schema.names}")
-    if len(positions) > 1:
-        # A lookup by a repeated name has no single answer.
-        raise _invalid_schema(
-            f"{name!r} names {len(positions)} of this artifact's columns"
-        )
-    return schema.field(positions[0])
 
 
 def _embedding_detail(actual: pa.DataType, dim: int, storage_dtype: str) -> str:
@@ -345,7 +333,7 @@ def _declared_storage_dtype(header: Mapping[str, str]) -> str:
 
 
 def _invalid_schema(detail: str) -> errors.EngineError:
-    return invalid_schema(f"{CONTRACT_ID} does not accept this schema: {detail}")
+    return invalid_schema_error(f"{CONTRACT_ID} does not accept this schema: {detail}")
 
 
 def _require_writable_header(

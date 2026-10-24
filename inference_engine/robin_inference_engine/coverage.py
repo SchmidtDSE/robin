@@ -37,13 +37,13 @@ class CoverageBuilder:
         """Open the recording at this position in the work, whose windows arrive next."""
         if not 0 <= position < len(self._recordings):
             raise RuntimeError(f"position {position} is not one of this work's recordings")
-        recording = errors.named(self._recordings[position])
+        recording = errors.get_recording_name(self._recordings[position])
         if position in self._begun:
             raise RuntimeError(f"recording {recording} has already been counted")
         if self._open_recording is not None:
             raise RuntimeError(
                 f"cannot begin recording {recording} while recording "
-                f"{errors.named(self._open())} is still open"
+                f"{errors.get_recording_name(self._open())} is still open"
             )
         self._begun.add(position)
         self._open_recording = position
@@ -53,7 +53,7 @@ class CoverageBuilder:
         self._first_start = None
         self._greatest_end = None
 
-    def record(self, window: AcceptedWindow) -> None:
+    def count_window(self, window: AcceptedWindow) -> None:
         """Count one accepted window of the open recording, whether or not it carried anything."""
         if self._open_recording is None:
             raise RuntimeError("no recording is open, so no window can be counted")
@@ -79,7 +79,7 @@ class CoverageBuilder:
             raise RuntimeError("no recording is open to end")
         if self._windows_completed and zero_window_reason is not None:
             raise RuntimeError(
-                f"recording {errors.named(self._open())} completed "
+                f"recording {errors.get_recording_name(self._open())} completed "
                 f"{self._windows_completed} windows "
                 f"but supplied zero-window reason {zero_window_reason!r}"
             )
@@ -87,8 +87,8 @@ class CoverageBuilder:
             raise errors.EngineError(
                 errors.UNEXPLAINED_ZERO_WINDOWS,
                 errors.INFER,
-                f"recording {errors.named(self._open())} completed no window and nothing "
-                "declares why",
+                f"recording {errors.get_recording_name(self._open())} completed no window "
+                "and nothing declares why",
                 recording=self._open(),
             )
         recording = self._recordings[self._open_recording]
@@ -112,7 +112,7 @@ class CoverageBuilder:
         """
         if position not in self._begun:
             raise RuntimeError(
-                f"recording {errors.named(self._recordings[position])} was never begun"
+                f"recording {errors.get_recording_name(self._recordings[position])} was never begun"
             )
         if self._open_recording == position:
             self._open_recording = None
@@ -122,7 +122,7 @@ class CoverageBuilder:
         """The rows of the recordings that ended and were not discarded, in the work's order."""
         if self._open_recording is not None:
             raise RuntimeError(
-                f"recording {errors.named(self._open())} was begun and never ended"
+                f"recording {errors.get_recording_name(self._open())} was begun and never ended"
             )
         return tuple(self._rows[position] for position in sorted(self._rows))
 

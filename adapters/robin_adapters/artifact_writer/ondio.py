@@ -24,7 +24,7 @@ class OndioArtifactWriter:
     """
 
     def __init__(self, root: str, **backend_options: Any) -> None:
-        self._root = _checked_root(root)
+        self._root = _check_output_root(root)
         self._backend_options = backend_options
 
     def create(
@@ -68,7 +68,7 @@ class OndioArtifactWriter:
             )
 
 
-def _checked_root(root: str) -> str:
+def _check_output_root(root: str) -> str:
     """`root` as ondio reads it, with no trailing `/`, or `ValueError` if it is not usable.
 
     A usable root is a remote root that passes the result check's own root rule.

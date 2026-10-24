@@ -5,7 +5,6 @@ spaces is refused.
 """
 
 import codecs
-import hashlib
 import json
 import re
 from pathlib import Path, PurePosixPath
@@ -14,6 +13,7 @@ from urllib.parse import unquote, urlsplit
 
 from pydantic import BaseModel, ValidationError
 
+from robin_contracts.canonical import checksum_bytes
 from robin_contracts.work import NonEmptyText, PositiveSeconds
 from robin_run_manager.errors import INVALID_REQUEST, Refused
 from robin_run_manager.operator_files import field_problems
@@ -256,7 +256,7 @@ def _build_recording_file(
         recordings=tuple(recording for _, recording in numbered),
         observed={
             "input": input,
-            "file_sha256": f"sha256:{hashlib.sha256(data).hexdigest()}",
+            "file_sha256": checksum_bytes(data),
             "file_size_bytes": len(data),
             **observed,
         },

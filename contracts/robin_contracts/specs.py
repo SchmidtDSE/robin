@@ -32,7 +32,7 @@ class WindowGeometry(BaseModel, frozen=True):
     pad: PadPolicy
 
     @model_validator(mode="after")
-    def _windows_advance(self) -> "WindowGeometry":
+    def _check_windows_advance(self) -> "WindowGeometry":
         refuse_windows_that_do_not_advance(self.window_duration, self.window_overlap)
         return self
 
@@ -43,7 +43,7 @@ class WindowGeometry(BaseModel, frozen=True):
 
 
 class AudioSpec(BaseModel, frozen=True):
-    """Everything that changes what a window IS."""
+    """The audio settings that decide which samples each window holds."""
     sample_rate: int
     window_duration: float = Field(gt=0, allow_inf_nan=False)
     window_overlap: float = Field(ge=0, allow_inf_nan=False)
@@ -52,7 +52,7 @@ class AudioSpec(BaseModel, frozen=True):
     pad: PadPolicy
 
     @model_validator(mode="after")
-    def _windows_advance(self) -> "AudioSpec":
+    def _check_windows_advance(self) -> "AudioSpec":
         refuse_windows_that_do_not_advance(self.window_duration, self.window_overlap)
         return self
 
@@ -66,7 +66,7 @@ class AudioSpec(BaseModel, frozen=True):
 
 
 class Recipe(BaseModel, frozen=True):
-    """Everything that changes what an output MEANS."""
+    """Every setting that can change the values an output holds. Its digest is `id`."""
     version: int = 1
     model: ModelRef
     backend: str

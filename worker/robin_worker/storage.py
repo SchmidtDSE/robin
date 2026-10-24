@@ -19,6 +19,9 @@ from robin_contracts.local_files import get_local_path
 from robin_contracts.ports import ArtifactWriter, FileProvider
 from robin_models import registration
 
+# The locations the worker can read and write, as messages describe them.
+LOCATION_FORMS = "an absolute local path, a local file:// URI, or an s3:// URI"
+
 
 def has_location(uri: str) -> bool:
     """Whether the worker can read or write `uri`."""
@@ -28,7 +31,7 @@ def has_location(uri: str) -> bool:
 def read_bytes(uri: str) -> bytes:
     if _is_local(uri):
         return get_local_path(uri).read_bytes()
-    return ondio.read(_supported(uri))
+    return ondio.read(_check_supported(uri))
 
 
 def create(uri: str, data: bytes) -> None:
@@ -43,7 +46,7 @@ def create(uri: str, data: bytes) -> None:
             raise FileNotFoundError(f"the folder {path.parent} does not exist")
         uri = str(path)
     try:
-        ondio.create(_supported(uri), data)
+        ondio.create(_check_supported(uri), data)
     except ondio.ObjectExistsError as exc:
         raise FileExistsError(f"{uri} already exists") from exc
 
@@ -51,7 +54,7 @@ def create(uri: str, data: bytes) -> None:
 def artifact_writer(output_root: str) -> ArtifactWriter:
     if _is_local(output_root):
         return LocalArtifactWriter(get_local_path(output_root))
-    return OndioArtifactWriter(_supported(output_root))
+    return OndioArtifactWriter(_check_supported(output_root))
 
 
 class TaskFiles:
@@ -68,7 +71,7 @@ class TaskFiles:
         self._held: dict[Path, tuple[FileProvider, int]] = {}
 
     def fetch(self, uri: str) -> Path:
-        provider = self._provider_for(uri)
+        provider = self._select_provider(uri)
         path = provider.fetch(uri)
         _, count = self._held.get(path, (provider, 0))
         self._held[path] = (provider, count + 1)
@@ -82,10 +85,10 @@ class TaskFiles:
             self._held[path] = (provider, count - 1)
         provider.release(path)
 
-    def _provider_for(self, uri: str) -> FileProvider:
+    def _select_provider(self, uri: str) -> FileProvider:
         if _is_local(uri):
             return self._local
-        _supported(uri)
+        _check_supported(uri)
         if self._remote is None:
             self._remote = OndioFileProvider(self._scratch)
         return self._remote
@@ -123,9 +126,7 @@ def _is_local(uri: str) -> bool:
     return place is not None and place[0] == LOCAL_STORE
 
 
-def _supported(uri: str) -> str:
+def _check_supported(uri: str) -> str:
     if split_location(uri) is None:
-        raise ValueError(
-            f"{uri!r} is not an absolute local path, a local file:// URI, or an s3:// URI"
-        )
+        raise ValueError(f"{uri!r} is not {LOCATION_FORMS}")
     return uri

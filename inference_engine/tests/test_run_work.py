@@ -1560,7 +1560,7 @@ def test_an_engine_defect_during_a_recording_is_raised_after_cleanup(rig, monkey
     def defect(self, window):
         raise RuntimeError("the engine contradicted itself")
 
-    monkeypatch.setattr(CoverageBuilder, "record", defect)
+    monkeypatch.setattr(CoverageBuilder, "count_window", defect)
     work = rig.work(recordings=2)
 
     with pytest.raises(RuntimeError, match="contradicted itself"):

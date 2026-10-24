@@ -49,6 +49,13 @@ def run_windows(
             yield from run_batch(batch_bounds, batch)
 
 
+def mix_down(frames: np.ndarray) -> np.ndarray:
+    """One channel as it is, or more averaged in float32."""
+    if frames.shape[1] == 1:
+        return frames[:, 0]
+    return np.mean(frames, axis=1, dtype=np.float32)
+
+
 def refuse_unusable_logits(
     logits: np.ndarray, bounds: Bounds, labels: Sequence[str], owner: str
 ) -> None:

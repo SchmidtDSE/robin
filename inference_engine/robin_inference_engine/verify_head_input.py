@@ -95,13 +95,13 @@ def read_head_input(
     """
     checksum = recording.embeddings.checksum
     with ExitStack() as files:
-        stream = _attributed(
+        stream = _read_for_recording(
             lambda: files.enter_context(read_embeddings(path, expected_checksum=checksum)),
             recording,
         )
         verify_head_input(stream.metadata, card, recording, recipe_fingerprint)
-        batches = _attributed(lambda: list(stream.batches), recording)
-    return _rows(batches, card.embedding_dim)
+        batches = _read_for_recording(lambda: list(stream.batches), recording)
+    return _copy_rows(batches, card.embedding_dim)
 
 
 def _require(
@@ -117,13 +117,13 @@ def _require(
         raise errors.EngineError(
             code,
             errors.READ_INPUT_ARTIFACT,
-            f"the embeddings file of recording {errors.named(recording)} declares {key} "
-            f"{declared!r}, but {source} {expected!r}",
+            f"the embeddings file of recording {errors.get_recording_name(recording)} "
+            f"declares {key} {declared!r}, but {source} {expected!r}",
             recording=recording,
         )
 
 
-def _attributed(read: Callable[[], T], recording: RecordingRef) -> T:
+def _read_for_recording(read: Callable[[], T], recording: RecordingRef) -> T:
     """`read()`, with a failure the reader reports attributed to `recording`."""
     try:
         return read()
@@ -131,12 +131,13 @@ def _attributed(read: Callable[[], T], recording: RecordingRef) -> T:
         raise errors.EngineError(
             error.code,
             error.stage,
-            f"the embeddings file of recording {errors.named(recording)}: {error.detail}",
+            f"the embeddings file of recording {errors.get_recording_name(recording)}: "
+            f"{error.detail}",
             recording=recording,
         ) from error
 
 
-def _rows(batches: list[pa.RecordBatch], dim: int) -> Embeddings:
+def _copy_rows(batches: list[pa.RecordBatch], dim: int) -> Embeddings:
     """Every row in order, copied into arrays the engine owns."""
     count = sum(batch.num_rows for batch in batches)
     starts = np.empty(count, dtype=np.float64)

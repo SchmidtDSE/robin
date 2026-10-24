@@ -96,28 +96,28 @@ def _problems(
     # on what an earlier one established.
     card = model.card
 
-    yield _an_input_the_card_does_not_read(input, card)
+    yield _find_input_mismatch(input, card)
     if isinstance(card, HeadCard):
         assert isinstance(input, EmbeddingArtifactInput)
-        yield _a_backbone_the_head_does_not_read(input.backbone, card)
-        yield _settings_the_card_does_not_declare(input.backbone_settings, input.backbone)
-        yield _an_overlap_that_does_not_let_windows_advance(
+        yield _find_backbone_mismatch(input.backbone, card)
+        yield _find_undeclared_settings(input.backbone_settings, input.backbone)
+        yield _find_stalled_overlap(
             input.backbone_settings, input.backbone
         )
-        yield _embeddings_from_a_head(outputs, card)
-    yield _embeddings_the_card_forbids(outputs, card)
-    yield _unlabelled_scores(model, outputs)
-    yield _a_registry_the_card_does_not_pin(model, card)
-    yield _settings_the_card_does_not_declare(settings, card)
-    yield _an_overlap_that_does_not_let_windows_advance(settings, card)
+        yield _find_embeddings_from_head(outputs, card)
+    yield _find_forbidden_embeddings(outputs, card)
+    yield _find_unlabelled_scores(model, outputs)
+    yield _find_registry_mismatch(model, card)
+    yield _find_undeclared_settings(settings, card)
+    yield _find_stalled_overlap(settings, card)
     scores = _requested(outputs, ScoresRequest)
     if scores is not None:
-        yield _scores_the_card_does_not_emit(card)
-        yield _a_full_request_from_a_thresholded_stream(scores, card)
-    yield _a_floor_outside_the_score_domain(outputs)
+        yield _find_unavailable_scores(card)
+        yield _find_full_scores_from_thresholded(scores, card)
+    yield _find_floor_outside_domain(outputs)
     if scores is not None:
-        yield _a_floor_below_the_models_own(scores, card)
-    yield _a_storage_width_the_card_does_not_declare(outputs, card)
+        yield _find_floor_below_model(scores, card)
+    yield _find_undeclared_storage_width(outputs, card)
 
 
 def _requested(outputs: Sequence[OutputRequest], kind: type[_Request]) -> _Request | None:
@@ -128,7 +128,7 @@ def _card_id(card: ModelCard | HeadCard) -> str:
     return f"{card.model_name}/{card.model_version}"
 
 
-def _an_input_the_card_does_not_read(
+def _find_input_mismatch(
     input: AudioInput | EmbeddingArtifactInput, card: ModelCard | HeadCard
 ) -> RequestProblem | None:
     # A head reads the embeddings its backbone saved; a backbone reads audio.
@@ -142,7 +142,7 @@ def _an_input_the_card_does_not_read(
     )
 
 
-def _a_backbone_the_head_does_not_read(
+def _find_backbone_mismatch(
     backbone: ModelCard, head: HeadCard
 ) -> RequestProblem | None:
     mismatch = backbone_mismatch(head, backbone)
@@ -151,7 +151,7 @@ def _a_backbone_the_head_does_not_read(
     return RequestProblem(HEAD_BACKBONE_DISAGREES, mismatch)
 
 
-def _embeddings_from_a_head(
+def _find_embeddings_from_head(
     outputs: Sequence[OutputRequest], head: HeadCard
 ) -> RequestProblem | None:
     if _requested(outputs, EmbeddingsRequest) is None:
@@ -163,7 +163,7 @@ def _embeddings_from_a_head(
     )
 
 
-def _embeddings_the_card_forbids(
+def _find_forbidden_embeddings(
     outputs: Sequence[OutputRequest], card: ModelCard | HeadCard
 ) -> RequestProblem | None:
     if _requested(outputs, EmbeddingsRequest) is None or not isinstance(card, ModelCard):
@@ -177,7 +177,7 @@ def _embeddings_the_card_forbids(
     )
 
 
-def _unlabelled_scores(
+def _find_unlabelled_scores(
     model: PinnedModel, outputs: Sequence[OutputRequest]
 ) -> RequestProblem | None:
     if _requested(outputs, ScoresRequest) is None or REGISTRY_ROLE in model.files:
@@ -189,7 +189,7 @@ def _unlabelled_scores(
     )
 
 
-def _a_registry_the_card_does_not_pin(
+def _find_registry_mismatch(
     model: PinnedModel, card: ModelCard | HeadCard
 ) -> RequestProblem | None:
     pinned = model.files.get(REGISTRY_ROLE)
@@ -204,7 +204,7 @@ def _a_registry_the_card_does_not_pin(
     )
 
 
-def _settings_the_card_does_not_declare(
+def _find_undeclared_settings(
     settings: Mapping[str, JsonScalar], card: ModelCard | HeadCard
 ) -> RequestProblem | None:
     # A head card declares no settings.
@@ -226,7 +226,7 @@ def _settings_the_card_does_not_declare(
     return None
 
 
-def _an_overlap_that_does_not_let_windows_advance(
+def _find_stalled_overlap(
     settings: Mapping[str, JsonScalar], card: ModelCard | HeadCard
 ) -> RequestProblem | None:
     # The checks above leave a float here only when a backbone card declares the setting.
@@ -240,7 +240,7 @@ def _an_overlap_that_does_not_let_windows_advance(
     )
 
 
-def _scores_the_card_does_not_emit(card: ModelCard | HeadCard) -> RequestProblem | None:
+def _find_unavailable_scores(card: ModelCard | HeadCard) -> RequestProblem | None:
     if card.score_domain is not None:
         return None
     return RequestProblem(
@@ -250,7 +250,7 @@ def _scores_the_card_does_not_emit(card: ModelCard | HeadCard) -> RequestProblem
     )
 
 
-def _a_full_request_from_a_thresholded_stream(
+def _find_full_scores_from_thresholded(
     scores: ScoresRequest, card: ModelCard | HeadCard
 ) -> RequestProblem | None:
     # A floor at or below the domain minimum excludes nothing, so such a model emits
@@ -267,7 +267,7 @@ def _a_full_request_from_a_thresholded_stream(
     )
 
 
-def _a_floor_below_the_models_own(
+def _find_floor_below_model(
     scores: ScoresRequest, card: ModelCard | HeadCard
 ) -> RequestProblem | None:
     """The scores between the two floors were never produced, so no floor can be below it."""
@@ -290,7 +290,7 @@ def _declared_floors(outputs: Sequence[OutputRequest]) -> Iterator[tuple[str, fl
         yield "the detection policy", detections.policy.min_score
 
 
-def _a_floor_outside_the_score_domain(
+def _find_floor_outside_domain(
     outputs: Sequence[OutputRequest],
 ) -> RequestProblem | None:
     # A floor exists only beside a scores request, whose card was checked to emit
@@ -306,7 +306,7 @@ def _a_floor_outside_the_score_domain(
     return None
 
 
-def _a_storage_width_the_card_does_not_declare(
+def _find_undeclared_storage_width(
     outputs: Sequence[OutputRequest], card: ModelCard | HeadCard
 ) -> RequestProblem | None:
     # A head request for embeddings was refused above, so a request here is a

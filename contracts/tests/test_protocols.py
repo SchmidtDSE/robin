@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from robin_contracts.cards import ModelCard
-from robin_contracts.protocols import Model, ModelContext, ScoreRetention, noop
+from robin_contracts.protocols import Model, ModelContext, ScoreRetention, discard_log_line
 from robin_contracts.records import WindowOutput
 
 REGISTRY_DIGEST = "sha256:" + "a" * 64
@@ -79,11 +79,11 @@ def test_an_adapter_missing_run_does_not_satisfy_the_protocol():
 
 
 def test_noop_accepts_a_line_and_returns_none():
-    assert noop("a line the caller wanted discarded") is None
+    assert discard_log_line("a line the caller wanted discarded") is None
 
 
 def test_model_context_logs_nowhere_by_default():
-    assert build_context().log is noop
+    assert build_context().log is discard_log_line
 
 
 def test_model_context_holds_every_pinned_file_by_role():

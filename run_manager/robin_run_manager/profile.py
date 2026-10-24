@@ -58,7 +58,7 @@ class DatabaseSettings(BaseModel):
 
     @field_validator("sslrootcert", mode="before")
     @classmethod
-    def _sslrootcert_is_absolute(cls, value: Any) -> Any:
+    def _check_sslrootcert(cls, value: Any) -> Any:
         # Checked before FilePath, which would read a relative path from the current
         # folder and not from the profile folder.
         if isinstance(value, (str, Path)) and not Path(value).is_absolute():
@@ -66,7 +66,7 @@ class DatabaseSettings(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def _login_fields_agree(self) -> "DatabaseSettings":
+    def _check_login_fields(self) -> "DatabaseSettings":
         if self.auth == "password":
             if self.password is None:
                 raise ValueError("auth: password needs a password")
@@ -80,7 +80,7 @@ class DatabaseSettings(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _pool_sizes_agree(self) -> "DatabaseSettings":
+    def _check_pool_sizes(self) -> "DatabaseSettings":
         if self.pool_min_size > self.pool_max_size:
             raise ValueError("pool_min_size must not be more than pool_max_size")
         return self
@@ -120,7 +120,7 @@ class Profile(BaseModel):
     preparation: PreparationSettings = Field(default_factory=PreparationSettings)
 
     @model_validator(mode="after")
-    def _sagemaker_needs_s3(self) -> "Profile":
+    def _check_sagemaker_storage(self) -> "Profile":
         if self.launcher is not None and self.launcher.kind == "sagemaker":
             if self.storage is None or self.storage.kind != "s3":
                 raise ValueError(

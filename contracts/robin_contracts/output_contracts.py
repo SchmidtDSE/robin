@@ -16,13 +16,13 @@ TaskContractId = Literal["robin.inference-task/1"]
 TaskResultContractId = Literal["robin.inference-task-result/1"]
 
 
-def _finite(value: float) -> float:
+def _check_finite(value: float) -> float:
     if not math.isfinite(value):
         raise ValueError("a score floor must be finite")
     return value
 
 
-_FiniteFloor = Annotated[float, AfterValidator(_finite)]
+_FiniteFloor = Annotated[float, AfterValidator(_check_finite)]
 
 
 class ThresholdPolicy(BaseModel, frozen=True, extra="forbid"):
@@ -53,7 +53,7 @@ class ScoresRequest(BaseModel, frozen=True, extra="forbid"):
     top_k: Annotated[int, Field(gt=0)] | None = None
 
     @model_validator(mode="after")
-    def _retention_carries_its_own_parameters(self) -> "ScoresRequest":
+    def _check_retention_parameters(self) -> "ScoresRequest":
         # A full request carrying either parameter is rejected rather than ignored:
         # accepting it silently is how a request that meant thresholded is published
         # as full.

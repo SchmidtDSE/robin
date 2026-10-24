@@ -32,6 +32,7 @@ except ModuleNotFoundError as error:
 from robin_models._audio_windows import (
     Bounds,
     get_window_outputs,
+    mix_down,
     refuse_unusable_logits,
     run_windows,
 )
@@ -181,7 +182,8 @@ class BirdnetModel:
 
     def _read_window(self, audio: "sf.SoundFile", start: float, end: float) -> "np.ndarray":
         """The window mixed down and resampled, and not longer than the network takes."""
-        window = _mix_down(_read_frames(audio, start, end))
+        # mix_down averages channels as birdnet 0.2.12's convert_to_mono does.
+        window = mix_down(_read_frames(audio, start, end))
         window = _resample_window(window, audio.samplerate, self._rate, start)
         if len(window) > self._width:
             raise ValueError(
@@ -230,13 +232,6 @@ def _read_frames(audio: "sf.SoundFile", start: float, end: float) -> "np.ndarray
     return audio.read(
         min(round((end - start) * rate), audio.frames - first), dtype="float32", always_2d=True
     )
-
-
-def _mix_down(frames: "np.ndarray") -> "np.ndarray":
-    """One channel as it is, or more averaged in float32, as birdnet 0.2.12's convert_to_mono."""
-    if frames.shape[1] == 1:
-        return frames[:, 0]
-    return np.mean(frames, axis=1, dtype=np.float32)
 
 
 def _resample_window(

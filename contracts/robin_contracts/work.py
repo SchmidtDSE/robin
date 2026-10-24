@@ -21,31 +21,31 @@ from robin_contracts.output_contracts import (
 from robin_contracts.protocols import JsonScalar
 
 
-def _bytes_digest(value: str) -> str:
+def _check_bytes_digest(value: str) -> str:
     if not is_sha256_bytes(value):
         raise ValueError(f"expected 'sha256:' and 64 hex characters, got {value!r}")
     return value
 
 
-def _canonical_digest(value: str) -> str:
+def _check_canonical_digest(value: str) -> str:
     if not is_sha256_v1(value):
         raise ValueError(f"expected 'sha256:v1:' and 64 hex characters, got {value!r}")
     return value
 
 
-def _non_empty(value: str) -> str:
+def _check_non_empty(value: str) -> str:
     if not value:
         raise ValueError("this field must be non-empty")
     return value
 
 
-def _positive_duration(value: float) -> float:
+def _check_duration(value: float) -> float:
     if not math.isfinite(value) or value <= 0:
         raise ValueError(f"a duration must be finite and positive, got {value}")
     return value
 
 
-def _finite_values(value: Mapping[str, JsonScalar]) -> Mapping[str, JsonScalar]:
+def _check_finite_values(value: Mapping[str, JsonScalar]) -> Mapping[str, JsonScalar]:
     # Without this a caller can build a work whose own work_digest raises.
     for key, item in value.items():
         if isinstance(item, float) and not math.isfinite(item):
@@ -53,7 +53,7 @@ def _finite_values(value: Mapping[str, JsonScalar]) -> Mapping[str, JsonScalar]:
     return value
 
 
-def _one_per_kind_and_satisfiable(
+def _check_output_requests(
     outputs: tuple[OutputRequest, ...],
 ) -> tuple[OutputRequest, ...]:
     if not outputs:
@@ -66,15 +66,15 @@ def _one_per_kind_and_satisfiable(
     return outputs
 
 
-BytesDigest = Annotated[str, AfterValidator(_bytes_digest)]
-CanonicalDigest = Annotated[str, AfterValidator(_canonical_digest)]
-NonEmptyText = Annotated[str, AfterValidator(_non_empty)]
+BytesDigest = Annotated[str, AfterValidator(_check_bytes_digest)]
+CanonicalDigest = Annotated[str, AfterValidator(_check_canonical_digest)]
+NonEmptyText = Annotated[str, AfterValidator(_check_non_empty)]
 # A duration in seconds: finite and greater than zero.
-PositiveSeconds = Annotated[float, AfterValidator(_positive_duration)]
+PositiveSeconds = Annotated[float, AfterValidator(_check_duration)]
 # Values by name, each with a canonical encoding: settings and resources.
-FiniteScalarMap = Annotated[Mapping[str, JsonScalar], AfterValidator(_finite_values)]
+FiniteScalarMap = Annotated[Mapping[str, JsonScalar], AfterValidator(_check_finite_values)]
 OutputRequests = Annotated[
-    tuple[OutputRequest, ...], AfterValidator(_one_per_kind_and_satisfiable)
+    tuple[OutputRequest, ...], AfterValidator(_check_output_requests)
 ]
 
 
@@ -157,7 +157,7 @@ class InferenceWork(BaseModel, frozen=True, extra="forbid"):
     outputs: OutputRequests
 
     @model_validator(mode="after")
-    def _recordings_are_identified_once_each(self) -> "InferenceWork":
+    def _check_unique_recordings(self) -> "InferenceWork":
         if not self.recordings:
             raise ValueError("a work must name at least one recording")
         identities = [(recording.namespace, recording.value) for recording in self.recordings]
@@ -166,7 +166,7 @@ class InferenceWork(BaseModel, frozen=True, extra="forbid"):
         return self
 
     @model_validator(mode="after")
-    def _recordings_name_an_embeddings_file_exactly_when_the_input_is_embeddings(
+    def _check_embeddings_files(
         self,
     ) -> "InferenceWork":
         over_embeddings = self.input.kind == "embedding_artifact"
@@ -207,7 +207,7 @@ def recording_work_digest(work: InferenceWork, recording: RecordingRef) -> str:
     return work_digest(work.model_copy(update={"recordings": (recording,)}))
 
 
-def partition(count: int, batch_size: int) -> tuple[tuple[int, ...], ...]:
+def get_recording_batches(count: int, batch_size: int) -> tuple[tuple[int, ...], ...]:
     """Dense, ordered batches of recording positions covering every position exactly once."""
     if batch_size <= 0:
         raise ValueError(f"batch_size must be positive, got {batch_size}")

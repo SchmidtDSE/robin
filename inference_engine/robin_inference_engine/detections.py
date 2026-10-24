@@ -159,7 +159,7 @@ def write_detections(
             recipe_fingerprint=recipe.id,
         )
     except errors.EngineError as error:
-        raise _at_aggregate(error, recording) from error
+        raise _aggregate_error(error, recording) from error
     if not rows:
         path.unlink()
         return None
@@ -199,15 +199,16 @@ def _select_and_write(
                 selected = connection.execute(sql, parameters).to_arrow_reader(
                     DUCKDB_BATCH_ROWS
                 )
-                with_ids = (_with_ids(batch, identity) for batch in selected)
+                with_ids = (_add_ids(batch, identity) for batch in selected)
                 return _write_parquet(path, with_ids, metadata)
         except duckdb.Error as exc:
             source.raise_recorded()
             raise errors.EngineError(
                 errors.AGGREGATION_FAILED,
                 errors.AGGREGATE,
-                f"selecting the detections of recording {errors.named(scores.recording)} "
-                f"raised {type(exc).__name__}: {exc}",
+                f"selecting the detections of recording "
+                f"{errors.get_recording_name(scores.recording)} raised "
+                f"{type(exc).__name__}: {exc}",
                 recording=scores.recording,
             ) from exc
 
@@ -228,14 +229,14 @@ class _CheckedScores:
         self._raised: BaseException | None = None
 
     def reader(self) -> pa.RecordBatchReader:
-        return pa.RecordBatchReader.from_batches(SCORES_SCHEMA, self._checked())
+        return pa.RecordBatchReader.from_batches(SCORES_SCHEMA, self._check_batches())
 
     def raise_recorded(self) -> None:
         """Raise the exception the stream raised, if it raised one."""
         if self._raised is not None:
             raise self._raised from None
 
-    def _checked(self) -> Iterator[pa.RecordBatch]:
+    def _check_batches(self) -> Iterator[pa.RecordBatch]:
         try:
             for batch in self._batches:
                 columns = batch.select(SCORES_SCHEMA.names)
@@ -256,7 +257,7 @@ class _CheckedScores:
             raise errors.EngineError(
                 errors.UNMATCHED_LABELS,
                 errors.AGGREGATE,
-                f"recording {errors.named(self._recording)} scored label "
+                f"recording {errors.get_recording_name(self._recording)} scored label "
                 f"{unmatched[0].as_py()!r}, which the registry does not declare",
                 recording=self._recording,
             )
@@ -274,7 +275,7 @@ def _recording_identity(
     }
 
 
-def _with_ids(batch: pa.RecordBatch, identity: Mapping[str, str]) -> pa.RecordBatch:
+def _add_ids(batch: pa.RecordBatch, identity: Mapping[str, str]) -> pa.RecordBatch:
     """`batch` with its `detection_id` column added in front."""
     # Hashed in Python, because canonical JSON writes each float as Python's `repr` does.
     ids = [
@@ -315,6 +316,6 @@ def _write_parquet(
     return written
 
 
-def _at_aggregate(error: errors.EngineError, recording: RecordingRef) -> errors.EngineError:
+def _aggregate_error(error: errors.EngineError, recording: RecordingRef) -> errors.EngineError:
     """The same failure, reported at the aggregate stage with the same code."""
     return errors.EngineError(error.code, errors.AGGREGATE, error.detail, recording=recording)

@@ -34,7 +34,7 @@ from robin_contracts.protocols import (
     Model,
     ModelContext,
     ScoreRetention,
-    noop,
+    discard_log_line,
 )
 from robin_contracts.records import ClassScore, WindowOutput
 from robin_contracts.registry import RegistryEntry, TaxonRegistry
@@ -82,7 +82,7 @@ from robin_contracts.work import (
     PinnedFile,
     PinnedModel,
     RecordingRef,
-    partition,
+    get_recording_batches,
     recording_work_digest,
     work_digest,
 )
@@ -147,10 +147,10 @@ __all__ = [
     "backbone_mismatch",
     "canonical_json_bytes",
     "check_request_for_problem",
-    "noop",
+    "discard_log_line",
+    "get_recording_batches",
     "output_root_problem",
     "output_version_id",
-    "partition",
     "read_card",
     "recipe",
     "recording_work_digest",

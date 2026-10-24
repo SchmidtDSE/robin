@@ -1,21 +1,18 @@
 """A finished artifact file, and the checksum a reader is held to."""
 
 import dataclasses
-import hashlib
 
 import pytest
 
-from robin_contracts.canonical import checksum_file
 from robin_contracts.work import RecordingRef
 from robin_inference_engine import errors
 from robin_inference_engine.artifacts.staging import (
     StagedArtifact,
-    checksum_bytes,
-    invalid_schema,
-    malformed,
+    invalid_schema_error,
+    malformed_error,
     require_checksum,
     require_contract,
-    unreadable,
+    unreadable_error,
 )
 
 FIELDS = {"kind", "contract_id", "recording", "path", "checksum", "rows"}
@@ -32,15 +29,6 @@ def build_staged(tmp_path) -> StagedArtifact:
         checksum="sha256:" + "0" * 64,
         rows=3,
     )
-
-
-def test_bytes_in_memory_and_the_same_bytes_on_disk_check_out_the_same(tmp_path):
-    path = tmp_path / "artifact.bin"
-    payload = b"what a writer produced, and what a reader finds on disk"
-    path.write_bytes(payload)
-
-    assert checksum_bytes(payload) == checksum_file(path)
-    assert checksum_bytes(payload) == "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
 def test_a_checksum_that_matches_is_accepted():
@@ -72,12 +60,12 @@ def test_any_other_declared_contract_is_refused():
 def test_a_readers_failures_name_their_code_and_the_stage_that_raised_them():
     gone = FileNotFoundError("no such file")
 
-    assert malformed("x").code == errors.ARTIFACT_MALFORMED
-    assert invalid_schema("x").code == errors.ARTIFACT_SCHEMA_INVALID
-    assert unreadable("artifact.bin", gone).code == errors.ARTIFACT_UNREADABLE
-    assert malformed("x").stage == errors.READ_INPUT_ARTIFACT
-    assert invalid_schema("x").stage == errors.READ_INPUT_ARTIFACT
-    assert unreadable("artifact.bin", gone).stage == errors.READ_INPUT_ARTIFACT
+    assert malformed_error("x").code == errors.ARTIFACT_MALFORMED
+    assert invalid_schema_error("x").code == errors.ARTIFACT_SCHEMA_INVALID
+    assert unreadable_error("artifact.bin", gone).code == errors.ARTIFACT_UNREADABLE
+    assert malformed_error("x").stage == errors.READ_INPUT_ARTIFACT
+    assert invalid_schema_error("x").stage == errors.READ_INPUT_ARTIFACT
+    assert unreadable_error("artifact.bin", gone).stage == errors.READ_INPUT_ARTIFACT
 
 
 def test_a_staged_artifact_carries_no_uri_and_no_size(tmp_path):

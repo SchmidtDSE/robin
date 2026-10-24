@@ -29,7 +29,7 @@ def output_version_id(card: ModelCard | HeadCard) -> str:
     return f"model:{model_ref(card).id}"
 
 
-def _an_output_version_id(value: str) -> str:
+def _check_output_version_id(value: str) -> str:
     for prefix in _OUTPUT_VERSION_PREFIXES:
         if value.startswith(prefix) and len(value) > len(prefix):
             return value
@@ -44,7 +44,7 @@ class ModelOutputVersion(BaseModel, frozen=True, extra="forbid"):
     The version increases when the outputs of that code change.
     """
 
-    model: Annotated[str, AfterValidator(_an_output_version_id)]
+    model: Annotated[str, AfterValidator(_check_output_version_id)]
     version: Annotated[int, Field(strict=True, ge=1)]
 
 
@@ -116,7 +116,7 @@ class InferenceTaskResult(BaseModel, frozen=True, extra="forbid"):
     ]
 
     @model_validator(mode="after")
-    def _finishes_after_it_starts(self) -> "InferenceTaskResult":
+    def _check_finish_time(self) -> "InferenceTaskResult":
         if self.finished_at < self.started_at:
             raise ValueError(
                 f"finished_at {self.finished_at} is before started_at {self.started_at}"
@@ -124,16 +124,16 @@ class InferenceTaskResult(BaseModel, frozen=True, extra="forbid"):
         return self
 
     @model_validator(mode="after")
-    def _binds_to_its_task_whenever_it_can(self) -> "InferenceTaskResult":
-        if self.work_file_digest is None and not self._before(_UNREAD_REFUSALS):
+    def _check_task_binding(self) -> "InferenceTaskResult":
+        if self.work_file_digest is None and not self._is_binding_optional(_UNREAD_REFUSALS):
             raise ValueError(
                 "a worker that read the work file reports its work_file_digest"
             )
-        if self.task_id is None and not self._before(_UNPARSED_REFUSALS):
+        if self.task_id is None and not self._is_binding_optional(_UNPARSED_REFUSALS):
             raise ValueError("a worker that parsed the work file reports its task_id")
         return self
 
-    def _before(self, refusals: frozenset[str]) -> bool:
+    def _is_binding_optional(self, refusals: frozenset[str]) -> bool:
         # A worker error can happen at any point, so it may lack either value.
         outcome = self.result
         if isinstance(outcome, WorkerError):

@@ -1,4 +1,4 @@
-"""The one gate every window an adapter yields passes through."""
+"""The checks on each window an adapter yields. The engine accepts no window without them."""
 
 import math
 from collections.abc import Sequence
@@ -74,8 +74,8 @@ class AcceptanceBoundary:
             raise RuntimeError(f"position {position} is not one of this work's recordings")
         if position in self._processed:
             raise RuntimeError(
-                f"recording {errors.named(self._recordings[position])} at position {position} "
-                "was already processed"
+                f"recording {errors.get_recording_name(self._recordings[position])} at "
+                f"position {position} was already processed"
             )
         self._processed.add(position)
         self._open_recording = position
@@ -101,8 +101,9 @@ class AcceptanceBoundary:
             raise errors.EngineError(
                 errors.HEAD_WINDOWS_DISAGREE_WITH_INPUT,
                 errors.ACCEPT_WINDOW,
-                f"recording {errors.named(self._open())} returned {self._accepted} windows "
-                f"for an input of {len(starts)} rows; none was returned for the row "
+                f"recording {errors.get_recording_name(self._open())} returned "
+                f"{self._accepted} windows for an input of {len(starts)} rows; none was "
+                f"returned for the row "
                 f"starting at {missing}",
                 recording=self._open(),
                 window_start_s=missing,
@@ -183,7 +184,7 @@ class AcceptanceBoundary:
             raise self._refuse(
                 errors.DUPLICATE_WINDOW,
                 window,
-                f"recording {errors.named(self._open())} already produced a window at "
+                f"recording {errors.get_recording_name(self._open())} already produced a window at "
                 f"{window.start}",
             )
         raise self._refuse(

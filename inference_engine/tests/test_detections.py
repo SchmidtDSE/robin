@@ -40,7 +40,7 @@ from robin_inference_engine.artifacts.metadata import (
     score_metadata,
 )
 from robin_inference_engine.artifacts.scores import ScoresStream, ScoresWriter
-from robin_inference_engine.artifacts.staging import StagedArtifact, malformed
+from robin_inference_engine.artifacts.staging import StagedArtifact, malformed_error
 from robin_inference_engine.detections import (
     DETECTIONS_SCHEMA,
     build_detections_sql,
@@ -563,7 +563,9 @@ def test_a_batch_the_reader_refuses_keeps_the_readers_code(tmp_path, monkeypatch
     recording = a_recording()
     work = a_work(recording)
     staged = stage_scores(tmp_path, work, recording, many_windows_then({"STVA": 0.9}))
-    failing_after_one_batch(monkeypatch, malformed("scores.parquet has an unreadable batch"))
+    failing_after_one_batch(
+        monkeypatch, malformed_error("scores.parquet has an unreadable batch")
+    )
 
     error = refused(lambda: detect(tmp_path, work, staged))
 

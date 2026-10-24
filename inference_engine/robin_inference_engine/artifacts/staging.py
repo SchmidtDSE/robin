@@ -1,6 +1,5 @@
 """A finished artifact file, and the checks every reader holds one to."""
 
-import hashlib
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,21 +29,21 @@ class StagedArtifact:
     rows: int
 
 
-def malformed(detail: str) -> errors.EngineError:
+def malformed_error(detail: str) -> errors.EngineError:
     """Bytes that cannot be read as this contract's container at all."""
     return errors.EngineError(
         errors.ARTIFACT_MALFORMED, errors.READ_INPUT_ARTIFACT, detail
     )
 
 
-def invalid_schema(detail: str) -> errors.EngineError:
+def invalid_schema_error(detail: str) -> errors.EngineError:
     """Bytes that are read, but do not match what the contract declares."""
     return errors.EngineError(
         errors.ARTIFACT_SCHEMA_INVALID, errors.READ_INPUT_ARTIFACT, detail
     )
 
 
-def unreadable(name: str, exc: OSError) -> errors.EngineError:
+def unreadable_error(name: str, exc: OSError) -> errors.EngineError:
     """A file this reader could not open or read at all."""
     return errors.EngineError(
         errors.ARTIFACT_UNREADABLE,
@@ -53,13 +52,30 @@ def unreadable(name: str, exc: OSError) -> errors.EngineError:
     )
 
 
+def get_single_field(schema: pa.Schema, name: str, *, contract_id: str) -> pa.Field:
+    """The one field of `schema` called `name`, or an invalid-schema error.
+
+    Arrow permits a repeated field name, and a lookup by that name then has no single
+    answer, so a repeated name is refused rather than read from whichever column comes
+    first.
+    """
+    positions = schema.get_all_field_indices(name)
+    if not positions:
+        problem = f"{name!r} is not one of {schema.names}"
+    elif len(positions) > 1:
+        problem = f"{name!r} names {len(positions)} of this artifact's columns"
+    else:
+        return schema.field(positions[0])
+    raise invalid_schema_error(f"{contract_id} does not accept this schema: {problem}")
+
+
 def open_parquet(handle: pa.NativeFile, name: str) -> pq.ParquetFile:
     """Open a Parquet file, refusing bytes that are not one."""
     try:
         return pq.ParquetFile(handle)
     # pyarrow raises OSError for a footer that does not decode.
     except (pa.ArrowInvalid, OSError) as exc:
-        raise malformed(f"{name} does not open as Parquet: {exc}") from exc
+        raise malformed_error(f"{name} does not open as Parquet: {exc}") from exc
 
 
 def read_batches(
@@ -74,7 +90,7 @@ def read_batches(
         except StopIteration:
             return
         except (pa.ArrowInvalid, OSError) as exc:
-            raise malformed(f"{name} has an unreadable Parquet row group: {exc}") from exc
+            raise malformed_error(f"{name} has an unreadable Parquet row group: {exc}") from exc
         _refuse_a_null(batch, name)
         yield batch
 
@@ -84,7 +100,7 @@ def _refuse_a_null(batch: pa.RecordBatch, name: str) -> None:
     # means the file breaks its own schema.
     for field, column in zip(batch.schema, batch.columns):
         if not field.nullable and column.null_count:
-            raise malformed(
+            raise malformed_error(
                 f"{name} has {column.null_count} null values in {field.name!r}, "
                 f"which its schema declares not nullable"
             )
@@ -112,8 +128,3 @@ def require_contract(declared: object, *, expected: ArtifactContractId) -> None:
             errors.READ_INPUT_ARTIFACT,
             f"expected contract {expected} but the artifact declares {declared!r}",
         )
-
-
-def checksum_bytes(payload: bytes) -> str:
-    """The `sha256:` checksum of bytes already in memory."""
-    return "sha256:" + hashlib.sha256(payload).hexdigest()

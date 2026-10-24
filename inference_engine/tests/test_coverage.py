@@ -133,7 +133,7 @@ def cover(recordings, detection_rows=0, **per_recording):
     builder = CoverageBuilder(recordings)
     for position, recording in enumerate(recordings):
         builder.begin_recording(position)
-        builder.record(build_window(recording=recording, **per_recording))
+        builder.count_window(build_window(recording=recording, **per_recording))
         builder.end_recording(detection_rows=detection_rows)
     return builder.build()
 
@@ -186,7 +186,7 @@ def test_a_completed_result_with_no_recording_is_refused():
 def test_begin_recording_refuses_to_discard_unfinished_coverage():
     builder = CoverageBuilder(TWO)
     builder.begin_recording(0)
-    builder.record(build_window())
+    builder.count_window(build_window())
 
     with pytest.raises(RuntimeError):
         builder.begin_recording(1)
@@ -228,7 +228,7 @@ def test_a_recording_with_no_windows_needs_a_reason():
 def test_a_completed_window_is_counted_even_with_no_scores():
     builder = CoverageBuilder(ONE)
     builder.begin_recording(0)
-    builder.record(build_window(scores=()))
+    builder.count_window(build_window(scores=()))
     builder.end_recording()
     (row,) = builder.build()
 
@@ -241,8 +241,8 @@ def test_a_completed_window_is_counted_even_with_no_scores():
 def test_score_rows_count_every_accepted_score():
     builder = CoverageBuilder(ONE)
     builder.begin_recording(0)
-    builder.record(build_window(scores=(ClassScore("gull", 0.9), ClassScore("tern", 0.1))))
-    builder.record(build_window(start=3.0, end=6.0, scores=(ClassScore("gull", 0.4),)))
+    builder.count_window(build_window(scores=(ClassScore("gull", 0.9), ClassScore("tern", 0.1))))
+    builder.count_window(build_window(start=3.0, end=6.0, scores=(ClassScore("gull", 0.4),)))
     builder.end_recording()
     (row,) = builder.build()
 
@@ -253,8 +253,8 @@ def test_score_rows_count_every_accepted_score():
 def test_embedding_rows_count_only_the_windows_carrying_one():
     builder = CoverageBuilder(ONE)
     builder.begin_recording(0)
-    builder.record(build_window(embedding=np.zeros(4, dtype=np.float32)))
-    builder.record(build_window(start=3.0, end=6.0))
+    builder.count_window(build_window(embedding=np.zeros(4, dtype=np.float32)))
+    builder.count_window(build_window(start=3.0, end=6.0))
     builder.end_recording()
     (row,) = builder.build()
 
@@ -265,10 +265,10 @@ def test_embedding_rows_count_only_the_windows_carrying_one():
 def test_detection_rows_are_the_count_passed_when_the_recording_ends():
     builder = CoverageBuilder(TWO)
     builder.begin_recording(0)
-    builder.record(build_window(scores=(ClassScore("gull", 0.9), ClassScore("tern", 0.1))))
+    builder.count_window(build_window(scores=(ClassScore("gull", 0.9), ClassScore("tern", 0.1))))
     builder.end_recording(detection_rows=2)
     builder.begin_recording(1)
-    builder.record(build_window(recording=TWO[1]))
+    builder.count_window(build_window(recording=TWO[1]))
     builder.end_recording()
     counted, defaulted = builder.build()
 
@@ -279,9 +279,9 @@ def test_detection_rows_are_the_count_passed_when_the_recording_ends():
 def test_bounds_span_the_first_start_and_the_greatest_end():
     builder = CoverageBuilder(ONE)
     builder.begin_recording(0)
-    builder.record(build_window(start=0.0, end=5.0))
-    builder.record(build_window(start=3.0, end=8.0))
-    builder.record(build_window(start=6.0, end=7.0))
+    builder.count_window(build_window(start=0.0, end=5.0))
+    builder.count_window(build_window(start=3.0, end=8.0))
+    builder.count_window(build_window(start=6.0, end=7.0))
     builder.end_recording()
     (row,) = builder.build()
 
@@ -294,7 +294,7 @@ def test_rows_are_built_in_work_order_whatever_the_processing_order():
     builder = CoverageBuilder(recordings)
     for position in (2, 0, 1):
         builder.begin_recording(position)
-        builder.record(build_window())
+        builder.count_window(build_window())
         builder.end_recording()
 
     assert [(row.namespace, row.value) for row in builder.build()] == [
@@ -312,7 +312,7 @@ def test_a_recording_is_begun_once():
     builder = CoverageBuilder(ONE)
 
     builder.begin_recording(0)
-    builder.record(build_window())
+    builder.count_window(build_window())
     builder.end_recording()
 
     with pytest.raises(RuntimeError):
@@ -322,7 +322,7 @@ def test_a_recording_is_begun_once():
 def test_build_refuses_a_recording_left_open():
     left_open = CoverageBuilder(ONE)
     left_open.begin_recording(0)
-    left_open.record(build_window())
+    left_open.count_window(build_window())
 
     with pytest.raises(RuntimeError, match="never ended"):
         left_open.build()
@@ -331,11 +331,11 @@ def test_build_refuses_a_recording_left_open():
 def test_a_discarded_open_recording_has_no_row_and_the_next_one_can_begin():
     builder = CoverageBuilder(TWO)
     builder.begin_recording(0)
-    builder.record(build_window())
+    builder.count_window(build_window())
 
     builder.discard(0)
     builder.begin_recording(1)
-    builder.record(build_window())
+    builder.count_window(build_window())
     builder.end_recording()
 
     assert [row.value for row in builder.build()] == [TWO[1].value]
@@ -345,7 +345,7 @@ def test_a_discarded_ended_recording_loses_its_row():
     builder = CoverageBuilder(TWO)
     for position in (0, 1):
         builder.begin_recording(position)
-        builder.record(build_window())
+        builder.count_window(build_window())
         builder.end_recording()
 
     builder.discard(0)
@@ -370,7 +370,7 @@ def test_only_a_begun_recording_can_be_discarded():
 def test_a_reason_on_a_completed_recording_is_a_defect():
     builder = CoverageBuilder(ONE)
     builder.begin_recording(0)
-    builder.record(build_window())
+    builder.count_window(build_window())
 
     with pytest.raises(RuntimeError, match="supplied zero-window reason.*shorter_than_window"):
         builder.end_recording(zero_window_reason="shorter_than_window")
@@ -380,14 +380,14 @@ def test_a_window_with_no_recording_open_is_a_defect():
     builder = CoverageBuilder(ONE)
 
     with pytest.raises(RuntimeError):
-        builder.record(build_window())
+        builder.count_window(build_window())
 
     builder.begin_recording(0)
-    builder.record(build_window())
+    builder.count_window(build_window())
     builder.end_recording()
 
     with pytest.raises(RuntimeError):
-        builder.record(build_window(start=3.0, end=6.0))
+        builder.count_window(build_window(start=3.0, end=6.0))
 
 
 # --- check_completion_evidence ----------------------------------------------

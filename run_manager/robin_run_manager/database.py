@@ -61,13 +61,13 @@ def open_database(settings: DatabaseSettings, *, make_token: TokenMaker | None =
     if make_token is None and settings.auth == "rds_iam":
         make_token = rds.token_maker(settings)
 
-    def kwargs() -> dict[str, Any]:
+    def get_kwargs() -> dict[str, Any]:
         # Called for each new connection, so each gets a new token.
         return _connection_kwargs(settings, make_token)
 
-    _check_login(kwargs())
+    _check_login(get_kwargs())
     pool = ConnectionPool(
-        kwargs=kwargs,
+        kwargs=get_kwargs,
         min_size=settings.pool_min_size,
         max_size=settings.pool_max_size,
         timeout=settings.pool_timeout_s,

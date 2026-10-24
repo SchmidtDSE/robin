@@ -131,9 +131,9 @@ class OnnxHead:
         """Score the recording's vectors a batch at a time, yielding each window in order."""
         if not isinstance(input, Embeddings):
             raise TypeError(f"head runtime onnx runs on embeddings, got a {type(input).__name__}")
-        return self._windows(input)
+        return self._infer_windows(input)
 
-    def _windows(self, embeddings: Embeddings) -> Iterator[WindowOutput]:
+    def _infer_windows(self, embeddings: Embeddings) -> Iterator[WindowOutput]:
         values = embeddings.values
         self._log(f"running {len(values)} windows of embeddings")
         for first in range(0, len(values), self._batch_size):
@@ -144,9 +144,9 @@ class OnnxHead:
             ends = embeddings.ends[first : first + len(batch)].tolist()
             _refuse_scores_that_do_not_fit(scores, starts, self._labels)
             for start, end, row in zip(starts, ends, scores.tolist(), strict=True):
-                yield WindowOutput(start=start, end=end, scores=self._scored(row))
+                yield WindowOutput(start=start, end=end, scores=self._get_class_scores(row))
 
-    def _scored(self, scores: list[float]) -> tuple[ClassScore, ...]:
+    def _get_class_scores(self, scores: list[float]) -> tuple[ClassScore, ...]:
         return tuple(
             ClassScore(label=label, score=score)
             for label, score in zip(self._labels, scores, strict=True)

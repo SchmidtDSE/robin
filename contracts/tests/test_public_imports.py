@@ -52,7 +52,7 @@ def test_protocol_reexports_are_importable():
         Model,
         ModelContext,
         ScoreRetention,
-        noop,
+        discard_log_line,
     )
 
     assert JsonScalar is not None
@@ -60,7 +60,7 @@ def test_protocol_reexports_are_importable():
     assert Model is not None
     assert ModelContext is not None
     assert ScoreRetention is not None
-    assert noop is not None
+    assert discard_log_line is not None
 
 
 def test_output_contract_reexports_are_importable():
@@ -92,7 +92,7 @@ def test_work_reexports_are_importable():
         PinnedFile,
         PinnedModel,
         RecordingRef,
-        partition,
+        get_recording_batches,
         recording_work_digest,
         work_digest,
     )
@@ -104,7 +104,7 @@ def test_work_reexports_are_importable():
     assert PinnedFile is not None
     assert PinnedModel is not None
     assert RecordingRef is not None
-    assert partition is not None
+    assert get_recording_batches is not None
     assert recording_work_digest is not None
     assert work_digest is not None
 

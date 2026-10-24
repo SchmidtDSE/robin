@@ -21,7 +21,7 @@ from robin_contracts.cards import HeadCard, model_ref
 from robin_contracts.inputs import AudioClip, Input
 from robin_contracts.output_contracts import ResultContractId
 from robin_contracts.ports import ArtifactWriter, FileProvider
-from robin_contracts.protocols import Log, Model, ModelContext, noop
+from robin_contracts.protocols import Log, Model, ModelContext, discard_log_line
 from robin_contracts.records import WindowOutput
 from robin_contracts.registry import TaxonRegistry
 from robin_contracts.results import (
@@ -80,7 +80,7 @@ def run_work(
     model_files: FileProvider,
     inputs: FileProvider,
     artifacts: ArtifactWriter,
-    log: Log = noop,
+    log: Log = discard_log_line,
 ) -> InferenceResult:
     """Run every recording in `work` and return what was produced, or why it stopped."""
     run = _Run(
@@ -94,7 +94,7 @@ def run_work(
     try:
         return _run(run)
     except errors.EngineError as error:
-        return _failure(run.digest, error)
+        return _get_failure_result(run.digest, error)
 
 
 def _report(error: errors.EngineError) -> FailureReport:
@@ -106,7 +106,7 @@ def _report(error: errors.EngineError) -> FailureReport:
     )
 
 
-def _failure(digest: str, error: errors.EngineError) -> InferenceFailure:
+def _get_failure_result(digest: str, error: errors.EngineError) -> InferenceFailure:
     return InferenceFailure(
         schema_version=RESULT_CONTRACT_ID, work_digest=digest, failure=_report(error)
     )
@@ -130,7 +130,7 @@ def _run(run: _Run) -> InferenceResult:
         fetched: list[Path] = []
         # After clean_up, because the adapter may hold the files open until then.
         with _cleanup_on_exit(
-            lambda: [_releasing_model_file(run.model_files, path) for path in fetched],
+            lambda: [_get_model_file_release_step(run.model_files, path) for path in fetched],
             log=run.log,
         ):
             return _run_model(run, fetched=fetched, root=Path(temporary.name))
@@ -145,7 +145,7 @@ def _run_model(run: _Run, *, fetched: list[Path], root: Path) -> InferenceResult
     # A head's windows are its backbone's, so a head work's recipe is its backbone's.
     # The refusals leave a head work only with an input naming that backbone's card.
     card = work.model.card
-    stated = (
+    resolved_recipe = (
         recipe(work.input.backbone, work.input.backbone_settings)
         if isinstance(card, HeadCard)
         else recipe(card, work.settings)
@@ -171,7 +171,7 @@ def _run_model(run: _Run, *, fetched: list[Path], root: Path) -> InferenceResult
     with _cleanup_on_exit(lambda: [("clean_up", model.clean_up)], log=run.log):
         staging = root / "staging"
         staging.mkdir()
-        return _infer(run, model=model, recipe=stated, registry=registry, staging=staging)
+        return _infer(run, model=model, recipe=resolved_recipe, registry=registry, staging=staging)
 
 
 def _infer(
@@ -210,8 +210,11 @@ def _infer(
         except errors.EngineError as error:
             coverage.discard(position)
             failed.append(_recording_failed(recording, error))
-            run.log(f"recording {errors.named(recording)} failed at {error.stage}: {error.code}")
-    return _completed(
+            run.log(
+                f"recording {errors.get_recording_name(recording)} failed at "
+                f"{error.stage}: {error.code}"
+            )
+    return _get_completed_result(
         run,
         recipe=recipe,
         outputs=outputs,
@@ -221,7 +224,7 @@ def _infer(
     )
 
 
-def _completed(
+def _get_completed_result(
     run: _Run,
     *,
     recipe: Recipe,
@@ -272,20 +275,22 @@ def _run_recording(
     path: Path | None = None
     windows: Iterator[WindowOutput] | None = None
     with _cleanup_on_exit(
-        lambda: _recording_cleanup(model, run.inputs, recording, path=path, windows=windows),
+        lambda: _get_recording_cleanup_steps(
+            model, run.inputs, recording, path=path, windows=windows
+        ),
         log=run.log,
     ):
         path = _fetch_input(run.inputs, recording)
-        given = _recording_input(run.work, recording, path, boundary, recipe.id)
-        with _writing_locally(recording):
+        model_input = _prepare_recording_input(run.work, recording, path, boundary, recipe.id)
+        with _report_local_write_errors(recording):
             with outputs.open_window_writers(position, recording) as writers:
-                windows = _start(model, recording, given)
+                windows = _start(model, recording, model_input)
                 accepted = 0
-                for window in _each(windows, recording):
+                for window in _iterate_adapter_windows(windows, recording):
                     kept = boundary.accept(window)
                     if requested is not None:
                         kept = replace(kept, scores=retain_scores(kept.scores, requested))
-                    coverage.record(kept)
+                    coverage.count_window(kept)
                     writers.write(kept)
                     accepted += 1
                 boundary.end_recording()
@@ -302,11 +307,11 @@ def _run_recording(
         # Publishing starts only after every file is staged, so a failure while staging
         # publishes none of this recording's files.
         records = tuple(_publish(run.artifacts, one) for one in staged)
-        run.log(f"recording {errors.named(recording)}: {accepted} windows accepted")
+        run.log(f"recording {errors.get_recording_name(recording)}: {accepted} windows accepted")
         return records
 
 
-def _recording_cleanup(
+def _get_recording_cleanup_steps(
     model: Model,
     inputs: FileProvider,
     recording: RecordingRef,
@@ -315,7 +320,7 @@ def _recording_cleanup(
     windows: Iterator[WindowOutput] | None,
 ) -> list["_CleanupStep"]:
     """The model's hook runs before the input is released: it may still hold the file."""
-    name = errors.named(recording)
+    name = errors.get_recording_name(recording)
     steps: list[_CleanupStep] = []
     # Close the run first: the adapter may keep files open until it is closed.
     close = getattr(windows, "close", None)
@@ -327,7 +332,7 @@ def _recording_cleanup(
     return steps
 
 
-def _recording_input(
+def _prepare_recording_input(
     work: InferenceWork,
     recording: RecordingRef,
     path: Path,
@@ -367,7 +372,7 @@ def _zero_window_reason(
 
 
 @contextmanager
-def _writing_locally(recording: RecordingRef) -> Iterator[None]:
+def _report_local_write_errors(recording: RecordingRef) -> Iterator[None]:
     """Report an `OSError` while staging this recording's files as that recording's failure.
 
     Only the writers can raise one here: the adapter's calls and the input reads already
@@ -379,8 +384,8 @@ def _writing_locally(recording: RecordingRef) -> Iterator[None]:
         raise errors.EngineError(
             errors.ARTIFACT_WRITE_FAILED,
             errors.WRITE_ARTIFACT,
-            f"writing the files of recording {errors.named(recording)} on local disk raised "
-            f"{type(exc).__name__}: {exc}",
+            f"writing the files of recording {errors.get_recording_name(recording)} on "
+            f"local disk raised {type(exc).__name__}: {exc}",
             recording=recording,
         ) from exc
 
@@ -401,7 +406,7 @@ def _publish(artifacts: ArtifactWriter, staged: StagedArtifact) -> ArtifactRecor
             errors.ARTIFACT_PUBLICATION_FAILED,
             errors.WRITE_ARTIFACT,
             f"publishing the {staged.kind} artifact of recording "
-            f"{errors.named(staged.recording)} raised {type(exc).__name__}: {exc}",
+            f"{errors.get_recording_name(staged.recording)} raised {type(exc).__name__}: {exc}",
             recording=staged.recording,
         ) from exc
 
@@ -427,7 +432,9 @@ def _start(model: Model, recording: RecordingRef, given: Input) -> Iterator[Wind
         raise _run_failure(recording, exc) from exc
 
 
-def _each(windows: Iterator[WindowOutput], recording: RecordingRef) -> Iterator[WindowOutput]:
+def _iterate_adapter_windows(
+    windows: Iterator[WindowOutput], recording: RecordingRef
+) -> Iterator[WindowOutput]:
     """The adapter's windows, with only what the adapter raises reported as its failure."""
     while True:
         try:
@@ -443,7 +450,8 @@ def _run_failure(recording: RecordingRef, exc: Exception) -> errors.EngineError:
     return errors.EngineError(
         errors.MODEL_RUN_FAILED,
         errors.INFER,
-        f"the model raised {type(exc).__name__} on recording {errors.named(recording)}: {exc}",
+        f"the model raised {type(exc).__name__} on recording "
+        f"{errors.get_recording_name(recording)}: {exc}",
         recording=recording,
     )
 
@@ -467,7 +475,7 @@ def _fetch_model_files(
         try:
             path = model_files.fetch(pinned.uri)
         except Exception as exc:
-            raise _model_file_failure(
+            raise _model_file_error(
                 errors.MODEL_FILE_UNAVAILABLE,
                 f"fetching the {role!r} file {pinned.uri} raised {type(exc).__name__}: {exc}",
             ) from exc
@@ -481,32 +489,32 @@ def _verify_model_file(role: str, path: Path, pinned: PinnedFile) -> None:
     # Size first: it is cheap, and it refuses a truncated download without hashing it.
     try:
         if not path.is_file():
-            raise _model_file_failure(
+            raise _model_file_error(
                 errors.MODEL_FILE_UNAVAILABLE,
                 f"the {role!r} file fetched from {pinned.uri} is not a file at {path}",
             )
         size = path.stat().st_size
         if size != pinned.size_bytes:
-            raise _model_file_failure(
+            raise _model_file_error(
                 errors.MODEL_FILE_DIGEST_MISMATCH,
                 f"the work pins the {role!r} file at {pinned.size_bytes} bytes but {path} "
                 f"holds {size}",
             )
         actual = checksum_file(path)
     except OSError as exc:
-        raise _model_file_failure(
+        raise _model_file_error(
             errors.MODEL_FILE_UNAVAILABLE,
             f"the {role!r} file {path} could not be read: {type(exc).__name__}: {exc}",
         ) from exc
     if actual != pinned.digest:
-        raise _model_file_failure(
+        raise _model_file_error(
             errors.MODEL_FILE_DIGEST_MISMATCH,
             f"the work pins the {role!r} file at {pinned.digest} but {path} hashes to "
             f"{actual}",
         )
 
 
-def _model_file_failure(code: str, detail: str) -> errors.EngineError:
+def _model_file_error(code: str, detail: str) -> errors.EngineError:
     return errors.EngineError(code, errors.ACQUIRE_MODEL, detail)
 
 
@@ -534,7 +542,7 @@ def _load_registry(files: dict[str, Path]) -> TaxonRegistry | None:
 _CleanupStep = tuple[str, Callable[[], object]]
 
 
-def _releasing_model_file(model_files: FileProvider, path: Path) -> _CleanupStep:
+def _get_model_file_release_step(model_files: FileProvider, path: Path) -> _CleanupStep:
     return (f"releasing the model file {path}", lambda: model_files.release(path))
 
 

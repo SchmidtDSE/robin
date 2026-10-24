@@ -1,12 +1,12 @@
 """Reading and verifying the CSV that binds a model's output positions to classes."""
 
 import csv
-import hashlib
 import io
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal
 
+from robin_contracts.canonical import checksum_bytes
 from robin_contracts.registry import RegistryEntry, TaxonRegistry
 
 REQUIRED_COLUMNS = ("class_index", "label", "label_kind")
@@ -21,7 +21,7 @@ def load_registry(path: Path) -> TaxonRegistry:
     otherwise reach a published table looking like data instead of a bug.
     """
     data = path.read_bytes()
-    fingerprint = "sha256:" + hashlib.sha256(data).hexdigest()
+    fingerprint = checksum_bytes(data)
 
     # utf-8-sig drops a byte-order mark, which would otherwise be read as part of
     # the first header name and report an encoding fault as a missing column.

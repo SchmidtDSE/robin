@@ -35,12 +35,13 @@ from robin_inference_engine.artifacts.metadata import (
 )
 from robin_inference_engine.artifacts.staging import (
     StagedArtifact,
-    invalid_schema,
+    get_single_field,
+    invalid_schema_error,
     open_parquet,
     read_batches,
     require_checksum,
     require_contract,
-    unreadable,
+    unreadable_error,
 )
 
 CONTRACT_ID: ScoresContractId = get_args(ScoresContractId)[0]
@@ -173,7 +174,7 @@ def read_scores(path: Path, *, expected_checksum: str) -> Iterator[ScoresStream]
         actual = checksum_file(path)
         handle = pa.OSFile(str(path), "rb")
     except OSError as exc:
-        raise unreadable(path.name, exc) from exc
+        raise unreadable_error(path.name, exc) from exc
     with handle:
         require_checksum(path.name, actual=actual, expected=expected_checksum)
         file = open_parquet(handle, path.name)
@@ -200,17 +201,7 @@ def _require_schema(schema: pa.Schema) -> None:
     # Fields are matched by name, never by position, and compared on type and
     # nullability. Additional fields and reordered columns are accepted.
     for declared in SCORES_SCHEMA:
-        positions = schema.get_all_field_indices(declared.name)
-        if not positions:
-            raise _invalid_schema(f"{declared.name!r} is not one of {schema.names}")
-        if len(positions) > 1:
-            # Arrow permits a repeated field name, and a lookup by that name then
-            # has no single answer, so the artifact is refused rather than read
-            # from whichever column comes first.
-            raise _invalid_schema(
-                f"{declared.name!r} names {len(positions)} of this artifact's columns"
-            )
-        actual = schema.field(positions[0])
+        actual = get_single_field(schema, declared.name, contract_id=CONTRACT_ID)
         if actual.type != declared.type or actual.nullable != declared.nullable:
             raise _invalid_schema(
                 f"{declared.name!r} is {actual.type} nullable={actual.nullable}, not "
@@ -219,7 +210,7 @@ def _require_schema(schema: pa.Schema) -> None:
 
 
 def _invalid_schema(detail: str) -> errors.EngineError:
-    return invalid_schema(f"{CONTRACT_ID} does not accept this schema: {detail}")
+    return invalid_schema_error(f"{CONTRACT_ID} does not accept this schema: {detail}")
 
 
 def _require_provenance(metadata: Mapping[str, str]) -> None:
@@ -230,7 +221,7 @@ def _require_provenance(metadata: Mapping[str, str]) -> None:
         # The keys required above are chosen from this value, so a value outside
         # the declared set would match no branch and leave the retention's own
         # keys unchecked.
-        raise invalid_schema(
+        raise invalid_schema_error(
             f"{CONTRACT_ID} declares the retention values {', '.join(RETENTIONS)}, "
             f"not {retention!r}"
         )

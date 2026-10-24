@@ -34,6 +34,7 @@ except ModuleNotFoundError as error:
 from robin_models._audio_windows import (
     Bounds,
     get_window_outputs,
+    mix_down,
     refuse_unusable_logits,
     run_windows,
 )
@@ -188,10 +189,10 @@ def _read_window_at_rate(
     first = _get_first_frame_on_grid(start, rate, g)
     last = min(round(end * rate), frames)
     if rate == target_rate:
-        return _mix_down(_read_frames(audio, first, last))
+        return mix_down(_read_frames(audio, first, last))
     context_first = max(first - rate, 0)
     context_last = min(last + rate, frames)
-    window = _mix_down(_read_frames(audio, context_first, context_last))
+    window = mix_down(_read_frames(audio, context_first, context_last))
     resampled = resample_poly(window, up, down)
     offset = context_first * up // down
     # The grid check makes first and context_first multiples of down, so these are exact;
@@ -216,13 +217,6 @@ def _read_frames(audio: "sf.SoundFile", first: int, last: int) -> "np.ndarray":
     """Frames `first` to `last`, as float32 with one column per channel."""
     audio.seek(first)
     return audio.read(last - first, dtype="float32", always_2d=True)
-
-
-def _mix_down(frames: "np.ndarray") -> "np.ndarray":
-    """One channel as it is, or more averaged in float32."""
-    if frames.shape[1] == 1:
-        return frames[:, 0]
-    return np.mean(frames, axis=1, dtype=np.float32)
 
 
 def get_sigmoid(logits: "np.ndarray") -> "np.ndarray":

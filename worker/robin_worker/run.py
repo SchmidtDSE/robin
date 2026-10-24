@@ -7,11 +7,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import get_args
 from uuid import UUID
 
 from pydantic import ValidationError
 from robin_adapters.location import split_location
 from robin_contracts.canonical import checksum_bytes
+from robin_contracts.output_contracts import TaskContractId, TaskResultContractId
 from robin_contracts.ports import ArtifactWriter
 from robin_contracts.protocols import Log
 from robin_contracts.results import InferenceResult
@@ -27,8 +29,8 @@ from robin_inference_engine.engine import run_work
 
 from robin_worker import storage
 
-TASK_SCHEMA = "robin.inference-task/1"
-RESULT_SCHEMA = "robin.inference-task-result/1"
+TASK_SCHEMA: TaskContractId = get_args(TaskContractId)[0]
+RESULT_SCHEMA: TaskResultContractId = get_args(TaskResultContractId)[0]
 RESULT_FILE_NAME = "result.json"
 DETAIL_LIMIT = 2000  # the engine's limit for failure detail
 

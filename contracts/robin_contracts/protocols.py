@@ -17,7 +17,7 @@ Log = Callable[[str], None]
 ScoreRetention = Literal["full", "thresholded", "top_k"]
 
 
-def noop(text: str) -> None:
+def discard_log_line(text: str) -> None:
     """Discard a log line. The default an adapter gets when the caller wants silence."""
     return None
 
@@ -42,4 +42,4 @@ class ModelContext:
     resources: Mapping[str, JsonScalar]
     scratch_dir: Path
     emit_embeddings: bool
-    log: Log = noop
+    log: Log = discard_log_line

@@ -3,6 +3,7 @@
 A card says what a model is, not where its files are: the work pins those.
 """
 
+import math
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -33,7 +34,7 @@ def refuse_windows_that_do_not_advance(duration: float, overlap: float) -> None:
 
 
 def _refuse_a_non_finite_number(value: float) -> float:
-    if value != value or value in (float("inf"), float("-inf")):
+    if not math.isfinite(value):
         raise ValueError("model card numeric fields must be finite")
     return value
 
@@ -79,14 +80,14 @@ class ModelRef(BaseModel):
 
     @field_validator("name", "version")
     @classmethod
-    def _non_empty(cls, value: str) -> str:
+    def _check_non_empty(cls, value: str) -> str:
         if not value:
             raise ValueError("model reference fields must be non-empty")
         return value
 
     @field_validator("digest")
     @classmethod
-    def _a_card_digest(cls, value: str) -> str:
+    def _check_card_digest(cls, value: str) -> str:
         if not is_sha256_v1(value):
             raise ValueError(f"expected 'sha256:v1:' and 64 hex characters, got {value!r}")
         return value
@@ -148,35 +149,35 @@ class ModelCard(BaseModel):
 
     @field_validator("model_name", "model_version", "runtime")
     @classmethod
-    def _required_text(cls, value: str) -> str:
+    def _check_required_text(cls, value: str) -> str:
         if not value:
             raise ValueError("model card identity fields must be non-empty")
         return value
 
     @field_validator("min_detection_threshold")
     @classmethod
-    def _finite(cls, value: float) -> float:
+    def _check_finite(cls, value: float) -> float:
         return _refuse_a_non_finite_number(value)
 
     @field_validator("sample_rate")
     @classmethod
-    def _positive_sample_rate(cls, value: int) -> int:
+    def _check_sample_rate(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("sample_rate must be positive")
         return value
 
     @field_validator("taxa_registry_digest")
     @classmethod
-    def _a_file_digest(cls, value: str | None) -> str | None:
+    def _check_file_digest(cls, value: str | None) -> str | None:
         return _refuse_a_malformed_file_digest(value)
 
     @field_validator("embedding_dim")
     @classmethod
-    def _positive_embedding_dim(cls, value: int | None) -> int | None:
+    def _check_embedding_dim(cls, value: int | None) -> int | None:
         return _refuse_a_width_that_is_not_positive(value)
 
     @model_validator(mode="after")
-    def _registry_is_pinned_exactly_when_scores_are_emitted(self) -> "ModelCard":
+    def _check_registry_matches_scores(self) -> "ModelCard":
         if self.score_domain is not None and self.taxa_registry_digest is None:
             raise ValueError("a card that emits scores must declare taxa_registry_digest")
         if self.score_domain is None and self.taxa_registry_digest is not None:
@@ -184,7 +185,7 @@ class ModelCard(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _embeddings_are_described_exactly_when_emitted(self) -> "ModelCard":
+    def _check_embedding_fields(self) -> "ModelCard":
         if self.can_emit_embeddings:
             if self.embedding_dim is None or self.embedding_dtype is None:
                 raise ValueError(
@@ -221,24 +222,24 @@ class HeadCard(BaseModel):
 
     @field_validator("model_name", "model_version", "runtime")
     @classmethod
-    def _required_text(cls, value: str) -> str:
+    def _check_required_text(cls, value: str) -> str:
         if not value:
             raise ValueError("head card text fields must be non-empty")
         return value
 
     @field_validator("min_detection_threshold")
     @classmethod
-    def _finite(cls, value: float) -> float:
+    def _check_finite(cls, value: float) -> float:
         return _refuse_a_non_finite_number(value)
 
     @field_validator("taxa_registry_digest")
     @classmethod
-    def _a_file_digest(cls, value: str) -> str:
+    def _check_file_digest(cls, value: str) -> str:
         return _refuse_a_malformed_file_digest(value)
 
     @field_validator("embedding_dim")
     @classmethod
-    def _positive_embedding_dim(cls, value: int) -> int:
+    def _check_embedding_dim(cls, value: int) -> int:
         return _refuse_a_width_that_is_not_positive(value)
 
 

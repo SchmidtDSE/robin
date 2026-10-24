@@ -244,7 +244,7 @@ class EngineError(Exception):
         self.window_start_s = window_start_s
 
 
-def named(recording: RecordingRef) -> str:
+def get_recording_name(recording: RecordingRef) -> str:
     """A recording's identity as messages spell it."""
     # Quoted as a pair: any separator could also appear inside a value.
     return f"({recording.namespace!r}, {recording.value!r})"
