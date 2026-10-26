@@ -5,9 +5,10 @@ import json
 
 import pytest
 
+from robin_contracts.ports.catalog import RequestedRecording
 from robin_run_manager.errors import INVALID_REQUEST, Refused
 from robin_run_manager.recording_inputs import (
-    SubmittedRecording,
+    get_repeated_identities,
     read_recordings_file,
     read_uris_file,
 )
@@ -52,7 +53,7 @@ def test_an_absolute_path_becomes_a_file_uri(tmp_path):
     read = read_uris_file(write_uris_file(tmp_path, "/data/a b.wav\n"), "survey")
 
     assert read.recordings == (
-        SubmittedRecording(
+        RequestedRecording(
             namespace="survey", value="file:///data/a%20b.wav", audio_uri="file:///data/a%20b.wav"
         ),
     )
@@ -228,7 +229,7 @@ def test_a_recording_with_a_duration_is_read(tmp_path):
     read = read_recordings_file(path)
 
     assert read.recordings == (
-        SubmittedRecording(
+        RequestedRecording(
             namespace="ns", value="a", audio_uri="s3://b/a.wav", duration_seconds=12.0
         ),
     )
@@ -329,6 +330,16 @@ def test_a_repeated_identity_is_refused_with_both_lines(tmp_path):
 
     assert problem["line"] == 3
     assert "line 1" in problem["problem"]
+
+
+def test_get_repeated_identities_gives_every_position():
+    recordings = [
+        RequestedRecording(namespace="ns", value=value, audio_uri=f"s3://b/{index}.wav")
+        for index, value in enumerate(["a", "b", "a", "c", "a"])
+    ]
+
+    assert get_repeated_identities(recordings) == {("ns", "a"): [0, 2, 4]}
+    assert get_repeated_identities(recordings[1:2] + recordings[3:4]) == {}
 
 
 @pytest.mark.parametrize("text", ["\\u0000", "\\ud800"])

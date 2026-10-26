@@ -7,10 +7,11 @@ write those rows here.
 from pathlib import Path
 from uuid import UUID
 
+from robin_contracts.ports.catalog import RequestedRecording
 from robin_run_manager.configuration import UnresolvedConfiguration, read_configuration
 from robin_run_manager.database import Database, transaction
 from robin_run_manager.models import register_model
-from robin_run_manager.recording_inputs import RecordingFile, SubmittedRecording
+from robin_run_manager.recording_inputs import RecordingFile
 from robin_run_manager.submit import submit_run
 from robin_run_manager.versions import RELEASE_OUTPUT_VERSIONS
 
@@ -30,7 +31,7 @@ def register_fixture_models(database: Database) -> None:
 
 def make_recording_file(values) -> RecordingFile:
     recordings = tuple(
-        SubmittedRecording(namespace=NAMESPACE, value=value, audio_uri=f"s3://audio/{value}.wav")
+        RequestedRecording(namespace=NAMESPACE, value=value, audio_uri=f"s3://audio/{value}.wav")
         for value in values
     )
     observed = {"input": "recordings", "file_sha256": "sha256:" + "0" * 64, "file_size_bytes": 1}

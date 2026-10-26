@@ -7,14 +7,15 @@ spaces is refused.
 import codecs
 import json
 import re
+from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any, NamedTuple, NoReturn
 from urllib.parse import unquote, urlsplit
 
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from robin_contracts.canonical import checksum_bytes
-from robin_contracts.work import NonEmptyText, PositiveSeconds
+from robin_contracts.ports.catalog import RequestedRecording, is_storable_text
 from robin_run_manager.errors import INVALID_REQUEST, Refused
 from robin_run_manager.operator_files import field_problems
 
@@ -25,19 +26,10 @@ _SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
 _UTF16_MARKS = (codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)
 
 
-class SubmittedRecording(BaseModel, frozen=True, extra="forbid"):
-    """One recording in a submitted list: its identity, its audio, and maybe its duration."""
-
-    namespace: NonEmptyText
-    value: NonEmptyText
-    audio_uri: NonEmptyText
-    duration_seconds: PositiveSeconds | None = None
-
-
 class RecordingFile(NamedTuple):
     """The recordings of a list file, and what Robin observed about the file."""
 
-    recordings: tuple[SubmittedRecording, ...]
+    recordings: tuple[RequestedRecording, ...]
     observed: dict[str, Any]
 
 
@@ -78,7 +70,7 @@ def read_uris_file(path: Path, namespace: str) -> RecordingFile:
         except _LineProblem as problem:
             problems.append({"line": number, "problem": str(problem)})
             continue
-        recording = SubmittedRecording(namespace=namespace, value=uri, audio_uri=uri)
+        recording = RequestedRecording(namespace=namespace, value=uri, audio_uri=uri)
         recordings.append((number, recording))
     return _build_recording_file(path, data, recordings, problems, "uris", {"namespace": namespace})
 
@@ -130,7 +122,7 @@ def _split_lines(path: Path, data: bytes) -> list[tuple[int, str]]:
     return found
 
 
-def _parse_recording(line: str) -> SubmittedRecording:
+def _parse_recording(line: str) -> RequestedRecording:
     if not line.strip():
         raise _LineProblem("The line holds only spaces. Remove it.")
     try:
@@ -150,29 +142,21 @@ def _parse_recording(line: str) -> SubmittedRecording:
         raise _LineProblem(
             "The entry has embeddings. Remove them: preparation pins the input of a head run."
         )
+    # Checked before the model, so that the line message names the key.
     for key, value in entry.items():
-        if isinstance(value, str) and not _is_storable(value):
+        if isinstance(value, str) and not is_storable_text(value):
             raise _LineProblem(
                 f"{key} holds a NUL character or a lone surrogate, which Robin cannot "
                 "store. Correct the entry."
             )
     try:
-        return SubmittedRecording.model_validate(entry, strict=True)
+        return RequestedRecording.model_validate(entry, strict=True)
     except ValidationError as error:
         problems = field_problems(error, "entry")
     raise _LineProblem(
         "; ".join(f"{problem['field']}: {problem['message']}" for problem in problems)
         + ". Correct the entry."
     )
-
-
-def _is_storable(text: str) -> bool:
-    """Whether PostgreSQL can store `text`: no NUL character and no lone surrogate."""
-    try:
-        text.encode("utf-8")
-    except UnicodeEncodeError:
-        return False
-    return "\x00" not in text
 
 
 def _refuse_repeated_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -213,26 +197,37 @@ def _parse_uri(line: str) -> str:
     return line
 
 
+def get_repeated_identities(
+    recordings: Sequence[RequestedRecording],
+) -> dict[tuple[str, str], list[int]]:
+    """Returns each `(namespace, value)` that is in `recordings` more than once.
+
+    Each identity maps to the index, from 0, of every recording that has it.
+    """
+    indexes = {}
+    for index, recording in enumerate(recordings):
+        indexes.setdefault((recording.namespace, recording.value), []).append(index)
+    return {identity: found for identity, found in indexes.items() if len(found) > 1}
+
+
 def _build_recording_file(
     path: Path,
     data: bytes,
-    numbered: list[tuple[int, SubmittedRecording]],
+    numbered: list[tuple[int, RequestedRecording]],
     problems: list[dict],
     input: str,
     observed: dict[str, Any],
 ) -> RecordingFile:
-    first_line = {}
-    for number, recording in numbered:
-        identity = (recording.namespace, recording.value)
-        if identity in first_line:
+    lines = [number for number, _ in numbered]
+    repeated = get_repeated_identities([recording for _, recording in numbered])
+    for (namespace, value), indexes in repeated.items():
+        first_line = lines[indexes[0]]
+        for index in indexes[1:]:
             problems.append({
-                "line": number,
-                "problem": f"The recording {recording.value} in namespace "
-                f"{recording.namespace} is also on line {first_line[identity]}. Give each "
-                "recording once.",
+                "line": lines[index],
+                "problem": f"The recording {value} in namespace {namespace} is also on "
+                f"line {first_line}. Give each recording once.",
             })
-        else:
-            first_line[identity] = number
     if problems:
         problems.sort(key=lambda problem: problem["line"])
         first = problems[0]

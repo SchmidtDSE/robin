@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from robin_contracts.ports.catalog import RequestedRecording
 from robin_contracts.tasks import ModelOutputVersion
 from robin_run_manager.configuration import read_configuration
 from robin_run_manager.database import transaction
@@ -15,7 +16,7 @@ from robin_run_manager.errors import (
 )
 from robin_run_manager.models import register_model
 from robin_run_manager.presets import create_preset
-from robin_run_manager.recording_inputs import RecordingFile, SubmittedRecording
+from robin_run_manager.recording_inputs import RecordingFile
 from robin_run_manager.submit import submit_run
 from robin_run_manager.versions import RELEASE_OUTPUT_VERSIONS
 
@@ -35,7 +36,7 @@ OBSERVED = {
 
 def make_recording_file(count: int = 3) -> RecordingFile:
     recordings = tuple(
-        SubmittedRecording(
+        RequestedRecording(
             namespace="survey",
             value=f"file:///data/{index:05}.wav",
             audio_uri=f"file:///data/{index:05}.wav",
