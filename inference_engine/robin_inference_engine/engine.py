@@ -20,7 +20,7 @@ from robin_contracts.canonical import checksum_file
 from robin_contracts.cards import HeadCard, model_ref
 from robin_contracts.inputs import AudioClip, Input
 from robin_contracts.output_contracts import ResultContractId
-from robin_contracts.ports import ArtifactWriter, FileProvider
+from robin_contracts.ports.storage import ArtifactWriter, FileProvider
 from robin_contracts.protocols import Log, Model, ModelContext, discard_log_line
 from robin_contracts.records import WindowOutput
 from robin_contracts.registry import TaxonRegistry

@@ -1,7 +1,7 @@
 import ondio
 import pytest
-from robin_adapters.artifact_writer.local import LocalArtifactWriter
-from robin_adapters.artifact_writer.ondio import OndioArtifactWriter
+from robin_adapters.storage.local import LocalArtifactWriter
+from robin_adapters.storage.ondio import OndioArtifactWriter
 
 from robin_worker import storage
 from robin_models import registration

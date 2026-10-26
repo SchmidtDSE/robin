@@ -1,14 +1,4 @@
-"""The ports: the services a caller passes to `run_work` for the engine to use.
-
-A port is a protocol. The engine calls its methods, and an implementation satisfies it
-by having the same methods, without importing it. The engine and robin's adapters may
-not import each other, so the protocols are defined here, in the package both import.
-
-Each port is named for what it does and what it handles: a `FileProvider` provides
-files, and an `ArtifactWriter` writes artifacts. Robin's own implementations live in
-`robin_adapters`, one subpackage per port and one module per backend, such as
-`robin_adapters.file_provider.local`. A new port follows the same pattern.
-"""
+"""The storage port: how the engine gets input files and publishes artifacts."""
 
 from pathlib import Path
 from typing import Protocol

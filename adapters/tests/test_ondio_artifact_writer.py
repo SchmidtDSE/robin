@@ -6,10 +6,10 @@ from pathlib import Path
 import boto3
 import pytest
 from robin_contracts.layout import artifact_path
-from robin_contracts.ports import ArtifactWriter
+from robin_contracts.ports.storage import ArtifactWriter
 
-from robin_adapters.artifact_writer import ondio as writer_module
-from robin_adapters.artifact_writer.ondio import OndioArtifactWriter
+from robin_adapters.storage import ondio as writer_module
+from robin_adapters.storage.ondio import OndioArtifactWriter
 
 
 def test_it_has_the_signature_its_port_declares():

@@ -10,13 +10,11 @@ location.
 from pathlib import Path
 
 import ondio
-from robin_adapters.artifact_writer.local import LocalArtifactWriter
-from robin_adapters.artifact_writer.ondio import OndioArtifactWriter
-from robin_adapters.file_provider.local import LocalFileProvider
-from robin_adapters.file_provider.ondio import OndioFileProvider
-from robin_adapters.location import LOCAL_STORE, split_location
+from robin_adapters.storage.local import LocalArtifactWriter, LocalFileProvider
+from robin_adapters.storage.ondio import OndioArtifactWriter, OndioFileProvider
+from robin_adapters.storage.location import LOCAL_STORE, split_location
 from robin_contracts.local_files import get_local_path
-from robin_contracts.ports import ArtifactWriter, FileProvider
+from robin_contracts.ports.storage import ArtifactWriter, FileProvider
 from robin_models import registration
 
 # The locations the worker can read and write, as messages describe them.

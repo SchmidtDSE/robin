@@ -5,7 +5,7 @@ moto's S3 runs in the test process, so these tests call the worker in that proce
 
 import boto3
 import pytest
-from robin_adapters.location import split_location
+from robin_adapters.storage.location import split_location
 from robin_contracts.canonical import checksum_file
 from robin_contracts.tasks import InferenceTaskResult, task_result_problem
 

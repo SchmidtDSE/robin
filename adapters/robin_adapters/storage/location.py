@@ -11,7 +11,10 @@ _SUPPORTED_SCHEMES = frozenset({"file", "s3"})
 
 
 def split_location(uri: str) -> tuple[str, str] | None:
-    """The store and the path, with no leading `/`, that `uri` names, or None if unsupported."""
+    """Returns the store and the path, with no leading `/`, that `uri` names.
+
+    Returns None if ondio cannot read `uri`, or if its scheme is not `file` or `s3`.
+    """
     try:
         store, path = ondio.locate(uri)
     except (ondio.OndioError, ValueError):

@@ -11,10 +11,10 @@ from typing import get_args
 from uuid import UUID
 
 from pydantic import ValidationError
-from robin_adapters.location import split_location
+from robin_adapters.storage.location import split_location
 from robin_contracts.canonical import checksum_bytes
 from robin_contracts.output_contracts import TaskContractId, TaskResultContractId
-from robin_contracts.ports import ArtifactWriter
+from robin_contracts.ports.storage import ArtifactWriter
 from robin_contracts.protocols import Log
 from robin_contracts.results import InferenceResult
 from robin_contracts.tasks import (

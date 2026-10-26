@@ -3,9 +3,9 @@ from pathlib import Path
 from urllib.parse import quote
 
 import pytest
-from robin_contracts.ports import FileProvider
+from robin_contracts.ports.storage import FileProvider
 
-from robin_adapters.file_provider.local import LocalFileProvider
+from robin_adapters.storage.local import LocalFileProvider
 
 
 def test_it_has_the_signature_its_port_declares():

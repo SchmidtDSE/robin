@@ -7,7 +7,7 @@ import sys
 import time
 
 import pytest
-from robin_adapters.location import split_location
+from robin_adapters.storage.location import split_location
 from robin_contracts.canonical import checksum_file
 from robin_contracts.local_files import get_local_path
 from robin_contracts.tasks import InferenceTaskResult, ModelOutputVersion, task_result_problem

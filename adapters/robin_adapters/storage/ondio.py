@@ -1,6 +1,8 @@
-"""The `ArtifactWriter` port over an `s3://` root, through ondio."""
+"""Storage adapters for S3, through ondio: `OndioFileProvider` and `OndioArtifactWriter`."""
 
+import shutil
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -10,17 +12,50 @@ from robin_contracts.layout import artifact_path
 from robin_contracts.results import ArtifactContractId, ArtifactKind, ArtifactRecord
 from robin_contracts.tasks import output_root_problem
 
-from robin_adapters.location import LOCAL_STORE, split_location
+from robin_adapters.storage.location import LOCAL_STORE, split_location
+
+
+class OndioFileProvider:
+    """Downloads the object at a URI into a new folder under `directory`.
+
+    `release` deletes the file and its folder. Every ondio call receives
+    `backend_options`, such as `profile_name` for S3.
+    """
+
+    def __init__(self, directory: Path, **backend_options: Any) -> None:
+        self._directory = Path(directory).resolve()
+        self._directory.mkdir(parents=True, exist_ok=True)
+        self._backend_options = backend_options
+        self._fetched: set[Path] = set()
+
+    def fetch(self, uri: str) -> Path:
+        name = uri.rsplit("/", 1)[-1]
+        # `.` and `..` would name the folder or its parent rather than a file in it.
+        if name in ("", ".", ".."):
+            raise ValueError(f"{uri!r} has no file name after its last '/'")
+        folder = self._directory / uuid.uuid4().hex
+        folder.mkdir()
+        path = folder / name
+        try:
+            ondio.download(uri, path, **self._backend_options)
+        except BaseException:
+            shutil.rmtree(folder, ignore_errors=True)
+            raise
+        self._fetched.add(path)
+        return path
+
+    def release(self, path: Path) -> None:
+        if path not in self._fetched:
+            raise ValueError(f"{path} was not fetched by this provider, or is already released")
+        self._fetched.remove(path)
+        shutil.rmtree(path.parent)
 
 
 class OndioArtifactWriter:
-    """Publishes each file under an `s3://` root, uploading it from disk.
+    """Publishes each file under an `s3://` root, at the path that `artifact_path` gives.
 
-    The file goes at the path its kind and recording give. The same bytes already there
-    succeed without an upload, and different bytes raise `FileExistsError`. Two writers
-    storing one file at once are not refused: the later upload wins. `backend_options`
-    are passed to every ondio call, which passes them to its backend, such as
-    `profile_name` for S3.
+    Two writers that store one file at the same time are not refused: the upload that
+    finishes last replaces the other. Every ondio call receives `backend_options`.
     """
 
     def __init__(self, root: str, **backend_options: Any) -> None:
@@ -69,9 +104,9 @@ class OndioArtifactWriter:
 
 
 def _check_output_root(root: str) -> str:
-    """`root` as ondio reads it, with no trailing `/`, or `ValueError` if it is not usable.
+    """Returns `root` with no trailing `/`.
 
-    A usable root is a remote root that passes the result check's own root rule.
+    Raises `ValueError` if `root` is not a usable `s3://` root.
     """
     place = split_location(root)
     if place is None or place[0] == LOCAL_STORE or output_root_problem(

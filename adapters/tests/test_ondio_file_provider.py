@@ -4,10 +4,10 @@ from pathlib import Path
 import boto3
 import ondio
 import pytest
-from robin_contracts.ports import FileProvider
+from robin_contracts.ports.storage import FileProvider
 
-import robin_adapters.file_provider.ondio as provider_module
-from robin_adapters.file_provider.ondio import OndioFileProvider
+import robin_adapters.storage.ondio as provider_module
+from robin_adapters.storage.ondio import OndioFileProvider
 
 
 def _put(bucket: str, key: str, data: bytes) -> str:

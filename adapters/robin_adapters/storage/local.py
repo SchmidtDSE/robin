@@ -1,4 +1,4 @@
-"""The `ArtifactWriter` port over the local file system."""
+"""Storage adapters for the local file system: `LocalFileProvider` and `LocalArtifactWriter`."""
 
 import hashlib
 import os
@@ -8,21 +8,33 @@ from typing import BinaryIO
 
 from robin_contracts.canonical import checksum_file
 from robin_contracts.layout import artifact_path
+from robin_contracts.local_files import get_local_path
 from robin_contracts.results import ArtifactContractId, ArtifactKind, ArtifactRecord
+
+
+class LocalFileProvider:
+    """Gives the local file that a URI names, without copying it. `release` does nothing."""
+
+    def fetch(self, uri: str) -> Path:
+        path = get_local_path(uri)
+        if not path.is_file():
+            raise FileNotFoundError(f"{uri!r} names {path}, which is not an existing file")
+        return path
+
+    def release(self, path: Path) -> None:
+        pass
+
 
 _CHUNK_BYTES = 1024 * 1024
 
 
 class LocalArtifactWriter:
-    """Publishes each file under `root`, at the path its kind and recording give.
+    """Publishes each file under `root`, at the path that `artifact_path` gives.
 
-    The file is copied to a hidden temporary name, checked, then hard-linked to its
-    final name. A hard link fails if the name exists, so no reader sees a partial file
-    and no file is replaced. Different bytes already there raise `FileExistsError`.
-    The root must be on a file system that supports hard links.
-
-    A relative root is made absolute when the writer is built. Links in the root are
-    kept as written, so the record's URI names the root as given.
+    `create` writes a hidden temporary copy and then hard-links it to the final name, so
+    no reader sees a partial file. The root must be on a file system that supports hard
+    links. The writer does not resolve symbolic links in the root, so the record's URI
+    names the root as the caller gave it.
     """
 
     def __init__(self, root: Path) -> None:

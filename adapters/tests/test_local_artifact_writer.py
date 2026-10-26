@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pytest
 from robin_contracts.layout import artifact_path
-from robin_contracts.ports import ArtifactWriter
+from robin_contracts.ports.storage import ArtifactWriter
 
-from robin_adapters.artifact_writer import local
-from robin_adapters.artifact_writer.local import LocalArtifactWriter
+from robin_adapters.storage import local
+from robin_adapters.storage.local import LocalArtifactWriter
 
 
 def test_it_has_the_signature_its_port_declares():

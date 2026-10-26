@@ -142,7 +142,7 @@ def test_the_composition_root_importing_adapters_is_accepted(tmp_path):
     module = _write_module(
         tmp_path,
         "robin_run_manager.compose",
-        ["from robin_adapters.location import split_location", "import robin_contracts"],
+        ["from robin_adapters.storage.location import split_location", "import robin_contracts"],
     )
     violations = check_file(module, tmp_path)
     assert not violations, f"robin_run_manager.compose may import adapters: {violations}"

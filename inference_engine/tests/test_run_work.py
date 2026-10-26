@@ -42,7 +42,7 @@ from robin_contracts.output_contracts import (
     ScoresRequest,
     ThresholdPolicy,
 )
-from robin_contracts.ports import ArtifactWriter, FileProvider
+from robin_contracts.ports.storage import ArtifactWriter, FileProvider
 from robin_contracts.protocols import ModelContext
 from robin_contracts.records import ClassScore, WindowOutput
 from robin_contracts.results import (

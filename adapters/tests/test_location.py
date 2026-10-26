@@ -2,8 +2,8 @@ import pytest
 from robin_contracts.canonical import checksum_file
 from robin_contracts.layout import artifact_path
 
-from robin_adapters.artifact_writer.local import LocalArtifactWriter
-from robin_adapters.location import split_location
+from robin_adapters.storage.local import LocalArtifactWriter
+from robin_adapters.storage.location import split_location
 
 
 @pytest.mark.parametrize(

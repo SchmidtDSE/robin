@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import ondio
 import pytest
-from robin_adapters.location import split_location
+from robin_adapters.storage.location import split_location
 from robin_contracts.canonical import checksum_file
 from robin_contracts.results import InferenceCompleted
 from robin_contracts.tasks import (

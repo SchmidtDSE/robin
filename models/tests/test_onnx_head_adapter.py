@@ -14,8 +14,8 @@ import pyarrow.parquet as pq
 import pytest
 
 import robin_models.onnx_head
-from robin_adapters.artifact_writer.local import LocalArtifactWriter
-from robin_adapters.file_provider.local import LocalFileProvider
+from robin_adapters.storage.local import LocalArtifactWriter
+from robin_adapters.storage.local import LocalFileProvider
 from robin_contracts.canonical import checksum_file
 from robin_contracts.cards import AudioGeometry, HeadCard, ModelCard, RunnerResampled, model_ref
 from robin_contracts.inputs import AudioClip, Embeddings

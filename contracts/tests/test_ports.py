@@ -2,7 +2,7 @@ import inspect
 
 import pytest
 
-from robin_contracts.ports import ArtifactWriter, FileProvider
+from robin_contracts.ports.storage import ArtifactWriter, FileProvider
 from robin_contracts.results import ArtifactContractId, ArtifactKind
 
 
