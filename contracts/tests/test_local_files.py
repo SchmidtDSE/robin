@@ -3,7 +3,12 @@ from urllib.parse import quote
 
 import pytest
 
-from robin_contracts.local_files import get_local_path
+from robin_contracts.local_files import (
+    get_audio_uri,
+    get_file_uri,
+    get_local_path,
+    has_uri_scheme,
+)
 
 
 def _file_uri(path: str, host: str = "") -> str:
@@ -57,3 +62,81 @@ def test_anything_but_a_local_absolute_location_is_refused(location):
         get_local_path(location)
 
     assert location in str(refused.value)
+
+
+@pytest.mark.parametrize(
+    "location, uri",
+    [
+        ("/data/a.wav", "file:///data/a.wav"),
+        ("/data/c d#1.wav", "file:///data/c%20d%231.wav"),
+        ("file:///data/c%20d.wav", "file:///data/c%20d.wav"),
+        ("FILE:///data/a.wav", None),
+    ],
+)
+def test_get_file_uri_gives_robins_spelling(location, uri):
+    if uri is None:
+        with pytest.raises(ValueError, match="file:///data/a.wav"):
+            get_file_uri(location)
+    else:
+        assert get_file_uri(location) == uri
+
+
+@pytest.mark.parametrize(
+    "location, problem",
+    [
+        ("file://localhost/x", "write it as file:///x"),
+        ("file://host/x", "write it as file:///x"),
+        ("file:///a//b", "write it as file:///a/b"),
+        ("file:///a b", "write it as file:///a%20b"),
+        ("file:a.wav", "not a valid file URI"),
+        ("file://[bad/path", "not a valid file URI"),
+        ("a.wav", "not an absolute path"),
+        ("s3://lab/a.wav", "not an absolute path"),
+        ("/data/a\x00.wav", "NUL"),
+        ("file:///data/a%00.wav", "NUL"),
+    ],
+)
+def test_get_file_uri_refuses_other_spellings(location, problem):
+    with pytest.raises(ValueError, match=problem):
+        get_file_uri(location)
+
+
+@pytest.mark.parametrize(
+    "location, expected",
+    [
+        ("s3://lab/a.wav", True),
+        ("file:///a.wav", True),
+        ("x+y.z-1:rest", True),
+        ("/data/a.wav", False),
+        ("a.wav", False),
+        ("1s3://lab/a.wav", False),
+        ("sub/a:b.wav", False),
+        ("", False),
+    ],
+)
+def test_has_uri_scheme_tells_a_uri_from_a_path(location, expected):
+    assert has_uri_scheme(location) is expected
+
+
+@pytest.mark.parametrize(
+    "location, folder, uri",
+    [
+        ("s3://lab/a b.wav", None, "s3://lab/a b.wav"),
+        ("/data/a b.wav", None, "file:///data/a%20b.wav"),
+        ("file:///data/a.wav", None, "file:///data/a.wav"),
+        ("a b.wav", Path("/data"), "file:///data/a%20b.wav"),
+        ("../a.wav", Path("/data/lab"), "file:///data/lab/../a.wav"),
+        ("/b.wav", Path("/data"), "file:///b.wav"),
+    ],
+)
+def test_get_audio_uri_keeps_a_uri_and_gives_a_path_robins_spelling(location, folder, uri):
+    assert get_audio_uri(location, folder) == uri
+
+
+@pytest.mark.parametrize(
+    "location, problem",
+    [("data/a.wav", "not an absolute path or a URI"), ("FILE:///a.wav", "write it as")],
+)
+def test_get_audio_uri_refuses_a_relative_path_without_a_folder(location, problem):
+    with pytest.raises(ValueError, match=problem):
+        get_audio_uri(location)

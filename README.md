@@ -62,6 +62,7 @@ other services. `robin whoami` shows the login.
 | `robin presets show NAME` | Show one preset and its configuration. |
 | `robin runs submit --recordings FILE --preset P` | Submit a run of the recordings in a JSON Lines file. Use `--configuration FILE` in place of `--preset`. |
 | `robin runs submit --uris FILE --namespace NS --preset P` | Submit a run of a file with one URI or absolute path on each line. |
+| `robin runs submit --selection JSON --preset P` | Submit a run of the recordings that the profile's catalog adapter selects. Use `--selection @FILE` for a YAML file. |
 | `robin runs list` | List the runs, newest first. Filter with `--submitted-by` and `--created-after`. |
 | `robin runs show RUN` | Show one run, with its status and counts. |
 | `robin runs recordings RUN` | List the recordings of a run. Filter with `--state` and `--skip-reason`. |
@@ -72,6 +73,48 @@ No command does that yet.
 
 Each list command takes `--limit N`, and `--cursor C` or `--all`. Add `--json` to any
 command for JSON output.
+
+### The profile
+
+A profile is a folder with `config.yaml` and one file for each environment, such as
+`local.yaml`. Each `${NAME}` in a value becomes the environment variable `NAME`.
+Besides `database`, a profile has these sections:
+
+- `compute` says where runs execute: `kind: local`, or `kind: kubernetes` with
+  `namespace`, `s3_secret_name`, and `s3_endpoint`. `runs submit` needs this
+  section, and checks that the compute kind can read each recording's location.
+- `storage` says where Robin writes a run's files, with `kind` and `root`: for
+  example `{kind: local, root: /data/robin}`, or `{kind: s3, root: s3://lab/robin/}`.
+  A profile with `compute` needs it, and `kubernetes` compute needs `s3` storage.
+  Each run keeps the compute and storage settings that it was submitted with.
+- `catalog` (optional) names the adapter that `--selection` asks for recordings:
+  `kind` for a built-in adapter, or `code: module:function` for an installed one.
+  Its other fields are the adapter's settings. Robin fills in their `${NAME}` values
+  only for `--selection`, so other commands work without the adapter's credentials.
+
+The built-in catalog adapters:
+
+```yaml
+catalog:                  # the files under a folder whose paths match a pattern
+  kind: folder-layout
+  namespace: cards
+  root: /media/cards
+  pattern: "site{site}/{date}/{recorder}_{date}_{time}.wav"
+  identity: "{recorder}_{date}_{time}"
+# robin runs submit --selection '{"site": "04", "date": {"from": "20260501", "to": "20260831"}}'
+```
+
+```yaml
+catalog:                  # the rows of a CSV file
+  kind: csv-list
+  namespace: lab
+  id_column: id
+  audio_column: audio
+  duration_column: duration_seconds   # optional
+# robin runs submit --selection '{"file": "recordings.csv"}'
+```
+
+`robin runs submit --help` gives the details and the errors.
 
 ### Run the tests
 

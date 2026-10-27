@@ -13,7 +13,6 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-import yaml
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -27,6 +26,7 @@ from pydantic import (
 )
 
 from robin_contracts.local_files import get_local_path
+from robin_contracts.text_formats import InvalidText, load_yaml
 from robin_run_manager.errors import INVALID_PROFILE, NotConfigured, Refused
 from robin_run_manager.location_forms import get_unsupported_locations, is_s3_uri
 from robin_run_manager.operator_files import field_problems
@@ -333,13 +333,9 @@ def _read(path: Path) -> dict[str, Any]:
             details={"file": path.name},
         )
     try:
-        value = yaml.safe_load(text)
-    except yaml.YAMLError as error:
-        position = _position(error)
-    except ValueError:
-        # PyYAML raises ValueError for a value it cannot build, such as a date that
-        # does not exist. It has no position.
-        position = {}
+        value = load_yaml(text)
+    except InvalidText as error:
+        problem = error
     else:
         if value is None:
             return {}
@@ -350,21 +346,13 @@ def _read(path: Path) -> dict[str, Any]:
                 details={"file": path.name},
             )
         return value
-    # PyYAML's message quotes the source line, which can hold a password. Only the
-    # file and the position are reported, outside the handler.
-    where = f" at line {position['line']}, column {position['column']}" if position else ""
+    # Raised outside the handler. The parser's error, its cause, can quote a password.
+    position = {} if problem.line is None else {"line": problem.line, "column": problem.column}
     raise Refused(
         INVALID_PROFILE,
-        f"{path.name} is not valid YAML{where}.",
+        f"{path.name} {problem}.",
         details={"file": path.name, **position},
     )
-
-
-def _position(error: yaml.YAMLError) -> dict[str, int]:
-    mark = getattr(error, "problem_mark", None)
-    if mark is None:
-        return {}
-    return {"line": mark.line + 1, "column": mark.column + 1}
 
 
 def _expand(

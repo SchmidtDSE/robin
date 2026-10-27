@@ -21,6 +21,7 @@ from robin_contracts.cards import (
     read_card,
     write_card,
 )
+from robin_contracts.text_formats import InvalidText
 
 CARD_DIGEST = "sha256:v1:" + "a" * 64
 REGISTRY_DIGEST = "sha256:" + "a" * 64
@@ -545,7 +546,8 @@ def test_malformed_yaml_is_refused_with_its_cause_kept(tmp_path):
         read_card(path)
 
     assert str(path) in str(exc.value)
-    assert isinstance(exc.value.__cause__, yaml.YAMLError)
+    assert isinstance(exc.value.__cause__, InvalidText)
+    assert isinstance(exc.value.__cause__.__cause__, yaml.YAMLError)
 
 
 def test_a_card_cannot_construct_a_python_object(tmp_path):

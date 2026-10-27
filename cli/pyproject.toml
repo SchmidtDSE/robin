@@ -9,7 +9,12 @@ description = "The ROBIN operator command, `robin`."
 requires-python = ">=3.11"
 license = { text = "BSD-3-Clause" }
 authors = [{ name = "Schmidt Center for Data Science and the Environment" }]
-dependencies = ["robin-run-manager >=0.0,<0.1"]
+dependencies = [
+  "robin-run-manager >=0.0,<0.1",
+  "robin-contracts >=0.0,<0.1",
+  # The built-in catalog adapters. The CLI loads them by name and never imports them.
+  "robin-adapters[ondio] >=0.0,<0.1",
+]
 
 [project.scripts]
 robin = "robin_cli.main:main"

@@ -164,15 +164,20 @@ def test_run_manager_importing_models_is_accepted(tmp_path):
     assert not violations, f"robin_run_manager may import robin_models: {violations}"
 
 
-def test_cli_importing_run_manager_is_accepted(tmp_path):
-    module = _write_module(
-        tmp_path, "robin_cli.main", ["from robin_run_manager.database import open_database"]
-    )
+@pytest.mark.parametrize(
+    "line",
+    [
+        "from robin_run_manager.database import open_database",
+        "from robin_contracts.ports.catalog import CatalogResult",
+    ],
+)
+def test_cli_importing_run_manager_and_contracts_is_accepted(tmp_path, line):
+    module = _write_module(tmp_path, "robin_cli.main", [line])
     violations = check_file(module, tmp_path)
-    assert not violations, f"robin_cli may import robin_run_manager: {violations}"
+    assert not violations, f"robin_cli may make this import: {violations}"
 
 
-@pytest.mark.parametrize("imported", ["robin_adapters", "robin_contracts", "robin_worker"])
+@pytest.mark.parametrize("imported", ["robin_adapters", "robin_worker"])
 def test_cli_importing_other_packages_is_rejected(tmp_path, imported):
     module = _write_module(tmp_path, "robin_cli.main", [f"import {imported}"])
     violations = check_file(module, tmp_path)

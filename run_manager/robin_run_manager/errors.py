@@ -23,6 +23,8 @@ UNKNOWN_PRESET = "unknown_preset"
 UNKNOWN_OUTPUT_VERSION = "unknown_output_version"
 OUTPUT_VERSION_NOT_CURRENT = "output_version_not_current"
 UNSUPPORTED_LOCATION = "unsupported_location"
+INVALID_SELECTION = "invalid_selection"
+SOURCE_REFUSED = "source_refused"
 
 REFUSAL_REASONS = (
     NOT_AUTHENTICATED,
@@ -44,6 +46,8 @@ REFUSAL_REASONS = (
     UNKNOWN_OUTPUT_VERSION,
     OUTPUT_VERSION_NOT_CURRENT,
     UNSUPPORTED_LOCATION,
+    INVALID_SELECTION,
+    SOURCE_REFUSED,
 )
 
 
@@ -84,6 +88,22 @@ class NotConfigured(OperationError):
     """
 
     reason = "not_configured"
+
+
+class SourceUnavailable(OperationError):
+    """The catalog adapter cannot reach its source now. Nothing changed, so it is safe to repeat."""
+
+    reason = "source_unavailable"
+
+
+class CatalogFailed(OperationError):
+    """The catalog adapter failed in a way that its port does not describe.
+
+    The message names the adapter and the error's type only, because the error's text
+    can hold a credential.
+    """
+
+    reason = "catalog_failed"
 
 
 class OutcomeUncertain(OperationError):

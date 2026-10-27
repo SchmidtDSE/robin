@@ -29,6 +29,7 @@ robin-contracts = { path = "contracts", editable = true }
 robin-models = { path = "models", editable = true }
 robin-run-manager = { path = "run_manager", editable = true }
 robin-cli = { path = "cli", editable = true }
+robin-adapters = { path = "adapters", editable = true, extras = ["ondio"] }
 
 # The robin command reads these. compose.yaml uses the same defaults, and a value
 # that is already set in the shell is kept.

@@ -19,6 +19,7 @@ from pydantic import (
 )
 
 from robin_contracts.canonical import is_sha256_bytes, is_sha256_v1, sha256_v1
+from robin_contracts.text_formats import InvalidText, load_yaml
 
 PadPolicy = Literal["centre_crop_end_pad", "drop", "time_scaled"]
 
@@ -287,41 +288,21 @@ def backbone_mismatch(head: HeadCard, backbone: ModelCard) -> str | None:
 _ANY_CARD = TypeAdapter(ModelCard | HeadCard)
 
 
-class _UniqueKeyLoader(yaml.SafeLoader):
-    """A safe loader that refuses a repeated key instead of keeping the last one."""
-
-    def construct_mapping(self, node, deep=False):
-        seen = set()
-        for key_node, _ in node.value:
-            if not isinstance(key_node, yaml.ScalarNode):
-                continue
-            key = self.construct_object(key_node, deep=deep)
-            if key in seen:
-                raise yaml.constructor.ConstructorError(
-                    "while reading a mapping",
-                    node.start_mark,
-                    f"found the key {key!r} more than once",
-                    key_node.start_mark,
-                )
-            seen.add(key)
-        return super().construct_mapping(node, deep=deep)
-
-
 def read_yaml_mapping(path: Path, what: str) -> dict:
     """Read a YAML file that holds one mapping, such as a card. `what` names it in messages.
 
-    A repeated key is refused, not replaced by the last one. Raises ValueError, naming
-    the path, for text that is not UTF-8, is not YAML, or is not a mapping; file errors
-    are raised as they are.
+    The rules of `load_yaml` apply: a repeated key is refused, and a date stays text.
+    Raises ValueError, naming the path, for text that is not UTF-8, is not YAML, or is
+    not a mapping; file errors are raised as they are.
     """
     try:
         text = Path(path).read_text(encoding="utf-8")
     except UnicodeDecodeError as error:
         raise ValueError(f"{path} is not UTF-8 text: {error}") from error
     try:
-        loaded = yaml.load(text, Loader=_UniqueKeyLoader)
-    except yaml.YAMLError as error:
-        raise ValueError(f"{path} is not a readable {what}: {error}") from error
+        loaded = load_yaml(text)
+    except InvalidText as error:
+        raise ValueError(f"{path} {error}") from error
     if not isinstance(loaded, dict):
         raise ValueError(
             f"{path} must hold a mapping of {what} fields, got {type(loaded).__name__}"

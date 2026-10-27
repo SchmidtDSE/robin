@@ -16,14 +16,16 @@ Robin reports any other error by its type only, because its text can hold a cred
 
 import sys
 from collections.abc import Mapping
-from typing import Annotated, Protocol
+from typing import Annotated, Any, Protocol, TypeVar
 
-from pydantic import AfterValidator, BaseModel, JsonValue, field_validator
+from pydantic import AfterValidator, BaseModel, JsonValue, ValidationError, field_validator
 
 from robin_contracts.canonical import canonical_json_bytes
 from robin_contracts.work import PositiveSeconds
 
 _MAX_SOURCE_BYTES = 64 * 1024
+
+_Settings = TypeVar("_Settings", bound=BaseModel)
 
 
 def is_storable_text(text: str) -> bool:
@@ -116,3 +118,20 @@ class SourceRefused(Exception):
 
 class SourceUnavailable(Exception):
     """The source cannot be reached now. Nothing was stored, so the operator can try again."""
+
+
+def check_settings(model: type[_Settings], settings: Mapping[str, Any]) -> _Settings:
+    """Returns `settings` checked by `model`. Raises `InvalidCatalogSettings` if it refuses them.
+
+    A factory can use it for its settings. The message names each field and its problem,
+    but not its value, because the settings can hold a credential.
+    """
+    try:
+        return model.model_validate(settings)
+    except ValidationError as error:
+        problems = [
+            f"{'.'.join(str(part) for part in problem['loc'])}: {problem['msg']}"
+            for problem in error.errors(include_url=False, include_input=False)
+        ]
+    # Raised outside the handler, so that the error has no link to the settings' values.
+    raise InvalidCatalogSettings("; ".join(problems))

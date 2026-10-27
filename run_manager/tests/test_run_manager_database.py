@@ -175,6 +175,8 @@ def test_refusal_reasons_keep_their_published_values():
         "unknown_output_version",
         "output_version_not_current",
         "unsupported_location",
+        "invalid_selection",
+        "source_refused",
     )
     assert declared == set(errors.REFUSAL_REASONS)
 

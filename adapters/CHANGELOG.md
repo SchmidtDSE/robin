@@ -10,6 +10,12 @@
   pattern's fields. A selection gives a text value, a list of text values, or a text
   range for each field. A folder that cannot be read stops the selection, so that no
   run gets a list with recordings missing.
+- `robin_adapters.catalog.csv_list`, the `csv-list` catalog adapter. It reads one
+  recording from each row of a UTF-8 CSV file that the selection names, with the
+  identity from one column, the audio from another, and an optional duration column. An
+  audio cell can be a URI, an absolute path, or a path relative to the CSV file's
+  folder. An empty identity or audio cell, a NUL character, or a bad duration stops the
+  selection with the row number.
 
 ### Changed
 

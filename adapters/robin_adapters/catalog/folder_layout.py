@@ -23,20 +23,20 @@ import os
 import re
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from string import Formatter
 from typing import Any
 
-from pydantic import BaseModel, JsonValue, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, JsonValue, field_validator, model_validator
 
-from robin_contracts.local_files import get_local_path
+from robin_contracts.local_files import get_file_uri, get_local_path
 from robin_contracts.ports.catalog import (
     CatalogResult,
-    InvalidCatalogSettings,
     InvalidSelection,
     RequestedRecording,
     SourceUnavailable,
     StorableText,
+    check_settings,
     is_storable_text,
 )
 
@@ -140,23 +140,13 @@ class _FolderLayoutAdapter:
         return RequestedRecording(
             namespace=self._settings.namespace,
             value=value,
-            audio_uri=PurePosixPath(path).as_uri(),
+            audio_uri=get_file_uri(path),
         )
 
 
 def build_adapter(settings: Mapping[str, Any]) -> _FolderLayoutAdapter:
     """Returns a `folder-layout` adapter. Raises `InvalidCatalogSettings` for bad settings."""
-    try:
-        checked = _FolderLayoutSettings.model_validate(settings)
-    except ValidationError as error:
-        problems = [
-            f"{'.'.join(str(part) for part in problem['loc'])}: {problem['msg']}"
-            for problem in error.errors(include_url=False, include_input=False)
-        ]
-    else:
-        return _FolderLayoutAdapter(checked)
-    # Raised outside the handler, so that the error has no link to the settings' values.
-    raise InvalidCatalogSettings("; ".join(problems))
+    return _FolderLayoutAdapter(check_settings(_FolderLayoutSettings, settings))
 
 
 def _list_files(folder: Path) -> list[str]:

@@ -138,10 +138,11 @@ _register(
     "cli",
     install=("robin-cli",),
     required=(
-        "robin_cli", "robin_run_manager", "robin_contracts",
+        "robin_cli", "robin_cli.catalog", "robin_run_manager", "robin_contracts",
         "robin_models", "robin_models.output_versions",
+        "robin_adapters", "robin_adapters.catalog.folder_layout",
     ),
-    runtimes=("psycopg",),
+    runtimes=("psycopg", "boto3", "ondio"),
 )
 _register(
     "worker",
@@ -161,6 +162,7 @@ _register(
     install=("robin-adapters",),
     required=(
         "robin_adapters",
+        "robin_adapters.catalog.csv_list",
         "robin_adapters.catalog.folder_layout",
         "robin_adapters.storage.local",
         "robin_contracts",

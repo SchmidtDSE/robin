@@ -70,7 +70,7 @@ def test_a_command_that_needs_the_schema_is_refused_before_migrate(
     )
 
     with pytest.raises(Refused) as raised:
-        _run(arguments, Services(profile=None, database=database), tmp_path, "test")
+        _run(arguments, Services(profile=None, database=database), tmp_path, "test", {})
 
     assert raised.value.reason == "schema_not_current"
     assert "robin db migrate" in raised.value.message
@@ -83,10 +83,10 @@ def test_a_command_gets_the_actor_and_the_profile(database, database_settings, t
         needs_schema=False, run=lambda context, arguments: called.append(context)
     )
 
-    _run(arguments, Services(profile=None, database=database), tmp_path, "test")
+    _run(arguments, Services(profile=None, database=database), tmp_path, "test", {})
 
-    assert [(c.actor, c.profile, c.environment) for c in called] == [
-        (database_settings.user, tmp_path, "test")
+    assert [(c.actor, c.profile, c.environment, c.environ) for c in called] == [
+        (database_settings.user, tmp_path, "test", {})
     ]
 
 

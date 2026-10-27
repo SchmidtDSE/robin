@@ -4,18 +4,23 @@ Each handler takes a `Context` and the parsed arguments, and returns an `Output`
 """
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import Any
 
+from robin_cli.catalog import get_manifest_from_catalog, parse_selection
 from robin_run_manager import migrations, models, presets, runs, submit
 from robin_run_manager.compose import Services
 from robin_run_manager.configuration import read_configuration
 from robin_run_manager.pages import Page
 from robin_run_manager.profile import get_execution_settings
-from robin_run_manager.recording_inputs import read_recordings_file, read_uris_file
+from robin_run_manager.recording_inputs import (
+    RecordingManifest,
+    read_recordings_file,
+    read_uris_file,
+)
 
 MODEL_COLUMNS = ("MODEL", "KIND", "CARD_DIGEST")
 PRESET_COLUMNS = ("NAME", "MODEL", "CONFIGURATION_DIGEST")
@@ -45,13 +50,15 @@ class Output:
 class Context:
     """What each command gets: the services, the actor, and the selected profile.
 
-    `actor` is the database login, which PostgreSQL has checked.
+    `actor` is the database login, which PostgreSQL has checked. `environ` holds the
+    environment variables, which fill in the catalog adapter's settings.
     """
 
     services: Services
     actor: str
     profile: Path
     environment: str
+    environ: Mapping[str, str]
 
 
 def migrate(context: Context, arguments) -> Output:
@@ -139,11 +146,7 @@ def show_preset(context: Context, arguments) -> Output:
 
 def submit_run(context: Context, arguments) -> Output:
     execution_settings = get_execution_settings(context.services.profile)
-    if arguments.uris is not None:
-        recordings = read_uris_file(arguments.uris, arguments.namespace)
-    else:
-        recordings = read_recordings_file(arguments.recordings)
-
+    recordings = _read_recordings(context, arguments)
     configuration = (
         read_configuration(arguments.configuration)
         if arguments.configuration is not None
@@ -221,6 +224,18 @@ def list_run_tasks(context: Context, arguments) -> Output:
         TASK_COLUMNS,
         lambda item: (item["task_id"], item["state"], str(item["recording_count"])),
     )
+
+
+def _read_recordings(context: Context, arguments) -> RecordingManifest:
+    """The run's recordings, from whichever of --selection, --uris, or --recordings was given."""
+    if arguments.selection is not None:
+        selection, provenance = parse_selection(arguments.selection)
+        return get_manifest_from_catalog(
+            context.services.profile, context.environ, selection, provenance
+        )
+    if arguments.uris is not None:
+        return read_uris_file(arguments.uris, arguments.namespace)
+    return read_recordings_file(arguments.recordings)
 
 
 def _list(

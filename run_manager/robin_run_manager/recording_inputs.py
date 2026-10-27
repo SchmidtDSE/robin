@@ -5,24 +5,22 @@ spaces is refused.
 """
 
 import codecs
-import json
-import re
 from collections.abc import Sequence
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, NamedTuple, NoReturn
-from urllib.parse import unquote, urlsplit
 
 from pydantic import ValidationError
 
 from robin_contracts.canonical import checksum_bytes
+from robin_contracts.local_files import get_audio_uri
 from robin_contracts.ports.catalog import RequestedRecording, is_storable_text
+from robin_contracts.text_formats import InvalidText, load_json
 from robin_run_manager.errors import INVALID_REQUEST, Refused
 from robin_run_manager.operator_files import field_problems
 
 # The most line problems that one refusal reports.
 MAX_PROBLEMS = 20
 
-_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
 _UTF16_MARKS = (codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)
 
 
@@ -128,13 +126,10 @@ def _parse_recording(line: str) -> RequestedRecording:
     if not line.strip():
         raise _LineProblem("The line holds only spaces. Remove it.")
     try:
-        entry = json.loads(
-            line, object_pairs_hook=_refuse_repeated_keys, parse_constant=_refuse_constant
-        )
-    except _LineProblem:
-        raise
-    except (ValueError, RecursionError):
-        entry = None
+        entry = load_json(line)
+    except InvalidText as error:
+        # The problem only: a position inside one line would read as a line number.
+        raise _LineProblem(f"The line {error.problem}.") from None
     if not isinstance(entry, dict):
         raise _LineProblem(
             "The line is not a JSON object. Give one object with namespace, value, "
@@ -161,42 +156,14 @@ def _parse_recording(line: str) -> RequestedRecording:
     )
 
 
-def _refuse_repeated_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    entry = {}
-    for key, value in pairs:
-        if key in entry:
-            raise _LineProblem(f"The key {key!r} appears more than once. Give each key once.")
-        entry[key] = value
-    return entry
-
-
-def _refuse_constant(name: str) -> NoReturn:
-    raise _LineProblem(f"{name} is not a number that Robin accepts. Give a finite number.")
-
-
 def _parse_uri(line: str) -> str:
     if not line.strip():
         raise _LineProblem("The line holds only spaces. Remove it, or give a path or a URI.")
-    if line.startswith("/"):
-        return PurePosixPath(line).as_uri()
-    if _SCHEME.match(line) is None:
-        raise _LineProblem("The line is a relative path. Give an absolute path or a URI.")
-    if not line.lower().startswith("file:"):
-        return line
     try:
-        path = unquote(urlsplit(line).path)
-    except ValueError:
-        path = ""
-    if not path.startswith("/"):
-        raise _LineProblem(
-            "The line is not a valid file URI. Give an absolute path or a file:/// URI."
-        )
-    robins = PurePosixPath(path).as_uri()
-    if line != robins:
-        raise _LineProblem(
-            f"The file URI is not in the spelling that Robin uses. Write it as {robins}."
-        )
-    return line
+        return get_audio_uri(line)
+    except ValueError as error:
+        problem = str(error)
+    raise _LineProblem(f"The line is {problem}.")
 
 
 def get_repeated_identities(

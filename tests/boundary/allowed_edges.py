@@ -11,7 +11,7 @@ FIXED_ALLOWED_ROBIN_IMPORTS = {
     "robin_contracts": frozenset(),
     "robin_inference_engine": frozenset({"robin_contracts"}),
     "robin_run_manager": frozenset({"robin_contracts", "robin_models"}),
-    "robin_cli": frozenset({"robin_run_manager"}),
+    "robin_cli": frozenset({"robin_run_manager", "robin_contracts"}),
     "robin_adapters": frozenset({"robin_contracts"}),
     "robin_models": frozenset({"robin_contracts"}),
     "robin_worker": frozenset(

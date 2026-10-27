@@ -8,6 +8,8 @@ import yaml
 
 from robin_run_manager.database import open_database
 from robin_run_manager.preparation import prepare_run
+from robin_run_manager.profile import load_profile
+from robin_run_manager.runs import show_run
 
 from cli_doubles import write_owl_files
 
@@ -56,6 +58,13 @@ def test_submit_with_uris_and_a_configuration_prints_the_run(robin, owl_preset):
         pytest.param(["--recordings", "x", "--preset", "p", "--configuration", "c"], id="both"),
         pytest.param(["--preset", "p"], id="neither_input"),
         pytest.param(["--uris", "x", "--preset", "p"], id="uris_without_namespace"),
+        pytest.param(
+            ["--selection", "{}", "--namespace", "n", "--preset", "p"],
+            id="namespace_with_selection",
+        ),
+        pytest.param(
+            ["--selection", "{}", "--uris", "x", "--preset", "p"], id="selection_and_uris"
+        ),
         pytest.param(
             ["--recordings", "x", "--namespace", "n", "--preset", "p"],
             id="namespace_with_recordings",
@@ -227,3 +236,149 @@ def test_a_new_storage_root_does_not_change_a_submitted_run(robin, owl_preset, e
 
     shown = json.loads(robin("--json", "runs", "show", run_id).stdout)
     assert shown["execution_settings"]["storage"] == config["storage"]
+
+
+LAB_CATALOG = {"code": "fixture_catalog:build_adapter", "namespace": "lab", "token": "${LAB_TOKEN}"}
+
+
+def get_run_count(robin, env=None) -> int:
+    return len(json.loads(robin("--json", "runs", "list", env=env).stdout)["items"])
+
+
+def test_submit_with_a_selection_prints_the_run(robin, owl_preset, environ):
+    write_environment_file(environ, {"catalog": LAB_CATALOG})
+    env = {**environ, "LAB_TOKEN": "abc123"}
+
+    ran = robin(
+        "runs", "submit", "--selection", '{"values": ["a", "b"]}', "--preset", "owl", env=env
+    )
+
+    assert ran.code == 0, ran.stderr
+    assert "with 2 recordings" in ran.stdout
+    [run] = json.loads(robin("--json", "runs", "list", env=env).stdout)["items"]
+    shown = json.loads(robin("--json", "runs", "show", run["run_id"], env=env).stdout)
+    assert shown["provenance"] == {
+        "input": "selection",
+        "catalog": "fixture_catalog:build_adapter",
+        "selection": {"values": ["a", "b"]},
+        "recording_count": 2,
+        "source": {"token_given": True, "listed_at": "2026-10-27T00:00:00Z"},
+    }
+    assert shown["execution_settings"]["compute"] == {"kind": "local"}
+    assert "abc123" not in json.dumps(shown)
+
+
+def test_submit_with_a_csv_list_profile_prints_the_run(robin, owl_preset, environ, tmp_path):
+    catalog = {"kind": "csv-list", "namespace": "lab", "id_column": "id", "audio_column": "audio"}
+    write_environment_file(environ, {"catalog": catalog})
+    (tmp_path / "recordings.csv").write_text("id,audio\nR1,a.wav\nR2,b.wav\n")
+    selection = tmp_path / "selection.yaml"
+    selection.write_text(f"file: {tmp_path / 'recordings.csv'}\n")
+
+    body = submit(robin, "--selection", f"@{selection}", "--preset", "owl")
+
+    assert body["recording_count"] == 2
+    shown = json.loads(robin("--json", "runs", "show", body["run_id"]).stdout)
+    assert shown["provenance"]["catalog"] == "csv-list"
+    assert shown["provenance"]["file_size_bytes"] == len(selection.read_bytes())
+    assert shown["provenance"]["source"]["file"] == str(tmp_path / "recordings.csv")
+
+
+def test_selection_without_a_catalog_exits_2_and_calls_nothing(robin, owl_preset):
+    ran = robin("--json", "runs", "submit", "--selection", '{"values": ["a"]}', "--preset", "owl")
+
+    assert ran.code == 2
+    assert ran.error()["reason"] == "not_configured"
+    assert get_run_count(robin) == 0
+
+
+def test_adapter_failure_creates_no_run(robin, owl_preset, environ):
+    catalog = {"code": "fixture_catalog:build_secret_failing_adapter"}
+    write_environment_file(environ, {"catalog": catalog})
+
+    ran = robin("--json", "runs", "submit", "--selection", "{}", "--preset", "owl")
+
+    assert ran.code == 5
+    assert ran.error()["reason"] == "catalog_failed"
+    assert "abc123" not in ran.stderr and "hunter2" not in ran.stderr
+    assert "Traceback" not in ran.stderr
+    assert get_run_count(robin) == 0
+
+
+def test_a_selection_with_unstorable_text_creates_no_run(robin, owl_preset, environ, tmp_path):
+    unstorable = {"code": "fixture_catalog:build_unstorable_adapter"}
+    write_environment_file(environ, {"catalog": unstorable})
+    adapter = robin("--json", "runs", "submit", "--selection", "{}", "--preset", "owl")
+    catalog = {"kind": "csv-list", "namespace": "lab", "id_column": "id", "audio_column": "audio"}
+    write_environment_file(environ, {"catalog": catalog})
+    (tmp_path / "recordings.csv").write_text("id,audio\nR1,a.wav\nR\x002,b.wav\n")
+    selection = json.dumps({"file": str(tmp_path / "recordings.csv")})
+    cell = robin("--json", "runs", "submit", "--selection", selection, "--preset", "owl")
+
+    assert (adapter.code, adapter.error()["reason"]) == (5, "catalog_failed")
+    assert (cell.code, cell.error()["reason"]) == (1, "invalid_selection")
+    assert "Row 3" in cell.error()["message"]
+    assert get_run_count(robin) == 0
+
+
+def test_a_selection_that_is_not_json_exits_1(robin, owl_preset, environ):
+    write_environment_file(environ, {"catalog": LAB_CATALOG})
+
+    ran = robin("--json", "runs", "submit", "--selection", "{site: 04}", "--preset", "owl")
+
+    assert ran.code == 1
+    assert ran.error()["reason"] == "invalid_selection"
+
+
+def test_runs_list_works_without_the_catalog_variable(robin, owl_preset, environ):
+    write_environment_file(environ, {"catalog": LAB_CATALOG})
+
+    listed = robin("--json", "runs", "list")
+    selected = robin(
+        "--json", "runs", "submit", "--selection", '{"values": ["a"]}', "--preset", "owl"
+    )
+
+    assert listed.code == 0, listed.stderr
+    assert selected.code == 1
+    assert selected.error()["reason"] == "invalid_profile"
+    assert "LAB_TOKEN" in selected.error()["message"]
+
+
+def test_an_existing_run_is_preparable_without_the_adapter(robin, owl_preset, environ):
+    write_environment_file(environ, {"catalog": LAB_CATALOG})
+    env = {**environ, "LAB_TOKEN": "abc123"}
+    run_id = submit_with(robin, env, "--selection", '{"values": ["a", "b"]}', "--preset", "owl")
+    write_environment_file(
+        environ, {"catalog": {**LAB_CATALOG, "code": "not_installed_catalog:build_adapter"}}
+    )
+
+    profile = load_profile(Path(environ["ROBIN_PROFILE"]), "test", environ)
+    database = open_database(profile.database)
+    try:
+        prepare_run(database, run_id, recordings_per_task=10)
+        status = show_run(database, run_id)["status"]
+    finally:
+        database.close()
+
+    assert status == "queued"
+
+
+def test_source_unavailable_exits_4(robin, owl_preset, environ):
+    catalog = {"code": "fixture_catalog:build_raising_adapter", "error": "SourceUnavailable"}
+    write_environment_file(environ, {"catalog": catalog})
+
+    ran = robin("--json", "runs", "submit", "--selection", "{}", "--preset", "owl")
+
+    assert ran.code == 4
+    assert ran.error() == {
+        "reason": "source_unavailable",
+        "message": "The adapter raised SourceUnavailable.",
+        "details": {"adapter": "fixture_catalog:build_raising_adapter"},
+    }
+    assert get_run_count(robin) == 0
+
+
+def submit_with(robin, env, *options) -> str:
+    ran = robin("--json", "runs", "submit", *options, env=env)
+    assert ran.code == 0, ran.stderr
+    return json.loads(ran.stdout)["run_id"]

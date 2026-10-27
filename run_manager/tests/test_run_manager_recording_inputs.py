@@ -315,7 +315,7 @@ def test_a_line_that_is_not_an_object_is_refused(tmp_path, line):
     problem = get_only_problem(get_refusal(read_recordings_file, path))
 
     assert problem["line"] == 1
-    assert "JSON object" in problem["problem"]
+    assert "JSON" in problem["problem"]
 
 
 def test_a_repeated_identity_is_refused_with_both_lines(tmp_path):
@@ -359,7 +359,7 @@ def test_deeply_nested_json_is_refused(tmp_path):
 
     problem = get_only_problem(get_refusal(read_recordings_file, path))
 
-    assert "JSON object" in problem["problem"]
+    assert "nested too deeply" in problem["problem"]
 
 
 def test_a_utf16_file_without_a_byte_order_mark_is_refused(tmp_path):

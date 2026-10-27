@@ -11,7 +11,6 @@ import contextlib
 import json
 import logging
 import os
-import re
 import sys
 import traceback
 import uuid
@@ -19,10 +18,18 @@ from collections.abc import Callable, Mapping, Sequence
 from importlib.metadata import version
 from pathlib import Path
 
+from robin_contracts.local_files import has_uri_scheme
 from robin_run_manager import models
 from robin_run_manager.compose import Services, compose
 from robin_run_manager.database import current_login
-from robin_run_manager.errors import NotConfigured, OperationError, OutcomeUncertain, Unavailable
+from robin_run_manager.errors import (
+    CatalogFailed,
+    NotConfigured,
+    OperationError,
+    OutcomeUncertain,
+    SourceUnavailable,
+    Unavailable,
+)
 from robin_run_manager.migrations import require_current_schema
 from robin_run_manager.pages import DEFAULT_LIMIT, MAX_LIMIT
 from robin_run_manager.profile import load_profile
@@ -123,7 +130,7 @@ def main(argv: Sequence[str] | None = None, *, environ: Mapping[str, str] | None
             print(add_color(line, DIM, enabled=error_color), file=sys.stderr)
         services = compose(profile)
         with contextlib.closing(services.database):
-            output = _run(arguments, services, directory, environment)
+            output = _run(arguments, services, directory, environment, environ)
     except _LocalProblem as problem:
         _print_local_problem(problem, json_mode=json_mode, color=error_color)
         return EXIT_LOCAL_PROBLEM
@@ -138,12 +145,16 @@ def main(argv: Sequence[str] | None = None, *, environ: Mapping[str, str] | None
 
 
 def _run(
-    arguments: argparse.Namespace, services: Services, directory: Path, environment: str
+    arguments: argparse.Namespace,
+    services: Services,
+    directory: Path,
+    environment: str,
+    environ: Mapping[str, str],
 ) -> Output:
     actor = current_login(services.database)
     if arguments.needs_schema:
         require_current_schema(services.database)
-    return arguments.run(Context(services, actor, directory, environment), arguments)
+    return arguments.run(Context(services, actor, directory, environment, environ), arguments)
 
 
 def _parse(parser: argparse.ArgumentParser, argv: list[str]) -> argparse.Namespace:
@@ -209,7 +220,8 @@ Human output has color only on a terminal. Set NO_COLOR, or TERM=dumb, to turn
 color off.
 
 Use --json in scripts. Exit codes: 0 success, 1 refused, 2 command or profile
-problem, 3 outcome uncertain, 4 unavailable, 5 internal error.
+problem, 3 outcome uncertain, 4 the database or a catalog source is unavailable,
+5 internal error or a catalog adapter failed.
 
 Give robin COMMAND ACTION --help for the details of each command.
 """
@@ -344,15 +356,12 @@ def _get_role_text(roles_by_model) -> str:
     return "\n".join(f"  {name:<14}{', '.join(sorted(roles))}" for name, roles in roles_by_model.items())
 
 
-_URI_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
-
-
 def _parse_role_and_location(text: str) -> tuple[str, str]:
     """Parse ROLE=LOCATION. A relative path is made absolute from the current folder."""
     role, equals, location = text.partition("=")
     if not equals or not role or not location:
         raise argparse.ArgumentTypeError(f"{text!r} is not ROLE=LOCATION")
-    if not location.startswith("/") and _URI_SCHEME.match(location) is None:
+    if not location.startswith("/") and not has_uri_scheme(location):
         # abspath, not resolve: a symlink stays the stored location, so the digest check
         # still catches a link that is pointed at a changed file.
         location = os.path.abspath(location)
@@ -442,20 +451,32 @@ def _add_preset_commands(nouns) -> None:
 
 
 RECORDINGS_FORMAT = """\
-Give the recordings in one of two forms.
+Give the recordings in one of three forms. Each recording is given once.
 
---recordings FILE is JSON Lines: one object on each line, with namespace, value,
-audio_uri, and an optional duration_seconds. namespace and value identify the
-recording; audio_uri is where its audio is.
+--recordings FILE is JSON Lines, one recording on each line. namespace and value
+identify it, and duration_seconds is optional:
 
   {"namespace": "survey", "value": "site-1/0500", "audio_uri": "s3://audio/site-1/0500.wav"}
 
---uris FILE has one absolute path, file:/// URI, or s3:// URI on each line, such
-as s3://audio/a.wav. Give --namespace with it. An absolute path is stored as its
-file:/// URI, and a file: line must already be in that form. Each URI is also the
-recording's value.
+--uris FILE has one absolute path, file:/// URI, or s3:// URI on each line, and
+each is also the recording's value. Give --namespace with it. A path is stored as
+its file:/// URI, and a file: line must already be in that form.
 
-Both files are UTF-8. Empty lines are skipped. Each recording is given once.
+Both files are UTF-8, and empty lines are skipped.
+
+--selection JSON or --selection @FILE (a YAML file) asks the catalog adapter that
+the profile's catalog section names: kind for a built-in one, or code
+(module:function) for an installed one. Each ${NAME} in its settings is filled in
+only for --selection. The built-in kinds are:
+
+  folder-layout           files under root that match pattern; give each field of
+                          the pattern a value, a list, or {"from": ..., "to": ...}
+  csv-list                the rows of a CSV file; give {"file": PATH}
+
+If the catalog step fails, nothing is stored. The exit code is 1 for a bad
+selection, bad catalog settings, or a refusal from the source; 2 if the profile has
+no catalog section or the adapter is not installed; 4 if the source is unavailable
+(try again); and 5 if the adapter failed. --json gives the reason.
 
 Each audio location, and each file of the configuration's model, must have a form
 that the profile's compute kind can read:
@@ -463,10 +484,9 @@ that the profile's compute kind can read:
   local                   an absolute path, a file:/// URI, or an s3:// URI
   kubernetes              an s3:// URI
 
-An s3:// URI names a bucket, as in s3://audio/a.wav. A model file can also be a
-robin-models: location, which Robin gives the taxa registry of a built-in model.
-If a location has another form, such as http:// or gs://, Robin refuses the run
-with unsupported_location and stores nothing.
+A model file can also be a robin-models: location, for a built-in model's taxa
+registry. Robin refuses any other form, such as http://, with unsupported_location,
+and stores nothing.
 """
 
 RUN_STATUSES = """\
@@ -504,6 +524,8 @@ Examples:
 
   robin runs submit --uris uris.txt --namespace survey --preset dawn-owl
   robin runs submit --recordings recordings.jsonl --configuration owl.yaml
+  robin runs submit --selection '{{"site": "04"}}' --preset dawn-owl
+  robin runs submit --selection @selection.yaml --preset dawn-owl
 """
 
 RUN_SHOW_EPILOG = f"""\
@@ -532,6 +554,10 @@ def _add_run_commands(nouns) -> None:
     )
     inputs.add_argument(
         "--uris", type=Path, metavar="FILE", help="a file with one path or URI on each line"
+    )
+    inputs.add_argument(
+        "--selection", metavar="JSON|@FILE",
+        help="what to ask the profile's catalog adapter for, as JSON or a YAML file",
     )
     submit.add_argument(
         "--namespace", metavar="NS",
@@ -668,8 +694,11 @@ def _check_submit(arguments: argparse.Namespace) -> str | None:
     """Check the submit options that argparse cannot: --namespace goes with --uris only."""
     if arguments.uris is not None and arguments.namespace is None:
         return "--uris needs --namespace."
-    if arguments.recordings is not None and arguments.namespace is not None:
-        return "--namespace is used only with --uris. Each line of --recordings has its own."
+    if arguments.uris is None and arguments.namespace is not None:
+        return (
+            "--namespace is used only with --uris. --recordings and --selection give "
+            "each recording its namespace."
+        )
     return None
 
 
@@ -762,8 +791,10 @@ def _report(error: OperationError, *, json_mode: bool, color: bool) -> int:
         return EXIT_LOCAL_PROBLEM
     if isinstance(error, OutcomeUncertain):
         return EXIT_OUTCOME_UNCERTAIN
-    if isinstance(error, Unavailable):
+    if isinstance(error, (Unavailable, SourceUnavailable)):
         return EXIT_UNAVAILABLE
+    if isinstance(error, CatalogFailed):
+        return EXIT_INTERNAL_ERROR
     return EXIT_REFUSED
 
 

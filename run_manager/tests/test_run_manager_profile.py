@@ -221,7 +221,7 @@ def test_a_file_that_cannot_be_read_is_refused_with_its_name(tmp_path, monkeypat
 
 def test_a_value_that_yaml_cannot_build_is_refused_without_the_value(tmp_path):
     # PyYAML raises ValueError, not YAMLError, for a date that does not exist.
-    write(tmp_path, "dev.yaml", "database:\n  password: 2026-99-99\n")
+    write(tmp_path, "dev.yaml", "database:\n  password: !!timestamp 2026-99-99\n")
 
     refusal = invalid(tmp_path)
 
@@ -519,3 +519,21 @@ def test_get_execution_settings_needs_compute(tmp_path):
 
     with pytest.raises(NotConfigured):
         get_execution_settings(load_profile(tmp_path, "dev", ENVIRON))
+
+
+def test_a_repeated_key_is_refused_with_its_position(tmp_path):
+    write(tmp_path, "dev.yaml", "database:\n  host: a\n  host: b\n")
+
+    refusal = invalid(tmp_path)
+
+    assert refusal.details == {"file": "dev.yaml", "line": 3, "column": 3}
+    assert "'host' more than once" in refusal.message
+
+
+def test_an_unquoted_date_is_text(tmp_path):
+    write(tmp_path, "config.yaml", {"database": DATABASE})
+    write(tmp_path, "dev.yaml", "catalog:\n  kind: csv-list\n  since: 2026-05-01\n")
+
+    profile = load_profile(tmp_path, "dev", ENVIRON)
+
+    assert profile.catalog.model_extra == {"since": "2026-05-01"}
