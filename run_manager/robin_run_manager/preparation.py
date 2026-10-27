@@ -16,6 +16,7 @@ from robin_contracts.tasks import ModelOutputVersion, output_version_id
 from robin_run_manager.configuration import BackboneInput, Configuration
 from robin_run_manager.database import Database, transaction
 from robin_run_manager.errors import OUTPUT_VERSION_NOT_CURRENT
+from robin_run_manager.location_forms import get_unsupported_locations
 from robin_run_manager.stored_configurations import get_stored_configuration
 from robin_run_manager.versions import RELEASE_OUTPUT_VERSIONS, get_outdated_versions
 
@@ -46,6 +47,8 @@ class _Run:
     configuration_digest: str
     output_versions: dict[str, int]
     configuration: Configuration
+    # The kind frozen at submit, so that the result does not depend on who prepares.
+    compute_kind: str
 
 
 def get_runs_to_prepare(database: Database) -> list[UUID]:
@@ -103,7 +106,7 @@ def _prepare_once(
     if isinstance(run.configuration.input, BackboneInput):
         # The claim takes only the recordings that have no outcome yet, so a recording
         # that is skipped here is not claimed.
-        embeddings = _skip_recordings_without_embeddings(
+        embeddings = _skip_recordings_without_usable_embeddings(
             connection, run, run.configuration.input.backbone_configuration
         )
     _claim_recordings(connection, run)
@@ -133,7 +136,7 @@ def _prepare_once(
 def _lock_preparing_run(connection: psycopg.Connection, run_id: UUID) -> _Run | None:
     row = connection.execute(
         "SELECT r.run_id, r.state, r.cancelled_at, r.withdrawn_at, r.submitted_by, "
-        "i.configuration_digest, i.output_versions, c.configuration "
+        "r.execution_settings, i.configuration_digest, i.output_versions, c.configuration "
         "FROM runs r JOIN inference_runs i USING (run_id) "
         "JOIN configurations c ON c.digest = i.configuration_digest "
         "WHERE r.run_id = %s FOR UPDATE OF r",
@@ -149,6 +152,7 @@ def _lock_preparing_run(connection: psycopg.Connection, run_id: UUID) -> _Run | 
         configuration_digest=row["configuration_digest"],
         output_versions=row["output_versions"],
         configuration=Configuration.model_validate(row["configuration"]),
+        compute_kind=row["execution_settings"]["compute"]["kind"],
     )
 
 
@@ -168,17 +172,18 @@ def _fail_preparation(
     )
 
 
-def _skip_recordings_without_embeddings(
+def _skip_recordings_without_usable_embeddings(
     connection: psycopg.Connection, run: _Run, backbone_digest: str
 ) -> dict[tuple[str, str], int]:
-    """Skip each recording that has no embeddings file from the backbone.
+    """Skip each recording whose backbone embeddings file is missing or cannot be read.
 
+    A file cannot be read if the run's compute kind does not accept its location form.
     Returns the embeddings file ID of each other recording, by `(namespace, value)`.
     """
     backbone = get_stored_configuration(connection, backbone_digest)
     backbone_id = output_version_id(backbone.model.card)
     rows = connection.execute(
-        "SELECT r.namespace, r.value, c.run_id IS NOT NULL AS covered, f.file_id "
+        "SELECT r.namespace, r.value, c.run_id IS NOT NULL AS covered, f.file_id, f.uri "
         "FROM run_recordings r "
         "LEFT JOIN (recording_outcomes c JOIN runs cr "
         "ON cr.run_id = c.run_id AND cr.withdrawn_at IS NULL) "
@@ -199,6 +204,8 @@ def _skip_recordings_without_embeddings(
             skipped.append((row["namespace"], row["value"], "input_not_available"))
         elif row["file_id"] is None:
             skipped.append((row["namespace"], row["value"], "input_has_no_windows"))
+        elif get_unsupported_locations(run.compute_kind, [("embeddings", row["uri"])]):
+            skipped.append((row["namespace"], row["value"], "input_location_unsupported"))
         else:
             pinned[(row["namespace"], row["value"])] = row["file_id"]
     _insert_skipped(connection, run, skipped)

@@ -14,6 +14,7 @@ from robin_run_manager import migrations, models, presets, runs, submit
 from robin_run_manager.compose import Services
 from robin_run_manager.configuration import read_configuration
 from robin_run_manager.pages import Page
+from robin_run_manager.profile import get_execution_settings
 from robin_run_manager.recording_inputs import read_recordings_file, read_uris_file
 
 MODEL_COLUMNS = ("MODEL", "KIND", "CARD_DIGEST")
@@ -137,6 +138,7 @@ def show_preset(context: Context, arguments) -> Output:
 
 
 def submit_run(context: Context, arguments) -> Output:
+    execution_settings = get_execution_settings(context.services.profile)
     if arguments.uris is not None:
         recordings = read_uris_file(arguments.uris, arguments.namespace)
     else:
@@ -153,6 +155,7 @@ def submit_run(context: Context, arguments) -> Output:
         preset=arguments.preset,
         configuration=configuration,
         recordings=recordings,
+        execution_settings=execution_settings,
         actor=context.actor,
     )
     data = {

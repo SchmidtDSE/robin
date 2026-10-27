@@ -11,7 +11,7 @@ from robin_contracts.ports.catalog import RequestedRecording
 from robin_run_manager.configuration import UnresolvedConfiguration, read_configuration
 from robin_run_manager.database import Database, transaction
 from robin_run_manager.models import register_model
-from robin_run_manager.recording_inputs import RecordingFile
+from robin_run_manager.recording_inputs import RecordingManifest
 from robin_run_manager.submit import submit_run
 from robin_run_manager.versions import RELEASE_OUTPUT_VERSIONS
 
@@ -22,6 +22,19 @@ OWL_CONFIGURATION = read_configuration(FIXTURES / "configuration-owl-v4.yaml")
 PERCH_CONFIGURATION = read_configuration(FIXTURES / "configuration-perch-v8.yaml")
 HEAD_CONFIGURATION = read_configuration(FIXTURES / "configuration-songbird-head-v1.yaml")
 NAMESPACE = "survey"
+LOCAL_SETTINGS = {
+    "compute": {"kind": "local"},
+    "storage": {"kind": "local", "root": "/data/robin"},
+}
+KUBERNETES_SETTINGS = {
+    "compute": {
+        "kind": "kubernetes",
+        "namespace": "robin",
+        "s3_secret_name": "robin-s3",
+        "s3_endpoint": "https://s3.example",
+    },
+    "storage": {"kind": "s3", "root": "s3://robin/"},
+}
 
 
 def register_fixture_models(database: Database) -> None:
@@ -29,13 +42,13 @@ def register_fixture_models(database: Database) -> None:
         register_model(database, read_pinned_model(name), actor="ana")
 
 
-def make_recording_file(values) -> RecordingFile:
+def make_recording_manifest(values) -> RecordingManifest:
     recordings = tuple(
         RequestedRecording(namespace=NAMESPACE, value=value, audio_uri=f"s3://audio/{value}.wav")
         for value in values
     )
-    observed = {"input": "recordings", "file_sha256": "sha256:" + "0" * 64, "file_size_bytes": 1}
-    return RecordingFile(recordings=recordings, observed=observed)
+    provenance = {"input": "recordings", "file_sha256": "sha256:" + "0" * 64, "file_size_bytes": 1}
+    return RecordingManifest(recordings=recordings, provenance=provenance)
 
 
 def submit(
@@ -45,12 +58,14 @@ def submit(
     *,
     actor: str = "ana",
     release_versions=RELEASE_OUTPUT_VERSIONS,
+    execution_settings=LOCAL_SETTINGS,
 ) -> UUID:
     return submit_run(
         database,
         preset=None,
         configuration=configuration,
-        recordings=make_recording_file(values),
+        recordings=make_recording_manifest(values),
+        execution_settings=execution_settings,
         actor=actor,
         release_versions=release_versions,
     ).run_id
@@ -99,7 +114,7 @@ def add_finished_run(
 
 
 def add_output_file(
-    database: Database, run_id: UUID, value: str, kind: str = "embeddings"
+    database: Database, run_id: UUID, value: str, kind: str = "embeddings", uri: str | None = None
 ) -> int:
     with transaction(database) as connection:
         task_id = connection.execute(
@@ -111,7 +126,7 @@ def add_output_file(
             "RETURNING file_id",
             (
                 run_id, task_id, NAMESPACE, value, kind,
-                f"s3://out/{run_id}/{value}.parquet", "sha256:" + "1" * 64,
+                uri or f"s3://out/{run_id}/{value}.parquet", "sha256:" + "1" * 64,
             ),
         ).fetchone()["file_id"]
 

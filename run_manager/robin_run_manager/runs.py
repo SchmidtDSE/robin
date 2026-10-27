@@ -13,13 +13,19 @@ from robin_run_manager.pages import DEFAULT_LIMIT, Page, start_page
 from robin_run_manager.status import get_run_status
 
 RECORDING_STATES = ("skipped", "pending", "covered", "failed", "released", "withdrawn")
-SKIP_REASONS = ("already_covered", "in_progress", "input_not_available", "input_has_no_windows")
+SKIP_REASONS = (
+    "already_covered",
+    "in_progress",
+    "input_not_available",
+    "input_has_no_windows",
+    "input_location_unsupported",
+)
 
 # The run's columns, and its task and recording counts by state, as JSON objects.
 _RUN_COLUMNS = """
 SELECT r.run_id, r.state, r.submitted_by, r.created_at, r.preparation_failure,
     r.cancelled_at, r.cancelled_by, r.withdrawn_at, r.withdrawn_by,
-    i.configuration_digest, i.output_versions, i.observed_provenance,
+    i.configuration_digest, i.output_versions, i.provenance,
     (SELECT coalesce(json_object_agg(state, n), '{}') FROM (
         SELECT state, count(*) AS n FROM tasks t WHERE t.run_id = r.run_id GROUP BY state
     ) s) AS task_counts,
@@ -27,7 +33,9 @@ SELECT r.run_id, r.state, r.submitted_by, r.created_at, r.preparation_failure,
         SELECT state, count(*) AS n FROM recording_outcomes o WHERE o.run_id = r.run_id
         GROUP BY state
     ) s) AS recording_counts"""
-_SKIP_COUNTS = """,
+# The columns that only `runs show` gives.
+_SHOW_COLUMNS = """,
+    r.execution_settings,
     (SELECT coalesce(json_object_agg(skip_reason, n), '{}') FROM (
         SELECT skip_reason, count(*) AS n FROM recording_outcomes o
         WHERE o.run_id = r.run_id AND o.state = 'skipped' GROUP BY skip_reason
@@ -37,7 +45,7 @@ FROM runs r JOIN inference_runs i USING (run_id)
 """
 _RUN_SELECT = _RUN_COLUMNS + _RUN_FROM
 # One query, so that the skip counts and the other counts come from one snapshot.
-_RUN_WITH_SKIPS_SELECT = _RUN_COLUMNS + _SKIP_COUNTS + _RUN_FROM
+_RUN_SHOW_SELECT = _RUN_COLUMNS + _SHOW_COLUMNS + _RUN_FROM
 
 
 def list_runs(
@@ -87,13 +95,14 @@ def list_runs(
 
 
 def show_run(database: Database, run_id: str) -> dict:
-    """One run: its summary, versions, provenance, counts, and failures."""
+    """One run: its summary, versions, provenance, frozen settings, counts, and failures."""
     with transaction(database, read_only=True) as connection:
-        row = _get_run_row(connection, run_id, select=_RUN_WITH_SKIPS_SELECT)
+        row = _get_run_row(connection, run_id, select=_RUN_SHOW_SELECT)
     failure = row["preparation_failure"]
     return _summarize_run(row) | {
         "output_versions": row["output_versions"],
-        "observed_provenance": row["observed_provenance"],
+        "provenance": row["provenance"],
+        "execution_settings": row["execution_settings"],
         "cancelled_at": _format_time(row["cancelled_at"]),
         "cancelled_by": row["cancelled_by"],
         "withdrawn_at": _format_time(row["withdrawn_at"]),
@@ -219,7 +228,7 @@ def _summarize_run(row: dict) -> dict:
         "submitted_by": row["submitted_by"],
         "created_at": row["created_at"].isoformat(),
         "configuration_digest": row["configuration_digest"],
-        "recording_count": row["observed_provenance"]["recording_count"],
+        "recording_count": row["provenance"]["recording_count"],
     }
 
 

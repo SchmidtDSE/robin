@@ -4,7 +4,11 @@ import pytest
 import yaml
 
 from robin_run_manager.errors import NotConfigured, Refused
-from robin_run_manager.profile import load_profile
+from robin_run_manager.profile import (
+    get_execution_settings,
+    get_resolved_catalog_settings,
+    load_profile,
+)
 
 SECRET = "s3cr3t-value-for-tests"
 ADAPTER_SECRET = "adapter-token-for-tests"
@@ -38,12 +42,12 @@ def shown(refusal: Refused) -> str:
 
 def test_the_environment_file_replaces_whole_sections(tmp_path):
     write(tmp_path, "config.yaml", {"database": DATABASE, "storage": {"kind": "local", "root": "/data"}})
-    write(tmp_path, "dev.yaml", {"storage": {"kind": "s3", "bucket": "robin"}})
+    write(tmp_path, "dev.yaml", {"storage": {"kind": "s3", "root": "s3://robin/", "region": "x"}})
 
     profile = load_profile(tmp_path, "dev", ENVIRON)
 
-    assert profile.storage.kind == "s3"
-    assert profile.storage.model_extra == {"bucket": "robin"}
+    assert profile.storage.root == "s3://robin/"
+    assert profile.storage.model_extra == {"region": "x"}
     assert profile.database.password.get_secret_value() == SECRET
 
 
@@ -143,33 +147,10 @@ def test_an_unknown_section_is_refused(tmp_path):
     assert [problem["field"] for problem in refusal.details["problems"]] == ["databse"]
 
 
-@pytest.mark.parametrize("storage", [None, {"kind": "local", "root": "/data"}])
-def test_a_sagemaker_launcher_needs_s3_storage(tmp_path, storage):
-    sections = {"database": DATABASE, "launcher": {"kind": "sagemaker"}}
-    if storage is not None:
-        sections["storage"] = storage
-    write(tmp_path, "dev.yaml", sections)
-
-    refusal = invalid(tmp_path)
-    assert "s3" in refusal.message
-    # A problem with the whole profile names the profile, not a field.
-    assert [problem["field"] for problem in refusal.details["problems"]] == ["profile"]
-
-
 def test_a_pool_minimum_above_its_maximum_is_refused(tmp_path):
     write(tmp_path, "dev.yaml", {"database": {**DATABASE, "pool_min_size": 5, "pool_max_size": 2}})
 
     assert "pool_min_size" in invalid(tmp_path).message
-
-
-def test_a_sagemaker_launcher_with_s3_storage_is_accepted(tmp_path):
-    write(tmp_path, "dev.yaml", {
-        "database": DATABASE,
-        "launcher": {"kind": "sagemaker", "max_in_flight": 10},
-        "storage": {"kind": "s3", "bucket": "robin"},
-    })
-
-    assert load_profile(tmp_path, "dev", ENVIRON).launcher.kind == "sagemaker"
 
 
 def test_a_validation_error_does_not_show_a_secret(tmp_path):
@@ -186,8 +167,8 @@ def test_a_validation_error_does_not_show_a_secret(tmp_path):
 def test_the_profile_shows_no_password_or_adapter_value(tmp_path):
     write(tmp_path, "dev.yaml", {
         "database": DATABASE,
-        "storage": {"kind": "s3", "secret_access_key": "${ADAPTER_SECRET}"},
-        "catalogs": {"soundhub": {"kind": "soundhub", "token": "${ADAPTER_SECRET}"}},
+        "compute": {"kind": "local", "api_key": "${ADAPTER_SECRET}"},
+        "storage": {"kind": "s3", "root": "s3://robin/", "secret_access_key": "${ADAPTER_SECRET}"},
     })
 
     profile = load_profile(tmp_path, "dev", {**ENVIRON, "ADAPTER_SECRET": ADAPTER_SECRET})
@@ -195,8 +176,24 @@ def test_the_profile_shows_no_password_or_adapter_value(tmp_path):
     for text in (repr(profile), str(profile)):
         assert SECRET not in text
         assert ADAPTER_SECRET not in text
+        assert "secret_access_key" in text
+        assert "api_key" in text
+    assert profile.storage.model_extra == {"secret_access_key": ADAPTER_SECRET}
+
+
+@pytest.mark.parametrize("named", [{"kind": "csv-list"}, {"code": "lab.catalog:build_adapter"}])
+def test_catalog_repr_shows_no_setting_value(tmp_path, named):
+    write(tmp_path, "dev.yaml", {
+        "database": DATABASE,
+        "catalog": {**named, "token": ADAPTER_SECRET},
+    })
+
+    profile = load_profile(tmp_path, "dev", ENVIRON)
+
+    for text in (repr(profile), str(profile), repr(profile.catalog)):
+        assert ADAPTER_SECRET not in text
         assert "token" in text
-    assert profile.catalogs["soundhub"].model_extra == {"token": ADAPTER_SECRET}
+        assert next(iter(named.values())) in text
 
 
 def test_a_file_that_is_not_utf8_is_refused_with_its_name(tmp_path):
@@ -240,14 +237,6 @@ def test_a_value_that_contains_itself_is_refused(tmp_path):
     refusal = invalid(tmp_path)
 
     assert refusal.details == {"field": "database.itself"}
-
-
-def test_an_empty_catalog_name_is_refused(tmp_path):
-    write(tmp_path, "dev.yaml", {"database": DATABASE, "catalogs": {"": {"kind": "soundhub"}}})
-
-    refusal = invalid(tmp_path)
-
-    assert [problem["field"].split(".")[0] for problem in refusal.details["problems"]] == ["catalogs"]
 
 
 RDS = {
@@ -349,3 +338,184 @@ def test_recordings_per_task_must_be_at_least_1(tmp_path, preparation):
     refusal = invalid(tmp_path)
 
     assert refusal.details["problems"][0]["field"].startswith("preparation.")
+
+
+LOCAL_COMPUTE = {"kind": "local"}
+LOCAL_STORAGE = {"kind": "local", "root": "/data/robin"}
+KUBERNETES = {
+    "kind": "kubernetes",
+    "namespace": "robin",
+    "s3_secret_name": "robin-s3",
+    "s3_endpoint": "https://s3.example",
+}
+S3_STORAGE = {"kind": "s3", "root": "s3://lab/robin/"}
+CATALOG = {"kind": "csv-list", "namespace": "lab", "session_token": "${SESSION_TOKEN}"}
+
+
+def test_compute_and_storage_reprs_show_no_setting_value(tmp_path):
+    endpoint = f"https://robin:{ADAPTER_SECRET}@s3.example"
+    write(tmp_path, "dev.yaml", {
+        "database": DATABASE,
+        "compute": {**KUBERNETES, "s3_endpoint": endpoint},
+        "storage": {"kind": "s3", "root": f"s3://{ADAPTER_SECRET}/"},
+    })
+
+    profile = load_profile(tmp_path, "dev", ENVIRON)
+
+    for text in (repr(profile), str(profile)):
+        assert ADAPTER_SECRET not in text
+        assert "kubernetes" in text
+        assert "s3_endpoint" in text
+        assert "root" in text
+
+
+def get_problem_fields(refusal: Refused) -> list[str]:
+    return [problem["field"] for problem in refusal.details["problems"]]
+
+
+def test_a_catalog_variable_that_is_not_set_does_not_stop_loading(tmp_path):
+    write(tmp_path, "dev.yaml", {"database": DATABASE, "catalog": CATALOG})
+
+    profile = load_profile(tmp_path, "dev", ENVIRON)
+
+    assert profile.catalog.kind == "csv-list"
+
+
+def test_get_resolved_catalog_settings_fills_in_variables(tmp_path):
+    write(tmp_path, "dev.yaml", {"database": DATABASE, "catalog": CATALOG})
+    profile = load_profile(tmp_path, "dev", ENVIRON)
+
+    settings = get_resolved_catalog_settings(profile, {"SESSION_TOKEN": ADAPTER_SECRET})
+
+    assert settings == {"namespace": "lab", "session_token": ADAPTER_SECRET}
+
+
+def test_get_resolved_catalog_settings_refuses_a_missing_variable(tmp_path):
+    write(tmp_path, "dev.yaml", {"database": DATABASE, "catalog": CATALOG})
+    profile = load_profile(tmp_path, "dev", ENVIRON)
+
+    with pytest.raises(Refused) as raised:
+        get_resolved_catalog_settings(profile, {})
+
+    assert raised.value.reason == "invalid_profile"
+    assert raised.value.details == {"field": "catalog.session_token", "variable": "SESSION_TOKEN"}
+
+
+@pytest.mark.parametrize(
+    "catalog",
+    [{"namespace": "lab"}, {"kind": "csv-list", "code": "lab.catalog:build_adapter"}],
+    ids=["neither", "both"],
+)
+def test_catalog_needs_exactly_one_of_kind_and_code(tmp_path, catalog):
+    write(tmp_path, "dev.yaml", {"database": DATABASE, "catalog": catalog})
+
+    assert get_problem_fields(invalid(tmp_path)) == ["catalog"]
+
+
+@pytest.mark.parametrize(
+    "code", ["lab.catalog", "lab.catalog:", ":build_adapter", "lab catalog:build", "1lab:build"]
+)
+def test_catalog_code_must_name_a_module_and_function(tmp_path, code):
+    write(tmp_path, "dev.yaml", {"database": DATABASE, "catalog": {"code": code}})
+
+    assert get_problem_fields(invalid(tmp_path)) == ["catalog.code"]
+
+
+def test_an_unknown_compute_kind_is_refused(tmp_path):
+    write(tmp_path, "dev.yaml", {
+        "database": DATABASE, "compute": {"kind": "sagemaker"}, "storage": S3_STORAGE,
+    })
+
+    assert get_problem_fields(invalid(tmp_path)) == ["compute"]
+
+
+@pytest.mark.parametrize("missing", ["namespace", "s3_secret_name", "s3_endpoint"])
+def test_kubernetes_needs_its_three_fields(tmp_path, missing):
+    compute = {name: value for name, value in KUBERNETES.items() if name != missing}
+    write(tmp_path, "dev.yaml", {"database": DATABASE, "compute": compute, "storage": S3_STORAGE})
+
+    refusal = invalid(tmp_path)
+
+    assert get_problem_fields(refusal) == [f"compute.kubernetes.{missing}"]
+
+
+@pytest.mark.parametrize("storage", [LOCAL_STORAGE, {"kind": "local", "root": "file:///data"}])
+def test_kubernetes_refuses_a_storage_root_that_is_not_s3(tmp_path, storage):
+    write(tmp_path, "dev.yaml", {"database": DATABASE, "compute": KUBERNETES, "storage": storage})
+
+    refusal = invalid(tmp_path)
+
+    assert get_problem_fields(refusal) == ["storage"]
+    assert "storage.root" in refusal.message
+    assert "s3://" in refusal.message
+
+
+@pytest.mark.parametrize("compute", [LOCAL_COMPUTE, KUBERNETES], ids=["local", "kubernetes"])
+def test_compute_without_storage_is_refused(tmp_path, compute):
+    write(tmp_path, "dev.yaml", {"database": DATABASE, "compute": compute})
+
+    assert get_problem_fields(invalid(tmp_path)) == ["storage"]
+
+
+def test_a_profile_without_compute_or_storage_loads(tmp_path):
+    write(tmp_path, "dev.yaml", {"database": DATABASE})
+
+    profile = load_profile(tmp_path, "dev", ENVIRON)
+
+    assert profile.compute is None
+    assert profile.storage is None
+
+
+def test_an_unknown_storage_kind_is_refused(tmp_path):
+    write(tmp_path, "dev.yaml", {"database": DATABASE, "storage": {"kind": "gcs", "root": "/data"}})
+
+    assert get_problem_fields(invalid(tmp_path)) == ["storage"]
+
+
+def test_storage_needs_a_root(tmp_path):
+    write(tmp_path, "dev.yaml", {"database": DATABASE, "storage": {"kind": "local"}})
+
+    assert get_problem_fields(invalid(tmp_path)) == ["storage.local.root"]
+
+
+@pytest.mark.parametrize(
+    "storage",
+    [
+        {"kind": "local", "root": "s3://lab/robin/"},
+        {"kind": "s3", "root": "/data/robin"},
+        {"kind": "local", "root": "data/robin"},
+        {"kind": "s3", "root": "s3://"},
+        {"kind": "s3", "root": "s3:///robin/"},
+    ],
+    ids=["local-with-s3", "s3-with-a-path", "relative-path", "s3-with-nothing", "s3-no-bucket"],
+)
+def test_storage_root_must_have_the_form_of_its_kind(tmp_path, storage):
+    write(tmp_path, "dev.yaml", {"database": DATABASE, "storage": storage})
+
+    assert get_problem_fields(invalid(tmp_path)) == [f"storage.{storage['kind']}.root"]
+
+
+def test_get_execution_settings_freezes_compute_and_storage(tmp_path):
+    write(tmp_path, "dev.yaml", {
+        "database": DATABASE,
+        "compute": {**KUBERNETES, "image": "robin:1"},
+        "storage": {**S3_STORAGE, "root": "s3://lab/${LAB}/", "region": "x"},
+    })
+    profile = load_profile(tmp_path, "dev", {**ENVIRON, "LAB": "owls"})
+
+    assert get_execution_settings(profile) == {
+        "compute": {
+            "kind": "kubernetes",
+            "namespace": "robin",
+            "s3_secret_name": "robin-s3",
+            "s3_endpoint": "https://s3.example",
+        },
+        "storage": {"kind": "s3", "root": "s3://lab/owls/"},
+    }
+
+
+def test_get_execution_settings_needs_compute(tmp_path):
+    write(tmp_path, "dev.yaml", {"database": DATABASE})
+
+    with pytest.raises(NotConfigured):
+        get_execution_settings(load_profile(tmp_path, "dev", ENVIRON))

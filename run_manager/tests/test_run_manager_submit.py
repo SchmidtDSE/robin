@@ -1,6 +1,7 @@
 """Submit: store a run in `preparing`, with its configuration, versions, and recording list."""
 
 from pathlib import Path
+from unittest.mock import ANY
 
 import pytest
 
@@ -12,21 +13,23 @@ from robin_run_manager.errors import (
     INVALID_REQUEST,
     UNKNOWN_OUTPUT_VERSION,
     UNKNOWN_PRESET,
+    UNSUPPORTED_LOCATION,
     Refused,
 )
 from robin_run_manager.models import register_model
 from robin_run_manager.presets import create_preset
-from robin_run_manager.recording_inputs import RecordingFile
+from robin_run_manager.recording_inputs import RecordingManifest
 from robin_run_manager.submit import submit_run
 from robin_run_manager.versions import RELEASE_OUTPUT_VERSIONS
 
 from model_fixtures import read_pinned_model
+from run_fixtures import KUBERNETES_SETTINGS, LOCAL_SETTINGS
 
 FIXTURES = Path(__file__).parent / "fixtures"
 OWL_CONFIGURATION = read_configuration(FIXTURES / "configuration-owl-v4.yaml")
 PERCH_CONFIGURATION = read_configuration(FIXTURES / "configuration-perch-v8.yaml")
 HEAD_CONFIGURATION = read_configuration(FIXTURES / "configuration-songbird-head-v1.yaml")
-OBSERVED = {
+PROVENANCE = {
     "input": "uris",
     "file_sha256": "sha256:" + "0" * 64,
     "file_size_bytes": 812,
@@ -34,7 +37,7 @@ OBSERVED = {
 }
 
 
-def make_recording_file(count: int = 3) -> RecordingFile:
+def make_recording_manifest(count: int = 3) -> RecordingManifest:
     recordings = tuple(
         RequestedRecording(
             namespace="survey",
@@ -44,7 +47,7 @@ def make_recording_file(count: int = 3) -> RecordingFile:
         )
         for index in range(count)
     )
-    return RecordingFile(recordings=recordings, observed=dict(OBSERVED))
+    return RecordingManifest(recordings=recordings, provenance=dict(PROVENANCE))
 
 
 @pytest.fixture
@@ -65,10 +68,15 @@ def count_rows(database, table: str) -> int:
 
 def test_a_run_from_a_preset_is_stored_preparing(registered):
     preset = create_preset(registered, "owl", OWL_CONFIGURATION, actor="ana")
-    submitted_list = make_recording_file()
+    submitted_list = make_recording_manifest()
 
     submitted = submit_run(
-        registered, preset="owl", configuration=None, recordings=submitted_list, actor="ben"
+        registered,
+        preset="owl",
+        configuration=None,
+        recordings=submitted_list,
+        execution_settings=LOCAL_SETTINGS,
+        actor="ben",
     )
 
     assert submitted.configuration_digest == preset.configuration_digest
@@ -90,13 +98,19 @@ def test_a_preset_and_its_configuration_give_the_same_digest(registered):
     create_preset(registered, "owl", OWL_CONFIGURATION, actor="ana")
 
     from_preset = submit_run(
-        registered, preset="owl", configuration=None, recordings=make_recording_file(), actor="ana"
+        registered,
+        preset="owl",
+        configuration=None,
+        recordings=make_recording_manifest(),
+        execution_settings=LOCAL_SETTINGS,
+        actor="ana",
     )
     from_file = submit_run(
         registered,
         preset=None,
         configuration=OWL_CONFIGURATION,
-        recordings=make_recording_file(),
+        recordings=make_recording_manifest(),
+        execution_settings=LOCAL_SETTINGS,
         actor="ana",
     )
 
@@ -108,7 +122,8 @@ def test_a_full_configuration_is_stored_for_later_heads(registered):
         registered,
         preset=None,
         configuration=PERCH_CONFIGURATION,
-        recordings=make_recording_file(),
+        recordings=make_recording_manifest(),
+        execution_settings=LOCAL_SETTINGS,
         actor="ana",
     )
 
@@ -129,7 +144,8 @@ def test_both_or_neither_is_an_invalid_request(registered, both):
             registered,
             preset="owl" if both else None,
             configuration=OWL_CONFIGURATION if both else None,
-            recordings=make_recording_file(),
+            recordings=make_recording_manifest(),
+            execution_settings=LOCAL_SETTINGS,
             actor="ana",
         )
 
@@ -140,7 +156,8 @@ def test_both_or_neither_is_an_invalid_request(registered, both):
 def test_an_unknown_preset_is_refused(registered):
     with pytest.raises(Refused) as refused:
         submit_run(
-            registered, preset="absent", configuration=None, recordings=make_recording_file(),
+            registered, preset="absent", configuration=None, recordings=make_recording_manifest(),
+            execution_settings=LOCAL_SETTINGS,
             actor="ana",
         )
 
@@ -160,7 +177,8 @@ def test_a_model_not_in_the_release_is_refused_and_nothing_is_stored(registered)
             registered,
             preset=None,
             configuration=OWL_CONFIGURATION,
-            recordings=make_recording_file(),
+            recordings=make_recording_manifest(),
+            execution_settings=LOCAL_SETTINGS,
             actor="ana",
             release_versions=release_versions,
         )
@@ -180,7 +198,8 @@ def test_a_head_run_freezes_both_versions(registered):
         registered,
         preset=None,
         configuration=HEAD_CONFIGURATION,
-        recordings=make_recording_file(),
+        recordings=make_recording_manifest(),
+        execution_settings=LOCAL_SETTINGS,
         actor="ana",
         release_versions=release_versions,
     )
@@ -193,31 +212,34 @@ def test_a_head_run_freezes_both_versions(registered):
     assert run["output_versions"] == {"head_runtime:onnx": 3, "model:perch/v8": 1}
 
 
-def test_observed_provenance_is_stored_with_the_recording_count(registered):
+def test_the_provenance_is_stored_with_the_recording_count(registered):
     submitted = submit_run(
         registered,
         preset=None,
         configuration=OWL_CONFIGURATION,
-        recordings=make_recording_file(5),
+        recordings=make_recording_manifest(5),
+        execution_settings=LOCAL_SETTINGS,
         actor="ana",
     )
 
     [run] = get_rows(
         registered,
-        "SELECT observed_provenance FROM inference_runs WHERE run_id = %s",
+        "SELECT provenance FROM inference_runs WHERE run_id = %s",
         submitted.run_id,
     )
-    assert run["observed_provenance"] == OBSERVED | {"recording_count": 5}
+    assert run["provenance"] == PROVENANCE | {"recording_count": 5}
 
 
 def test_the_same_submission_twice_makes_two_runs(registered):
     first = submit_run(
         registered, preset=None, configuration=OWL_CONFIGURATION,
-        recordings=make_recording_file(), actor="ana",
+        recordings=make_recording_manifest(), execution_settings=LOCAL_SETTINGS,
+        actor="ana",
     )
     second = submit_run(
         registered, preset=None, configuration=OWL_CONFIGURATION,
-        recordings=make_recording_file(), actor="ana",
+        recordings=make_recording_manifest(), execution_settings=LOCAL_SETTINGS,
+        actor="ana",
     )
 
     assert first.run_id != second.run_id
@@ -229,9 +251,114 @@ def test_a_list_of_20000_recordings_is_stored(registered):
         registered,
         preset=None,
         configuration=OWL_CONFIGURATION,
-        recordings=make_recording_file(20000),
+        recordings=make_recording_manifest(20000),
+        execution_settings=LOCAL_SETTINGS,
         actor="ana",
     )
 
     assert submitted.recording_count == 20000
     assert count_rows(registered, "run_recordings") == 20000
+
+
+def make_s3_manifest(count: int = 3, provenance=PROVENANCE) -> RecordingManifest:
+    recordings = tuple(
+        RequestedRecording(
+            namespace="survey", value=f"{index:05}", audio_uri=f"s3://audio/{index:05}.wav"
+        )
+        for index in range(count)
+    )
+    return RecordingManifest(recordings=recordings, provenance=dict(provenance))
+
+
+def submit_configuration(
+    database, recordings, execution_settings, configuration=OWL_CONFIGURATION
+):
+    return submit_run(
+        database,
+        preset=None,
+        configuration=configuration,
+        recordings=recordings,
+        execution_settings=execution_settings,
+        actor="ana",
+    )
+
+
+def register_with_files(database, name: str, **uris: str) -> None:
+    """Register the fixture model `name`, with the file of each role in `uris` moved."""
+    model = read_pinned_model(name)
+    files = {
+        role: pinned.model_copy(update={"uri": uris.get(role, pinned.uri)})
+        for role, pinned in model.files.items()
+    }
+    register_model(database, model.model_copy(update={"files": files}), actor="ana")
+
+
+def get_refusal(*arguments) -> Refused:
+    with pytest.raises(Refused) as refused:
+        submit_configuration(*arguments)
+    return refused.value
+
+
+def test_submit_freezes_the_execution_settings(registered):
+    submitted = submit_configuration(registered, make_s3_manifest(), KUBERNETES_SETTINGS)
+
+    [run] = get_rows(
+        registered, "SELECT execution_settings FROM runs WHERE run_id = %s", submitted.run_id
+    )
+    assert run["execution_settings"] == KUBERNETES_SETTINGS
+
+
+def test_submit_stores_the_source_inside_the_provenance(registered):
+    provenance = {
+        "input": "selection",
+        "catalog": "csv-list",
+        "selection": {"site": "a"},
+        "source": {"file": "/data/lab/recordings.csv", "file_sha256": "sha256:" + "2" * 64},
+    }
+
+    submitted = submit_configuration(
+        registered, make_s3_manifest(2, provenance), LOCAL_SETTINGS
+    )
+
+    [run] = get_rows(
+        registered, "SELECT provenance FROM inference_runs WHERE run_id = %s", submitted.run_id
+    )
+    assert run["provenance"] == provenance | {"recording_count": 2}
+
+
+def test_a_local_recording_under_kubernetes_is_refused_and_no_run_is_stored(registered):
+    refusal = get_refusal(registered, make_recording_manifest(25), KUBERNETES_SETTINGS)
+
+    assert refusal.reason == UNSUPPORTED_LOCATION
+    assert len(refusal.details["problems"]) == 20
+    assert refusal.details["truncated"] is True
+    assert refusal.details["problems"][0] == {
+        "role": "recording", "location": "file:///data/00000.wav", "accepted_forms": ANY,
+    }
+    assert (count_rows(registered, "runs"), count_rows(registered, "configurations")) == (0, 0)
+
+
+def test_a_local_model_file_under_kubernetes_is_refused(migrated_database):
+    register_model(migrated_database, read_pinned_model("perch-v8"), actor="ana")
+    register_with_files(migrated_database, "songbird-head-v1", graph="file:///models/head.onnx")
+    create_preset(migrated_database, "perch", PERCH_CONFIGURATION, actor="ana")
+
+    refusal = get_refusal(
+        migrated_database, make_s3_manifest(), KUBERNETES_SETTINGS, HEAD_CONFIGURATION
+    )
+
+    assert refusal.reason == UNSUPPORTED_LOCATION
+    assert refusal.details["problems"] == [
+        {"role": "model_file", "location": "file:///models/head.onnx", "accepted_forms": ANY},
+    ]
+    assert count_rows(migrated_database, "runs") == 0
+
+
+def test_a_robin_models_registry_is_accepted_under_kubernetes(migrated_database):
+    register_with_files(
+        migrated_database, "owl-v4", taxa_registry="robin-models:owl/v4/taxa_registry.csv"
+    )
+
+    submitted = submit_configuration(migrated_database, make_s3_manifest(), KUBERNETES_SETTINGS)
+
+    assert submitted.recording_count == 3

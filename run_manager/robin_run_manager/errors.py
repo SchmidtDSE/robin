@@ -22,6 +22,7 @@ INVALID_CONFIGURATION = "invalid_configuration"
 UNKNOWN_PRESET = "unknown_preset"
 UNKNOWN_OUTPUT_VERSION = "unknown_output_version"
 OUTPUT_VERSION_NOT_CURRENT = "output_version_not_current"
+UNSUPPORTED_LOCATION = "unsupported_location"
 
 REFUSAL_REASONS = (
     NOT_AUTHENTICATED,
@@ -42,6 +43,7 @@ REFUSAL_REASONS = (
     UNKNOWN_PRESET,
     UNKNOWN_OUTPUT_VERSION,
     OUTPUT_VERSION_NOT_CURRENT,
+    UNSUPPORTED_LOCATION,
 )
 
 

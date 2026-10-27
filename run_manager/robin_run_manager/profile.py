@@ -2,7 +2,7 @@
 
 The environment file replaces whole top-level sections of `config.yaml`. Then each
 `${NAME}` in a text value becomes the value of the environment variable NAME. A
-variable that is not set stops loading.
+variable that is not set stops loading, except in the catalog adapter's settings.
 
 No message, detail, or representation shows a value from the profile, because a value
 can be a password or a token.
@@ -21,11 +21,14 @@ from pydantic import (
     FilePath,
     SecretStr,
     ValidationError,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
 
+from robin_contracts.local_files import get_local_path
 from robin_run_manager.errors import INVALID_PROFILE, NotConfigured, Refused
+from robin_run_manager.location_forms import get_unsupported_locations, is_s3_uri
 from robin_run_manager.operator_files import field_problems
 
 SHARED_FILE = "config.yaml"
@@ -86,17 +89,95 @@ class DatabaseSettings(BaseModel):
         return self
 
 
-class PortSettings(BaseModel):
-    """One port's section. `kind` selects the adapter, and the adapter checks the other fields."""
+class _PortSettings(BaseModel):
+    """A port's section. The adapter checks the fields that the section does not name."""
 
     model_config = ConfigDict(frozen=True, extra="allow")
 
-    kind: str = Field(min_length=1)
-
     def __repr_args__(self):
-        # The other fields can hold credentials, so only their names are shown.
-        yield "kind", self.kind
-        yield "fields", sorted(self.model_extra or {})
+        # Any other field can hold a credential, such as a password in an endpoint URL,
+        # so only the adapter's name is shown with a value.
+        for name in ("kind", "code"):
+            value = getattr(self, name, None)
+            if value is not None:
+                yield name, value
+        others = (set(type(self).model_fields) - {"kind", "code"}) | set(self.model_extra or {})
+        yield "fields", sorted(others)
+
+
+class CatalogSettings(_PortSettings):
+    """The catalog adapter: a built-in one by `kind`, or an installed one by `code`.
+
+    Profile load leaves each `${NAME}` in the other fields, so that a command that does
+    not use the catalog does not need its credentials. `get_resolved_catalog_settings`
+    fills them in.
+    """
+
+    kind: str | None = Field(default=None, min_length=1)
+    code: str | None = Field(default=None, pattern=r"^[A-Za-z_][\w.]*:[A-Za-z_]\w*$")
+
+    @model_validator(mode="after")
+    def _check_one_name(self) -> "CatalogSettings":
+        if (self.kind is None) == (self.code is None):
+            raise ValueError(
+                "give exactly one of kind, for a built-in adapter, and code, as "
+                "module:function, for an installed adapter"
+            )
+        return self
+
+
+class LocalComputeSettings(_PortSettings):
+    """Tasks run on this computer."""
+
+    kind: Literal["local"]
+
+
+class KubernetesComputeSettings(_PortSettings):
+    """Tasks run as Kubernetes jobs, which read and write S3."""
+
+    kind: Literal["kubernetes"]
+    namespace: str = Field(min_length=1)
+    # The name of the Kubernetes Secret that holds the S3 credentials.
+    s3_secret_name: str = Field(min_length=1)
+    s3_endpoint: str = Field(min_length=1)
+
+
+ComputeSettings = Annotated[
+    LocalComputeSettings | KubernetesComputeSettings, Field(discriminator="kind")
+]
+
+
+class LocalStorageSettings(_PortSettings):
+    """Robin writes its work files, result files, and outputs under a local `root`."""
+
+    kind: Literal["local"]
+    root: str = Field(min_length=1)
+
+    @field_validator("root")
+    @classmethod
+    def _check_root_form(cls, root: str) -> str:
+        try:
+            get_local_path(root)
+        except ValueError:
+            raise ValueError("give an absolute path or a local file:// URI") from None
+        return root
+
+
+class S3StorageSettings(_PortSettings):
+    """Robin writes its work files, result files, and outputs under an S3 `root`."""
+
+    kind: Literal["s3"]
+    root: str = Field(min_length=1)
+
+    @field_validator("root")
+    @classmethod
+    def _check_root_form(cls, root: str) -> str:
+        if not is_s3_uri(root):
+            raise ValueError("give an s3:// URI with a bucket")
+        return root
+
+
+StorageSettings = Annotated[LocalStorageSettings | S3StorageSettings, Field(discriminator="kind")]
 
 
 class PreparationSettings(BaseModel):
@@ -114,20 +195,70 @@ class Profile(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     database: DatabaseSettings
-    storage: PortSettings | None = None
-    launcher: PortSettings | None = None
-    catalogs: dict[Annotated[str, Field(min_length=1)], PortSettings] = Field(default_factory=dict)
+    catalog: CatalogSettings | None = None
+    compute: ComputeSettings | None = None
+    # After `compute`, so that its check can read the compute kind.
+    storage: StorageSettings | None = Field(default=None, validate_default=True)
     preparation: PreparationSettings = Field(default_factory=PreparationSettings)
 
-    @model_validator(mode="after")
-    def _check_sagemaker_storage(self) -> "Profile":
-        if self.launcher is not None and self.launcher.kind == "sagemaker":
-            if self.storage is None or self.storage.kind != "s3":
-                raise ValueError(
-                    "a sagemaker launcher needs s3 storage, because a SageMaker job "
-                    "cannot read local files"
-                )
-        return self
+    @field_validator("storage")
+    @classmethod
+    def _check_storage_for_compute(
+        cls, storage: StorageSettings | None, info: ValidationInfo
+    ) -> StorageSettings | None:
+        compute = info.data.get("compute")
+        if compute is None:
+            return storage
+        if storage is None:
+            raise ValueError(
+                "a profile with a compute section needs a storage section with a root"
+            )
+        unsupported = get_unsupported_locations(compute.kind, [("storage_root", storage.root)])
+        if unsupported:
+            forms = " or ".join(unsupported[0]["accepted_forms"])
+            raise ValueError(
+                f"kind: {compute.kind} compute cannot use storage.root; give {forms}"
+            )
+        return storage
+
+
+def get_execution_settings(profile: Profile) -> dict[str, Any]:
+    """Returns the compute and storage settings that a submitted run keeps.
+
+    Raises `NotConfigured` if the profile has no `compute` section.
+    """
+    if profile.compute is None:
+        raise NotConfigured(
+            "The profile has no compute section, so Robin cannot submit a run. Add a "
+            "compute section and a storage section."
+        )
+    # Load refuses compute with no storage.
+    assert profile.storage is not None
+    return {
+        "compute": _get_declared_fields(profile.compute),
+        "storage": _get_declared_fields(profile.storage),
+    }
+
+
+def _get_declared_fields(settings: BaseModel) -> dict[str, Any]:
+    """The fields that the section's class names. The adapter's other fields are left out."""
+    return {name: getattr(settings, name) for name in type(settings).model_fields}
+
+
+def get_resolved_catalog_settings(
+    profile: Profile, environ: Mapping[str, str]
+) -> dict[str, Any]:
+    """Returns the catalog section's other fields, with each `${NAME}` filled in.
+
+    Raises `NotConfigured` if the profile has no `catalog` section, and `Refused` with
+    `invalid_profile` if a variable is not set.
+    """
+    if profile.catalog is None:
+        raise NotConfigured(
+            "The profile has no catalog section, so Robin cannot use a selection. Add a "
+            "catalog section, or give --uris or --recordings."
+        )
+    return _expand(dict(profile.catalog.model_extra or {}), environ, where="catalog")
 
 
 def load_profile(directory: Path, environment: str, environ: Mapping[str, str]) -> Profile:
@@ -158,7 +289,16 @@ def load_profile(directory: Path, environment: str, environ: Mapping[str, str]) 
     shared_file = directory / SHARED_FILE
     shared = _read(shared_file) if shared_file.is_file() else {}
     merged = {**shared, **_read(environment_file)}
+    catalog = merged.pop("catalog", None)
     expanded = _expand(merged, environ, where="")
+    if isinstance(catalog, dict):
+        # Only the adapter's name is filled in now. See CatalogSettings.
+        catalog = {
+            key: _expand(value, environ, f"catalog.{key}") if key in ("kind", "code") else value
+            for key, value in catalog.items()
+        }
+    if catalog is not None:
+        expanded["catalog"] = catalog
     try:
         return Profile.model_validate(expanded)
     except ValidationError as error:

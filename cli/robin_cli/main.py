@@ -450,11 +450,23 @@ recording; audio_uri is where its audio is.
 
   {"namespace": "survey", "value": "site-1/0500", "audio_uri": "s3://audio/site-1/0500.wav"}
 
---uris FILE has one absolute path or URI on each line, such as s3://audio/a.wav.
-Give --namespace with it. An absolute path is stored as its file:/// URI, and a
-file: line must already be in that form. Each URI is also the recording's value.
+--uris FILE has one absolute path, file:/// URI, or s3:// URI on each line, such
+as s3://audio/a.wav. Give --namespace with it. An absolute path is stored as its
+file:/// URI, and a file: line must already be in that form. Each URI is also the
+recording's value.
 
 Both files are UTF-8. Empty lines are skipped. Each recording is given once.
+
+Each audio location, and each file of the configuration's model, must have a form
+that the profile's compute kind can read:
+
+  local                   an absolute path, a file:/// URI, or an s3:// URI
+  kubernetes              an s3:// URI
+
+An s3:// URI names a bucket, as in s3://audio/a.wav. A model file can also be a
+robin-models: location, which Robin gives the taxa registry of a built-in model.
+If a location has another form, such as http:// or gs://, Robin refuses the run
+with unsupported_location and stores nothing.
 """
 
 RUN_STATUSES = """\
@@ -483,6 +495,10 @@ Robin stores the run, its configuration, and its recordings, with the status
 preparing. This version does not prepare or run it yet. Give a preset, or a
 configuration file in the format that robin presets create --help describes.
 
+The profile must have a compute section and a storage section. The run keeps
+both, so a later change to the profile does not change the run. Without a compute
+section, the command stops with not_configured.
+
 {RECORDINGS_FORMAT}
 Examples:
 
@@ -492,8 +508,9 @@ Examples:
 
 RUN_SHOW_EPILOG = f"""\
 Prints the run's status, who submitted it and when, its configuration digest and
-output versions, its task and recording counts by state, its skip counts by reason,
-and any failure.
+output versions, its provenance (where its recording list came from), the compute
+and storage settings that it keeps from submit, its task and recording counts by
+state, its skip counts by reason, and any failure.
 
 {RUN_STATUSES}
 Example:
@@ -514,7 +531,7 @@ def _add_run_commands(nouns) -> None:
         "--recordings", type=Path, metavar="FILE", help="a JSON Lines file with one recording on each line"
     )
     inputs.add_argument(
-        "--uris", type=Path, metavar="FILE", help="a file with one absolute path or URI on each line"
+        "--uris", type=Path, metavar="FILE", help="a file with one path or URI on each line"
     )
     submit.add_argument(
         "--namespace", metavar="NS",

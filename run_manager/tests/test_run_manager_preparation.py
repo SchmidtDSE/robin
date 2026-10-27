@@ -13,6 +13,7 @@ from robin_run_manager.preparation import Prepared, get_runs_to_prepare, prepare
 from robin_run_manager.versions import RELEASE_OUTPUT_VERSIONS
 from run_fixtures import (
     HEAD_CONFIGURATION,
+    KUBERNETES_SETTINGS,
     OWL_CONFIGURATION,
     PERCH_CONFIGURATION,
     add_finished_run,
@@ -431,6 +432,22 @@ def test_a_backbone_result_of_another_backbone_configuration_is_ignored(register
     head = add_prepared_head(registered, ["a"])
 
     assert get_pins(registered, head) == {"a": ("skipped", "input_not_available", None)}
+
+
+def test_a_local_embeddings_file_under_a_kubernetes_run_is_skipped(registered):
+    backbone = add_finished_run(registered, ["a", "b"], PERCH_CONFIGURATION)
+    add_output_file(registered, backbone, "a", uri="file:///out/a.parquet")
+    pinned = add_output_file(registered, backbone, "b")
+
+    head = submit(
+        registered, ["a", "b"], HEAD_CONFIGURATION, execution_settings=KUBERNETES_SETTINGS
+    )
+    prepare(registered, head)
+
+    assert get_pins(registered, head) == {
+        "a": ("skipped", "input_location_unsupported", None),
+        "b": ("pending", None, pinned),
+    }
 
 
 def test_a_head_recording_with_no_input_holds_no_claim(registered):

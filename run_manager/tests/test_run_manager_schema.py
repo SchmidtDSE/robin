@@ -2,7 +2,7 @@
 
 import pytest
 from psycopg import errors
-from psycopg.types.json import Jsonb
+from psycopg.types.json import Json, Jsonb
 
 from robin_run_manager.database import transaction
 from robin_run_manager.migrations import migrate, require_current_schema
@@ -32,6 +32,10 @@ RUN_TABLES = {
     "runs", "inference_runs", "run_recordings", "tasks", "output_files", "recording_outcomes",
 }
 VERSIONS = {"model:owl/v4": 1}
+EXECUTION_SETTINGS = {
+    "compute": {"kind": "local"},
+    "storage": {"kind": "local", "root": "/data/robin"},
+}
 
 
 def insert_run(connection, versions=VERSIONS) -> str:
@@ -45,11 +49,13 @@ def insert_run(connection, versions=VERSIONS) -> str:
         "VALUES ('config', 'owl/v4', '{}') ON CONFLICT DO NOTHING"
     )
     run_id = connection.execute(
-        "INSERT INTO runs (kind, submitted_by) VALUES ('inference', 'ana') RETURNING run_id"
+        "INSERT INTO runs (kind, submitted_by, execution_settings) "
+        "VALUES ('inference', 'ana', %s) RETURNING run_id",
+        (Json(EXECUTION_SETTINGS),),
     ).fetchone()["run_id"]
     connection.execute(
         "INSERT INTO inference_runs (run_id, configuration_digest, output_versions, "
-        "observed_provenance) VALUES (%s, 'config', %s, '{}')",
+        "provenance) VALUES (%s, 'config', %s, '{}')",
         (run_id, Jsonb(versions)),
     )
     connection.execute(
@@ -117,9 +123,9 @@ def test_a_preparation_failure_is_set_exactly_when_preparation_failed(
     with pytest.raises(errors.CheckViolation):
         with transaction(migrated_database) as connection:
             connection.execute(
-                "INSERT INTO runs (kind, submitted_by, state, preparation_failure) "
-                "VALUES ('inference', 'ana', %s, %s)",
-                (state, failure),
+                "INSERT INTO runs (kind, submitted_by, state, preparation_failure, "
+                "execution_settings) VALUES ('inference', 'ana', %s, %s, %s)",
+                (state, failure, Json(EXECUTION_SETTINGS)),
             )
 
 
@@ -130,3 +136,18 @@ def test_outcomes_can_be_found_by_task(migrated_database):
         ).fetchall()
 
     assert any(row["indexdef"].endswith("(task_id)") for row in indexes)
+
+
+def test_a_run_without_execution_settings_is_refused(migrated_database):
+    with pytest.raises(errors.NotNullViolation):
+        with transaction(migrated_database) as connection:
+            connection.execute(
+                "INSERT INTO runs (kind, submitted_by) VALUES ('inference', 'ana')"
+            )
+
+
+def test_a_skip_for_an_unsupported_input_location_is_allowed(migrated_database):
+    with transaction(migrated_database) as connection:
+        insert_outcome(
+            connection, insert_run(connection), "skipped", skip_reason="input_location_unsupported"
+        )

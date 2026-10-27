@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 from robin_run_manager.database import open_database
 from robin_run_manager.preparation import prepare_run
@@ -117,7 +118,7 @@ def test_runs_list_prints_one_line_for_each_run(robin, owl_preset):
     assert line.endswith("  3")
 
 
-def test_runs_show_prints_observed_provenance_as_json(robin, owl_preset):
+def test_runs_show_prints_the_provenance_as_json(robin, owl_preset):
     run_id = submit(robin, "--uris", str(URIS), "--namespace", "survey", "--preset", "owl")["run_id"]
 
     ran = robin("runs", "show", run_id)
@@ -125,7 +126,7 @@ def test_runs_show_prints_observed_provenance_as_json(robin, owl_preset):
     assert ran.code == 0, ran.stderr
     assert f"run_id: {run_id}" in ran.stdout
     shown = robin("--json", "runs", "show", run_id)
-    provenance = json.loads(shown.stdout)["observed_provenance"]
+    provenance = json.loads(shown.stdout)["provenance"]
     assert provenance["input"] == "uris"
     assert provenance["namespace"] == "survey"
     assert provenance["recording_count"] == 3
@@ -202,3 +203,27 @@ def test_runs_tasks_prints_each_task(robin, owl_preset, database_settings):
     assert [line.split("  ")[1:] for line in lines] == [["queued", "2"], ["queued", "1"]]
     recordings = robin("runs", "recordings", run_id, "--state", "pending").stdout
     assert recordings.strip().splitlines()[0] == "survey  site-1/2026-05-01T05:00  pending  -"
+
+
+def write_environment_file(environ, sections) -> None:
+    """Replace the test environment's file, whose sections replace those of config.yaml."""
+    (Path(environ["ROBIN_PROFILE"]) / "test.yaml").write_text(yaml.safe_dump(sections))
+
+
+def test_submit_without_compute_exits_2(robin, owl_preset, environ):
+    write_environment_file(environ, {"compute": None, "storage": None})
+
+    ran = robin("--json", "runs", "submit", "--recordings", str(RECORDINGS), "--preset", "owl")
+
+    assert ran.code == 2
+    assert ran.error()["reason"] == "not_configured"
+
+
+def test_a_new_storage_root_does_not_change_a_submitted_run(robin, owl_preset, environ, tmp_path):
+    config = yaml.safe_load((Path(environ["ROBIN_PROFILE"]) / "config.yaml").read_text())
+    run_id = submit(robin, "--recordings", str(RECORDINGS), "--preset", "owl")["run_id"]
+
+    write_environment_file(environ, {"storage": {"kind": "local", "root": str(tmp_path / "new")}})
+
+    shown = json.loads(robin("--json", "runs", "show", run_id).stdout)
+    assert shown["execution_settings"]["storage"] == config["storage"]

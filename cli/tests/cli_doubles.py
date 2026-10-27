@@ -26,7 +26,11 @@ def write_profile(folder, database_settings, **changes):
     database["password"] = "${" + PASSWORD_VARIABLE + "}"
     database.update(changes)
     database = {name: value for name, value in database.items() if value is not None}
-    sections = {"database": database, "catalogs": {"soundhub": {"kind": "soundhub"}}}
+    sections = {
+        "database": database,
+        "compute": {"kind": "local"},
+        "storage": {"kind": "local", "root": str(folder / "storage")},
+    }
     (folder / "config.yaml").write_text(yaml.safe_dump(sections))
     (folder / "test.yaml").write_text("{}\n")
     return folder

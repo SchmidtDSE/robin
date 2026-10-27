@@ -26,18 +26,18 @@ _SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
 _UTF16_MARKS = (codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)
 
 
-class RecordingFile(NamedTuple):
-    """The recordings of a list file, and what Robin observed about the file."""
+class RecordingManifest(NamedTuple):
+    """The recordings that a run asks for, and the provenance that the run keeps."""
 
     recordings: tuple[RequestedRecording, ...]
-    observed: dict[str, Any]
+    provenance: dict[str, Any]
 
 
 class _LineProblem(Exception):
     """One line cannot be used. The message says what is wrong and what to do."""
 
 
-def read_recordings_file(path: Path) -> RecordingFile:
+def read_recordings_file(path: Path) -> RecordingManifest:
     """Read a `--recordings` file. Each line is one JSON object for one recording."""
     data = _read_bytes(path)
     recordings, problems = [], []
@@ -46,10 +46,10 @@ def read_recordings_file(path: Path) -> RecordingFile:
             recordings.append((number, _parse_recording(line)))
         except _LineProblem as problem:
             problems.append({"line": number, "problem": str(problem)})
-    return _build_recording_file(path, data, recordings, problems, "recordings", {})
+    return _build_recording_manifest(path, data, recordings, problems, "recordings", {})
 
 
-def read_uris_file(path: Path, namespace: str) -> RecordingFile:
+def read_uris_file(path: Path, namespace: str) -> RecordingManifest:
     """Read a `--uris` file. Each line is a URI or an absolute path in `namespace`.
 
     A `file://` line must have the spelling that Robin makes from its path, so that one
@@ -72,7 +72,9 @@ def read_uris_file(path: Path, namespace: str) -> RecordingFile:
             continue
         recording = RequestedRecording(namespace=namespace, value=uri, audio_uri=uri)
         recordings.append((number, recording))
-    return _build_recording_file(path, data, recordings, problems, "uris", {"namespace": namespace})
+    return _build_recording_manifest(
+        path, data, recordings, problems, "uris", {"namespace": namespace}
+    )
 
 
 def _read_bytes(path: Path) -> bytes:
@@ -210,14 +212,14 @@ def get_repeated_identities(
     return {identity: found for identity, found in indexes.items() if len(found) > 1}
 
 
-def _build_recording_file(
+def _build_recording_manifest(
     path: Path,
     data: bytes,
     numbered: list[tuple[int, RequestedRecording]],
     problems: list[dict],
     input: str,
-    observed: dict[str, Any],
-) -> RecordingFile:
+    extra_provenance: dict[str, Any],
+) -> RecordingManifest:
     lines = [number for number, _ in numbered]
     repeated = get_repeated_identities([recording for _, recording in numbered])
     for (namespace, value), indexes in repeated.items():
@@ -247,13 +249,13 @@ def _build_recording_file(
             f"{path} holds no recordings. Give at least one.",
             details={"file": str(path), "problems": [], "truncated": False},
         )
-    return RecordingFile(
+    return RecordingManifest(
         recordings=tuple(recording for _, recording in numbered),
-        observed={
+        provenance={
             "input": input,
             "file_sha256": checksum_bytes(data),
             "file_size_bytes": len(data),
-            **observed,
+            **extra_provenance,
         },
     )
 

@@ -6,3 +6,8 @@ database:
   dbname: robin
   user: robin
   password: ${ROBIN_DB_PASSWORD}
+compute:
+  kind: local
+storage:
+  kind: local
+  root: ${ROBIN_STORAGE_ROOT}

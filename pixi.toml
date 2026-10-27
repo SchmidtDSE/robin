@@ -37,6 +37,7 @@ ROBIN_PROFILE = "$PIXI_PROJECT_ROOT/config"
 ROBIN_ENV = "local"
 ROBIN_DB_PORT = "${ROBIN_DB_PORT:-55432}"
 ROBIN_DB_PASSWORD = "${ROBIN_DB_PASSWORD:-robin}"
+ROBIN_STORAGE_ROOT = "${ROBIN_STORAGE_ROOT:-$PIXI_PROJECT_ROOT/output/robin}"
 
 [feature.local.tasks]
 setup = { cmd = "docker compose up --detach --wait && robin db migrate", description = "Start the local database and bring its tables up to date. Safe to run again." }

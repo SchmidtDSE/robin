@@ -13,7 +13,13 @@ from robin_run_manager.errors import INVALID_CURSOR, INVALID_REQUEST, NOT_FOUND,
 from robin_run_manager.preparation import prepare_run
 from robin_run_manager.runs import list_run_recordings, list_run_tasks, list_runs, show_run
 from robin_run_manager.versions import RELEASE_OUTPUT_VERSIONS
-from run_fixtures import add_finished_run, cancel, register_fixture_models, submit
+from run_fixtures import (
+    LOCAL_SETTINGS,
+    add_finished_run,
+    cancel,
+    register_fixture_models,
+    submit,
+)
 
 START = datetime(2026, 10, 1, tzinfo=timezone.utc)
 
@@ -198,7 +204,7 @@ def test_each_listed_run_has_its_status(registered):
 # runs show
 
 
-def test_show_run_gives_the_counts_and_the_observed_provenance(registered):
+def test_show_run_gives_the_counts_the_provenance_and_the_settings(registered):
     add_finished_run(registered, ["a"])
     run_id = submit(registered, ["a", "b", "c"])
     prepare_run(registered, run_id, recordings_per_task=1)
@@ -209,8 +215,9 @@ def test_show_run_gives_the_counts_and_the_observed_provenance(registered):
     assert shown["status"] == "queued"
     assert shown["recording_count"] == 3
     assert shown["output_versions"] == {"model:owl/v4": 1}
-    assert shown["observed_provenance"]["recording_count"] == 3
-    assert shown["observed_provenance"]["input"] == "recordings"
+    assert shown["provenance"]["recording_count"] == 3
+    assert shown["provenance"]["input"] == "recordings"
+    assert shown["execution_settings"] == LOCAL_SETTINGS
     assert shown["task_counts"] == {"queued": 2}
     assert shown["recording_counts"] == {"pending": 2, "skipped": 1}
     assert shown["skip_counts"] == {"already_covered": 1}

@@ -9,6 +9,8 @@ CREATE TABLE runs (
     state text NOT NULL DEFAULT 'preparing'
         CHECK (state IN ('preparing', 'preparation_failed', 'ready')),
     preparation_failure json,             -- {reason, message, details}
+    -- The compute and storage settings that the run keeps from the profile at submit.
+    execution_settings json NOT NULL CHECK (json_typeof(execution_settings) = 'object'),
     cancelled_at timestamptz,
     cancelled_by text,
     withdrawn_at timestamptz,
@@ -24,7 +26,7 @@ CREATE TABLE inference_runs (
     run_id uuid PRIMARY KEY REFERENCES runs,
     configuration_digest text NOT NULL REFERENCES configurations,
     output_versions jsonb NOT NULL CHECK (jsonb_typeof(output_versions) = 'object'),
-    observed_provenance json NOT NULL,
+    provenance json NOT NULL,
     -- The target of the outcomes' foreign key, so that each outcome copies its run's
     -- configuration and versions.
     UNIQUE (run_id, configuration_digest, output_versions)
@@ -77,7 +79,8 @@ CREATE TABLE recording_outcomes (
         'skipped', 'pending', 'covered', 'failed', 'released', 'withdrawn'
     )),
     skip_reason text CHECK (skip_reason IN (
-        'already_covered', 'in_progress', 'input_not_available', 'input_has_no_windows'
+        'already_covered', 'in_progress', 'input_not_available', 'input_has_no_windows',
+        'input_location_unsupported'
     )),
     task_id uuid REFERENCES tasks,        -- the task that holds a pending claim
     input_file_id bigint REFERENCES output_files,  -- a head's pinned embeddings file

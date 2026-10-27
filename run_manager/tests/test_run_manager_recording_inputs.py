@@ -146,12 +146,12 @@ def test_a_path_and_its_file_uri_are_the_same_identity_and_are_refused(tmp_path)
     assert "line 1" in problem["problem"]
 
 
-def test_the_observed_provenance_holds_the_file_digest_size_and_namespace(tmp_path):
+def test_the_provenance_holds_the_file_digest_size_and_namespace(tmp_path):
     data = b"/a.wav\n/b.wav\n"
 
     read = read_uris_file(write_uris_file(tmp_path, data), "survey")
 
-    assert read.observed == {
+    assert read.provenance == {
         "input": "uris",
         "file_sha256": f"sha256:{hashlib.sha256(data).hexdigest()}",
         "file_size_bytes": len(data),
@@ -233,7 +233,7 @@ def test_a_recording_with_a_duration_is_read(tmp_path):
             namespace="ns", value="a", audio_uri="s3://b/a.wav", duration_seconds=12.0
         ),
     )
-    assert read.observed == {
+    assert read.provenance == {
         "input": "recordings",
         "file_sha256": f"sha256:{hashlib.sha256(data.encode()).hexdigest()}",
         "file_size_bytes": len(data),
