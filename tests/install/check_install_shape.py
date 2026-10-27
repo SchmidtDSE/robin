@@ -161,6 +161,7 @@ _register(
     install=("robin-adapters",),
     required=(
         "robin_adapters",
+        "robin_adapters.catalog.folder_layout",
         "robin_adapters.storage.local",
         "robin_contracts",
     ),
