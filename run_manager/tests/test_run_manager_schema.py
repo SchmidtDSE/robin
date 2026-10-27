@@ -1,11 +1,13 @@
 """The real schema that this release's migrations make."""
 
+from datetime import UTC, datetime
+
 import pytest
 from psycopg import errors
 from psycopg.types.json import Json, Jsonb
 
 from robin_run_manager.database import transaction
-from robin_run_manager.migrations import migrate, require_current_schema
+from robin_run_manager.migrations import migrate, packaged_migrations, require_current_schema
 
 
 def table_names(database):
@@ -66,11 +68,37 @@ def insert_run(connection, versions=VERSIONS) -> str:
     return run_id
 
 
-def insert_outcome(connection, run_id, state, versions=VERSIONS, skip_reason=None) -> None:
+RECORDING_FAILURE = {"scope": "recording", "code": "audio_unreadable", "stage": "decode",
+                     "message": "The audio cannot be read."}
+
+
+def insert_outcome(
+    connection, run_id, state, versions=VERSIONS, skip_reason=None, failure="for a failed state"
+) -> None:
+    if failure == "for a failed state":
+        failure = RECORDING_FAILURE if state == "failed" else None
     connection.execute(
         "INSERT INTO recording_outcomes (run_id, namespace, value, configuration_digest, "
-        "output_versions, state, skip_reason) VALUES (%s, 'ns', 'a', 'config', %s, %s, %s)",
-        (run_id, Jsonb(versions), state, skip_reason),
+        "output_versions, state, skip_reason, failure) "
+        "VALUES (%s, 'ns', 'a', 'config', %s, %s, %s, %s)",
+        (run_id, Jsonb(versions), state, skip_reason, None if failure is None else Json(failure)),
+    )
+
+
+TASK_FAILURE = {"reason": "no_result", "message": "The task ended with no result.", "detail": None}
+NOW = datetime.now(UTC)
+RESERVATION = {"reserved_at": NOW, "work_file_digest": "sha256:" + "2" * 64}
+EXECUTION_STATES = ["submitting", "submitted", "running", "finalizing", "succeeded"]
+
+
+def insert_task(connection, run_id, state, **columns) -> None:
+    columns = {
+        name: Json(value) if isinstance(value, dict) else value for name, value in columns.items()
+    }
+    names = ["run_id", "state", "created_by", *columns]
+    connection.execute(
+        f"INSERT INTO tasks ({', '.join(names)}) VALUES ({', '.join(['%s'] * len(names))})",
+        [run_id, state, "ana", *columns.values()],
     )
 
 
@@ -151,3 +179,84 @@ def test_a_skip_for_an_unsupported_input_location_is_allowed(migrated_database):
         insert_outcome(
             connection, insert_run(connection), "skipped", skip_reason="input_location_unsupported"
         )
+
+
+def test_a_failed_task_needs_a_failure(migrated_database):
+    with pytest.raises(errors.CheckViolation):
+        with transaction(migrated_database) as connection:
+            insert_task(connection, insert_run(connection), "failed")
+
+
+@pytest.mark.parametrize("state", ["queued", "cancelled", *EXECUTION_STATES])
+def test_a_failure_needs_a_failed_task(migrated_database, state):
+    with pytest.raises(errors.CheckViolation):
+        with transaction(migrated_database) as connection:
+            insert_task(
+                connection, insert_run(connection), state, failure=TASK_FAILURE, **RESERVATION
+            )
+
+
+@pytest.mark.parametrize("missing", sorted(RESERVATION))
+@pytest.mark.parametrize("state", EXECUTION_STATES)
+def test_a_task_in_an_execution_state_needs_a_reservation(migrated_database, state, missing):
+    reservation = {name: value for name, value in RESERVATION.items() if name != missing}
+    with transaction(migrated_database) as connection:
+        insert_task(connection, insert_run(connection), state, **RESERVATION)
+    with pytest.raises(errors.CheckViolation):
+        with transaction(migrated_database) as connection:
+            insert_task(connection, insert_run(connection), state, **reservation)
+
+
+def test_a_failed_or_cancelled_task_needs_no_reservation(migrated_database):
+    with transaction(migrated_database) as connection:
+        insert_task(connection, insert_run(connection), "failed", failure=TASK_FAILURE)
+        insert_task(connection, insert_run(connection), "cancelled")
+
+
+@pytest.mark.parametrize(
+    "state, failure",
+    [("failed", None), ("covered", RECORDING_FAILURE), ("pending", RECORDING_FAILURE)],
+    ids=["failed-without", "covered-with", "pending-with"],
+)
+def test_a_failed_recording_needs_a_failure(migrated_database, state, failure):
+    with pytest.raises(errors.CheckViolation):
+        with transaction(migrated_database) as connection:
+            insert_outcome(connection, insert_run(connection), state, failure=failure)
+
+
+@pytest.mark.parametrize(
+    "state, columns",
+    [
+        ("running", RESERVATION),
+        ("queued", {}),
+        ("cancelled", {}),
+        ("failed", {"failure": TASK_FAILURE}),
+    ],
+    ids=["not-terminal", "queued", "cancelled-unreserved", "failed-unreserved"],
+)
+def test_released_at_needs_a_terminal_state_and_a_reservation(migrated_database, state, columns):
+    with transaction(migrated_database) as connection:
+        for terminal in ("succeeded", "cancelled", "failed"):
+            failure = {"failure": TASK_FAILURE} if terminal == "failed" else {}
+            insert_task(
+                connection, insert_run(connection), terminal,
+                released_at=NOW, **RESERVATION, **failure,
+            )
+    with pytest.raises(errors.CheckViolation):
+        with transaction(migrated_database) as connection:
+            insert_task(connection, insert_run(connection), state, released_at=NOW, **columns)
+
+
+def test_0003_applies_after_0002_with_rows_in_place(database):
+    migrations = packaged_migrations()
+    migrate(database, migrations[:2])
+    with transaction(database) as connection:
+        run_id = insert_run(connection)
+        insert_task(connection, run_id, "queued")
+
+    assert [migration.version for migration in migrate(database, migrations[:3])] == [3]
+    with transaction(database, read_only=True) as connection:
+        task = connection.execute("SELECT * FROM tasks WHERE run_id = %s", (run_id,)).fetchone()
+    assert task["state"] == "queued"
+    assert task["reserved_at"] is None
+    assert task["failure"] is None

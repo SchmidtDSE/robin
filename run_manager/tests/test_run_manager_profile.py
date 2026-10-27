@@ -3,9 +3,11 @@
 import pytest
 import yaml
 
+from robin_contracts.ports.compute import ComputeRequest
 from robin_run_manager.errors import NotConfigured, Refused
 from robin_run_manager.profile import (
     get_execution_settings,
+    get_launch_settings,
     get_resolved_catalog_settings,
     load_profile,
 )
@@ -519,6 +521,84 @@ def test_get_execution_settings_needs_compute(tmp_path):
 
     with pytest.raises(NotConfigured):
         get_execution_settings(load_profile(tmp_path, "dev", ENVIRON))
+
+
+LAUNCH_FIELDS = {
+    "max_in_flight": 4,
+    "request": {
+        "requests": {"cpu": "2", "memory": "8Gi"},
+        "limits": {"memory": "8Gi"},
+        "active_deadline_seconds": 21600,
+    },
+    "resources": {"batch_size": 32, "device": "cpu"},
+    "models": {
+        "perch/v8": {"request": {"requests": {"cpu": "4"}}, "resources": {"batch_size": 16}},
+        "birdnet/v2": {"resources": {"threads": 2}},
+    },
+}
+
+
+def load_with_compute(tmp_path, compute):
+    write(tmp_path, "dev.yaml", {"database": DATABASE, "compute": compute, "storage": LOCAL_STORAGE})
+    return load_profile(tmp_path, "dev", ENVIRON)
+
+
+def test_a_model_entry_replaces_the_request_and_the_resources_as_a_whole(tmp_path):
+    profile = load_with_compute(tmp_path, {**LOCAL_COMPUTE, **LAUNCH_FIELDS})
+
+    perch = get_launch_settings(profile, "perch/v8")
+    birdnet = get_launch_settings(profile, "birdnet/v2")
+
+    assert perch.request == ComputeRequest(requests={"cpu": "4"})
+    assert perch.resources == {"batch_size": 16}
+    assert birdnet.request == ComputeRequest.model_validate(LAUNCH_FIELDS["request"])
+    assert birdnet.resources == {"threads": 2}
+
+
+@pytest.mark.parametrize("launch", [LAUNCH_FIELDS, {}], ids=["with-defaults", "without"])
+def test_a_model_without_an_entry_gets_the_defaults(tmp_path, launch):
+    profile = load_with_compute(tmp_path, {**LOCAL_COMPUTE, **launch})
+
+    settings = get_launch_settings(profile, "other/v1")
+
+    assert settings.request == ComputeRequest.model_validate(launch.get("request", {}))
+    assert settings.resources == launch.get("resources", {})
+
+
+def test_max_in_flight_defaults_to_10_and_must_be_at_least_one(tmp_path):
+    assert load_with_compute(tmp_path, LOCAL_COMPUTE).compute.max_in_flight == 10
+    write(tmp_path, "dev.yaml", {
+        "database": DATABASE, "compute": {**KUBERNETES, "max_in_flight": 0}, "storage": S3_STORAGE,
+    })
+
+    assert get_problem_fields(invalid(tmp_path)) == ["compute.kubernetes.max_in_flight"]
+
+
+@pytest.mark.parametrize("value", [float("inf"), float("nan")], ids=["inf", "nan"])
+@pytest.mark.parametrize("where", ["default", "model"])
+def test_resources_refuse_a_value_that_is_not_finite(tmp_path, value, where):
+    if where == "default":
+        compute = {**LOCAL_COMPUTE, "resources": {"scale": value}}
+    else:
+        compute = {**LOCAL_COMPUTE, "models": {"perch/v8": {"resources": {"scale": value}}}}
+    write(tmp_path, "dev.yaml", {"database": DATABASE, "compute": compute, "storage": LOCAL_STORAGE})
+
+    [field] = get_problem_fields(invalid(tmp_path))
+
+    assert field.startswith("compute.local.")
+    assert field.endswith("resources")
+
+
+@pytest.mark.parametrize("compute", [LOCAL_COMPUTE, KUBERNETES], ids=["local", "kubernetes"])
+def test_execution_settings_leave_out_the_launch_fields(tmp_path, compute):
+    storage = LOCAL_STORAGE if compute is LOCAL_COMPUTE else S3_STORAGE
+    write(tmp_path, "dev.yaml", {"database": DATABASE, "compute": compute, "storage": storage})
+    without = get_execution_settings(load_profile(tmp_path, "dev", ENVIRON))
+    write(tmp_path, "dev.yaml", {
+        "database": DATABASE, "compute": {**compute, **LAUNCH_FIELDS}, "storage": storage,
+    })
+
+    assert get_execution_settings(load_profile(tmp_path, "dev", ENVIRON)) == without
 
 
 def test_a_repeated_key_is_refused_with_its_position(tmp_path):

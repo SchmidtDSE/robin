@@ -8,6 +8,10 @@ database:
   password: ${ROBIN_DB_PASSWORD}
 compute:
   kind: local
+  # At most 2 tasks run at the same time. A local worker is not held to a compute
+  # request: it can use more CPU or memory than `request` gives, and it is not
+  # stopped at a deadline.
+  max_in_flight: 2
 storage:
   kind: local
   root: ${ROBIN_STORAGE_ROOT}

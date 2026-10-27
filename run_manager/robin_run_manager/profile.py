@@ -26,7 +26,10 @@ from pydantic import (
 )
 
 from robin_contracts.local_files import get_local_path
+from robin_contracts.ports.compute import ComputeRequest
+from robin_contracts.protocols import JsonScalar
 from robin_contracts.text_formats import InvalidText, load_yaml
+from robin_contracts.work import FiniteScalarMap
 from robin_run_manager.errors import INVALID_PROFILE, NotConfigured, Refused
 from robin_run_manager.location_forms import get_unsupported_locations, is_s3_uri
 from robin_run_manager.operator_files import field_problems
@@ -126,13 +129,35 @@ class CatalogSettings(_PortSettings):
         return self
 
 
-class LocalComputeSettings(_PortSettings):
-    """Tasks run on this computer."""
+class ModelLaunchSettings(BaseModel):
+    """The launch fields for one model. A field that is given replaces the default as a whole."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    request: ComputeRequest | None = None
+    resources: FiniteScalarMap | None = None
+
+
+class _ComputeLaunchSettings(_PortSettings):
+    """The launch fields of both compute kinds. A run does not freeze them.
+
+    `request` is what each task asks of the compute service. `resources` goes into each
+    work file for the worker's code. `models` gives other values for a model ID.
+    """
+
+    max_in_flight: int = Field(default=10, ge=1)
+    request: ComputeRequest = ComputeRequest()
+    resources: FiniteScalarMap = {}
+    models: Mapping[str, ModelLaunchSettings] = {}
+
+
+class LocalComputeSettings(_ComputeLaunchSettings):
+    """Tasks run on this computer. The worker is not held to the compute request."""
 
     kind: Literal["local"]
 
 
-class KubernetesComputeSettings(_PortSettings):
+class KubernetesComputeSettings(_ComputeLaunchSettings):
     """Tasks run as Kubernetes jobs, which read and write S3."""
 
     kind: Literal["kubernetes"]
@@ -222,27 +247,57 @@ class Profile(BaseModel):
         return storage
 
 
+class LaunchSettings(BaseModel, frozen=True):
+    """What one task of a model asks of the compute service, and what its worker gets."""
+
+    request: ComputeRequest
+    resources: Mapping[str, JsonScalar]
+
+
+def get_launch_settings(profile: Profile, model_id: str) -> LaunchSettings:
+    """Returns the request and the resources for a task of `model_id`.
+
+    Raises `NotConfigured` if the profile has no `compute` section.
+    """
+    compute = _get_compute(profile)
+    model = compute.models.get(model_id, ModelLaunchSettings())
+    return LaunchSettings(
+        request=compute.request if model.request is None else model.request,
+        resources=compute.resources if model.resources is None else model.resources,
+    )
+
+
 def get_execution_settings(profile: Profile) -> dict[str, Any]:
     """Returns the compute and storage settings that a submitted run keeps.
 
     Raises `NotConfigured` if the profile has no `compute` section.
     """
+    compute = _get_compute(profile)
+    # Load refuses compute with no storage.
+    assert profile.storage is not None
+    return {
+        "compute": _get_declared_fields(compute),
+        "storage": _get_declared_fields(profile.storage),
+    }
+
+
+def _get_compute(profile: Profile) -> LocalComputeSettings | KubernetesComputeSettings:
     if profile.compute is None:
         raise NotConfigured(
             "The profile has no compute section, so Robin cannot submit a run. Add a "
             "compute section and a storage section."
         )
-    # Load refuses compute with no storage.
-    assert profile.storage is not None
-    return {
-        "compute": _get_declared_fields(profile.compute),
-        "storage": _get_declared_fields(profile.storage),
-    }
+    return profile.compute
 
 
 def _get_declared_fields(settings: BaseModel) -> dict[str, Any]:
-    """The fields that the section's class names. The adapter's other fields are left out."""
-    return {name: getattr(settings, name) for name in type(settings).model_fields}
+    """The fields that the section's class names, except the launch fields. The adapter's
+    other fields are left out."""
+    return {
+        name: getattr(settings, name)
+        for name in type(settings).model_fields
+        if name not in _ComputeLaunchSettings.model_fields
+    }
 
 
 def get_resolved_catalog_settings(

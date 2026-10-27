@@ -4,9 +4,11 @@ Robin has no operations yet that record outcomes, cancel, or withdraw, so the te
 write those rows here.
 """
 
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
+from psycopg.types.json import Json
 from robin_contracts.ports.catalog import RequestedRecording
 from robin_run_manager.configuration import UnresolvedConfiguration, read_configuration
 from robin_run_manager.database import Database, transaction
@@ -71,28 +73,62 @@ def submit(
     ).run_id
 
 
-def add_task(database: Database, run_id: UUID, state: str = "succeeded") -> UUID:
+RESERVED_STATES = ("submitting", "submitted", "running", "finalizing", "succeeded")
+TASK_FAILURE = {"reason": "no_result", "message": "The task ended with no result.", "detail": None}
+RECORDING_FAILURE = {
+    "scope": "recording", "code": "audio_unreadable", "stage": "decode",
+    "message": "The audio cannot be read.",
+}
+CONTRACT_IDS = {
+    "embeddings": "robin.embeddings.parquet/1",
+    "scores": "robin.scores.parquet/1",
+    "detections": "robin.detections.parquet/1",
+}
+
+
+def add_task(database: Database, run_id: UUID, state: str = "succeeded", **columns) -> UUID:
+    """A task of the run in `state`, with the columns that the state needs.
+
+    A task past `queued` has a reservation, and a failed task has a failure. `columns`
+    gives other columns, or replaces these values. A mapping is written as JSON.
+    """
+    values = {}
+    if state in RESERVED_STATES:
+        values["reserved_at"] = datetime.now(UTC)
+        values["work_file_digest"] = "sha256:" + "2" * 64
+    if state == "failed":
+        values["failure"] = TASK_FAILURE
+    values.update(columns)
+    values = {
+        name: Json(value) if isinstance(value, dict) else value for name, value in values.items()
+    }
+    names = ["run_id", "state", "created_by", *values]
     with transaction(database) as connection:
         return connection.execute(
-            "INSERT INTO tasks (run_id, state, created_by) VALUES (%s, %s, 'ana') "
+            f"INSERT INTO tasks ({', '.join(names)}) VALUES ({', '.join(['%s'] * len(names))}) "
             "RETURNING task_id",
-            (run_id, state),
+            (run_id, state, "ana", *values.values()),
         ).fetchone()["task_id"]
 
 
 def set_outcome(
     database: Database, run_id: UUID, value: str, state: str, *, task_id: UUID | None = None
 ) -> None:
-    """Write the outcome of one recording of the run, with the run's configuration and versions."""
+    """Write the outcome of one recording of the run, with the run's configuration and versions.
+
+    A skipped recording is `in_progress`, and a failed one has a failure of its own.
+    """
     skip_reason = "in_progress" if state == "skipped" else None
+    failure = Json(RECORDING_FAILURE) if state == "failed" else None
     with transaction(database) as connection:
         connection.execute(
             "INSERT INTO recording_outcomes (run_id, namespace, value, configuration_digest, "
-            "output_versions, state, skip_reason, task_id) "
-            "SELECT run_id, %s, %s, configuration_digest, output_versions, %s, %s, %s "
+            "output_versions, state, skip_reason, task_id, failure) "
+            "SELECT run_id, %s, %s, configuration_digest, output_versions, %s, %s, %s, %s "
             "FROM inference_runs WHERE run_id = %s "
-            "ON CONFLICT (run_id, namespace, value) DO UPDATE SET state = EXCLUDED.state",
-            (NAMESPACE, value, state, skip_reason, task_id, run_id),
+            "ON CONFLICT (run_id, namespace, value) "
+            "DO UPDATE SET state = EXCLUDED.state, failure = EXCLUDED.failure",
+            (NAMESPACE, value, state, skip_reason, task_id, failure, run_id),
         )
 
 
@@ -129,6 +165,35 @@ def add_output_file(
                 uri or f"s3://out/{run_id}/{value}.parquet", "sha256:" + "1" * 64,
             ),
         ).fetchone()["file_id"]
+
+
+def add_covered_result(
+    database: Database, run_id: UUID, value: str, files=("scores",)
+) -> UUID:
+    """Make the run ready and give `value` a covered outcome, from a new succeeded task
+    that wrote one output file of each kind in `files`. Returns the task's ID."""
+    task_id = add_task(database, run_id)
+    with transaction(database) as connection:
+        connection.execute("UPDATE runs SET state = 'ready' WHERE run_id = %s", (run_id,))
+        for kind in files:
+            connection.execute(
+                "INSERT INTO output_files (run_id, task_id, namespace, value, kind, "
+                "contract_id, uri, checksum) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    run_id, task_id, NAMESPACE, value, kind, CONTRACT_IDS[kind],
+                    f"s3://out/{run_id}/{value}.{kind}.parquet", "sha256:" + "1" * 64,
+                ),
+            )
+    set_outcome(database, run_id, value, "covered", task_id=task_id)
+    return task_id
+
+
+def get_current_files(database: Database) -> list[dict]:
+    """Every row of `current_files`, sorted by recording, configuration, and kind."""
+    with transaction(database, read_only=True) as connection:
+        return connection.execute(
+            "SELECT * FROM current_files ORDER BY namespace, value, configuration_digest, kind"
+        ).fetchall()
 
 
 def cancel(database: Database, run_id: UUID) -> None:
