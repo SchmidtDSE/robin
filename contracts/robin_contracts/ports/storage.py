@@ -1,4 +1,5 @@
-"""The storage port: how the engine gets input files and publishes artifacts."""
+"""The storage port: how the engine gets input files and publishes artifacts, and how the
+run manager writes and reads task files."""
 
 from pathlib import Path
 from typing import Protocol
@@ -38,3 +39,17 @@ class ArtifactWriter(Protocol):
         checksum: str,
         rows: int,
     ) -> ArtifactRecord: ...
+
+
+class TaskStorage(Protocol):
+    """Writes and reads a task's files for the run manager, such as `work.json`.
+
+    `create` writes `data` once at `uri` and makes missing folders. It raises
+    `FileExistsError` if something is already there. A reader never sees part of a file.
+
+    `read` returns the bytes at `uri`, or None only when the file is confirmed absent.
+    It raises for any other failure.
+    """
+
+    def create(self, uri: str, data: bytes) -> None: ...
+    def read(self, uri: str) -> bytes | None: ...

@@ -1,8 +1,11 @@
-"""Storage adapters for the local file system: `LocalFileProvider` and `LocalArtifactWriter`."""
+"""Storage adapters for the local file system: `LocalFileProvider`, `LocalArtifactWriter`,
+and `LocalTaskStorage`."""
 
 import hashlib
 import os
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO
 
@@ -52,18 +55,12 @@ class LocalArtifactWriter:
         rows: int,
     ) -> ArtifactRecord:
         final = self._root / artifact_path(kind, namespace, value)
-        final.parent.mkdir(parents=True, exist_ok=True)
-        # The leading dot hides the file from dataset readers, and no reader's file
-        # pattern matches the `.tmp` ending.
-        temporary = final.with_name(f".{final.name}.{uuid.uuid4().hex}.tmp")
-        try:
+        with _temporary_beside(final) as temporary:
             with open(source, "rb") as original, open(temporary, "xb") as staged:
                 copied = _copy_hashing(original, staged)
             if copied != checksum:
                 raise ValueError(f"{source} hashes to {copied}, not the {checksum} supplied")
             _link_or_replay(temporary, final, checksum)
-        finally:
-            temporary.unlink(missing_ok=True)
         return ArtifactRecord(
             kind=kind,
             contract_id=contract_id,
@@ -74,6 +71,40 @@ class LocalArtifactWriter:
             size_bytes=final.stat().st_size,
             rows=rows,
         )
+
+
+class LocalTaskStorage:
+    """Writes and reads task files at a local path or a `file://` URI.
+
+    `create` writes a hidden temporary file in the same folder and then hard-links it to
+    the final name, so no reader sees a partial file.
+    """
+
+    def create(self, uri: str, data: bytes) -> None:
+        final = get_local_path(uri)
+        with _temporary_beside(final) as temporary:
+            with open(temporary, "xb") as staged:
+                staged.write(data)
+            os.link(temporary, final)
+
+    def read(self, uri: str) -> bytes | None:
+        try:
+            return get_local_path(uri).read_bytes()
+        except FileNotFoundError:
+            return None
+
+
+@contextmanager
+def _temporary_beside(final: Path) -> Iterator[Path]:
+    """A hidden temporary path in `final`'s folder, removed on exit. Makes the folder."""
+    final.parent.mkdir(parents=True, exist_ok=True)
+    # The leading dot hides the file from dataset readers, and no reader's file
+    # pattern matches the `.tmp` ending.
+    temporary = final.with_name(f".{final.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        yield temporary
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _link_or_replay(temporary: Path, final: Path, checksum: str) -> None:

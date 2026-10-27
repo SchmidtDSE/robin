@@ -164,6 +164,7 @@ _register(
         "robin_adapters",
         "robin_adapters.catalog.csv_list",
         "robin_adapters.catalog.folder_layout",
+        "robin_adapters.compute.local",
         "robin_adapters.storage.local",
         "robin_contracts",
     ),
