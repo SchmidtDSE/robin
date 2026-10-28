@@ -532,7 +532,9 @@ RUN_SHOW_EPILOG = f"""\
 Prints the run's status, who submitted it and when, its configuration digest and
 output versions, its provenance (where its recording list came from), the compute
 and storage settings that it keeps from submit, its task and recording counts by
-state, its skip counts by reason, and any failure.
+state, its skip counts by reason, and its failures: why preparation failed, and
+the failed recordings counted by the scope and code of their failure, most first
+(at most 20; "truncated" says if there are more).
 
 {RUN_STATUSES}
 Example:
@@ -605,6 +607,8 @@ def _add_run_commands(nouns) -> None:
     _add_list_command(
         run_commands, "tasks", commands.list_run_tasks, "list a run's tasks",
         columns=commands.TASK_COLUMNS, example="robin runs tasks RUN",
+        note="REASON is why a failed task failed, or - for any other task. --json also\n"
+        "gives each task's execution times, its release, and the failure's detail.",
     ).add_argument("run_id", metavar="RUN", help=RUN_HELP)
 
 

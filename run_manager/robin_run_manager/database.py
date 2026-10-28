@@ -27,6 +27,10 @@ from robin_run_manager.profile import DatabaseSettings
 MIGRATION_LOCK = 1
 LAUNCH_LOCK = 2
 
+# The channel of the notice that a submit sends at commit. A reconcile loop listens on
+# it, so that it starts a pass without waiting for its interval.
+NOTIFY_CHANNEL = "robin"
+
 # The task lock is a name that one session holds.
 # Robin's rule is that only the session that holds a task's name calls the compute
 # adapter for that task, so two passes never submit, check, or release one task at

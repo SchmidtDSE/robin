@@ -209,7 +209,9 @@ def test_runs_tasks_prints_each_task(robin, owl_preset, database_settings):
 
     assert ran.code == 0, ran.stderr
     lines = ran.stdout.strip().splitlines()
-    assert [line.split("  ")[1:] for line in lines] == [["queued", "2"], ["queued", "1"]]
+    assert [line.split("  ")[1:] for line in lines] == [
+        ["queued", "2", "-"], ["queued", "1", "-"],
+    ]
     recordings = robin("runs", "recordings", run_id, "--state", "pending").stdout
     assert recordings.strip().splitlines()[0] == "survey  site-1/2026-05-01T05:00  pending  -"
 

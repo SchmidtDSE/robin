@@ -9,6 +9,7 @@ pass recovers it with `recover_submission`.
 
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Literal
 from uuid import UUID
 
@@ -39,9 +40,16 @@ from robin_run_manager.errors import (
     OutcomeUncertain,
     StorageUnavailable,
     WorkFileConflict,
+    invoke_adapter,
 )
 from robin_run_manager.profile import Profile, get_execution_settings, get_launch_settings
-from robin_run_manager.task_files import WorkFile, build_work_file, get_result_uri
+from robin_run_manager.status import ACTIVE_TASK_STATES
+from robin_run_manager.task_files import (
+    WorkFile,
+    build_reserved_work_file,
+    build_work_file,
+    read_result,
+)
 from robin_run_manager.versions import RELEASE_OUTPUT_VERSIONS, get_outdated_versions
 
 _IN_FLIGHT_STATES = ("submitting", "submitted", "running")
@@ -68,10 +76,13 @@ SubmissionOutcome = Literal[
 
 @dataclass(frozen=True)
 class TaskProblem:
-    """A Robin error that stopped one step for one task. The other tasks went on."""
+    """An error that stopped one step for one task. The other tasks went on.
+
+    The error is an `OperationError`, or an exception that Robin did not expect.
+    """
 
     task_id: UUID
-    error: OperationError
+    error: Exception
 
 
 @dataclass(frozen=True)
@@ -144,8 +155,8 @@ def reserve_tasks(
     First, the actor's queued tasks of this setup whose output versions are not current
     in `release_versions` fail. Every task in `submitting`, `submitted`, or `running`
     holds a slot of its compute setup, whoever submitted it, and `max_in_flight` caps
-    the slots of this profile's setup. A task that cannot be reserved because of a
-    Robin error stays `queued`, and the next queued task takes the slot. Raises
+    the slots of this profile's setup. A task that cannot be reserved because of an
+    error stays `queued`, and the next queued task takes the slot. Raises
     `NotConfigured` if the profile has no `compute` section.
     """
     # Raises NotConfigured before the transaction starts.
@@ -172,7 +183,9 @@ def reserve_tasks(
                 with connection.transaction():
                     if _reserve_task(connection, task_id, profile):
                         reserved.append(task_id)
-            except OperationError as error:
+            # Also an error that Robin does not expect, so that a defect in one task
+            # does not undo the reservations of the others.
+            except Exception as error:
                 problems.append(TaskProblem(task_id=task_id, error=error))
     return Reservation(
         task_ids=tuple(reserved),
@@ -228,6 +241,27 @@ def get_tasks_in_state(
     return [row["task_id"] for row in rows]
 
 
+def get_active_tasks_elsewhere(
+    database: Database, *, actor: str, setup: Mapping[str, Any]
+) -> list[UUID]:
+    """The actor's started tasks that another compute or storage setup must handle.
+
+    A started task still needs a step: it is `submitting`, `submitted`, `running`, or
+    `finalizing`, or it ended after its reservation and is not released. `setup` comes
+    from `get_setup_parameters`.
+    """
+    with transaction(database, read_only=True) as connection:
+        rows = connection.execute(
+            "SELECT t.task_id FROM tasks t JOIN runs r USING (run_id) "
+            "WHERE (t.state = ANY(%(states)s) "
+            "OR (t.reserved_at IS NOT NULL AND t.released_at IS NULL)) "
+            f"AND r.submitted_by = %(actor)s AND NOT ({SAME_SETUP}) "
+            "ORDER BY t.created_at, t.task_id",
+            {**setup, "states": list(ACTIVE_TASK_STATES), "actor": actor},
+        ).fetchall()
+    return [row["task_id"] for row in rows]
+
+
 def recover_submission(
     database: Database,
     task_id: UUID,
@@ -274,8 +308,8 @@ def _settle_submission(
             return "skipped"
         # Describe first. An execution that writes its result and ends after the result
         # check would otherwise look like one that never started.
-        status = _describe(compute, submission.compute_task)
-        has_result = _has_result(storage, submission.work_file)
+        status = get_compute_status(compute, submission.compute_task)
+        has_result = read_result(storage, submission.work_file) is not None
         if status.state == "not_found" and not has_result:
             outcome = _launch(
                 connection, submission, compute=compute, storage=storage,
@@ -339,34 +373,12 @@ def _record_recovered(
     ).rowcount == 1
 
 
-def _describe(compute: ComputeAdapter, compute_task: ComputeTask) -> ComputeStatus:
+def get_compute_status(compute: ComputeAdapter, compute_task: ComputeTask) -> ComputeStatus:
     """The state of the task's execution. Raises `ComputeUnavailable` if the adapter fails."""
-    failure: ComputeUnavailable
-    try:
-        return compute.describe(compute_task)
-    except Exception as error:
-        name = type(error).__name__
-        failure = ComputeUnavailable(
-            f"The compute adapter failed with {name} when Robin checked task "
-            f"{compute_task.task_id}. Its message is not shown, because it can hold a "
-            "credential. Robin submitted nothing; a later pass checks the task again.",
-            details={"task_id": str(compute_task.task_id), "error_type": name},
-        )
-    # Raised outside the handler, so that no traceback can show the adapter's error.
-    raise failure
-
-
-def _has_result(storage: TaskStorage, work_file: WorkFile) -> bool:
-    """True if the task's `result.json` exists. Raises `StorageUnavailable` if the
-    storage cannot say."""
-    task_id = work_file.task.task_id
-    failure: StorageUnavailable
-    try:
-        return storage.read(get_result_uri(work_file.work_uri)) is not None
-    except Exception as error:
-        failure = _storage_failure(task_id, error, f"looked for task {task_id}'s result")
-    # Raised outside the handler, so that no traceback can show the storage's error.
-    raise failure
+    return invoke_adapter(
+        partial(compute.describe, compute_task),
+        partial(_get_describe_failure, compute_task.task_id),
+    )
 
 
 def _submit(compute: ComputeAdapter, compute_task: ComputeTask) -> str | SubmissionRejected:
@@ -375,15 +387,14 @@ def _submit(compute: ComputeAdapter, compute_task: ComputeTask) -> str | Submiss
 
     Raises `OutcomeUncertain` for any other error, because the task may have started.
     """
-    failure: OutcomeUncertain
     try:
-        return compute.submit(compute_task)
+        return invoke_adapter(
+            partial(compute.submit, compute_task),
+            partial(_get_uncertain_submit, compute_task.task_id),
+            passing=(SubmissionRejected,),
+        )
     except SubmissionRejected as rejected:
         return rejected
-    except Exception as error:
-        failure = _get_uncertain_submit(compute_task.task_id, error)
-    # Raised outside the handler, so that no traceback can show the adapter's error.
-    raise failure
 
 
 def _record_submit(connection: psycopg.Connection, task_id: UUID, compute_ref: str) -> bool:
@@ -487,13 +498,7 @@ def _get_submission(
     ).fetchone()
     if row is None:
         return None
-    work_file = build_work_file(connection, task_id)
-    if work_file.digest != row["work_file_digest"]:
-        raise WorkFileConflict(
-            f"The work file that Robin builds now for task {task_id} is not the one it "
-            "reserved, so Robin wrote and submitted nothing. Report this defect.",
-            details={"task_id": str(task_id)},
-        )
+    work_file = build_reserved_work_file(connection, task_id, row["work_file_digest"])
     compute_task = ComputeTask(
         task_id=task_id,
         work_uri=work_file.work_uri,
@@ -515,53 +520,63 @@ def _check_output_root(work_file: WorkFile, split_location: SplitLocation) -> No
 
 def _write_work_file(storage: TaskStorage, work_file: WorkFile) -> None:
     """Write the work file once. An existing file with the same bytes is accepted."""
-    failure: Exception | None
-    try:
-        storage.create(work_file.work_uri, work_file.data)
-    except FileExistsError:
-        failure = _check_existing_work_file(storage, work_file)
-    except Exception as error:
-        failure = _storage_failure(
-            work_file.task.task_id, error, f"wrote task {work_file.task.task_id}'s work file"
-        )
-    else:
-        return
-    if failure is not None:
-        # Raised outside the handler, so that no traceback can show the storage's error.
-        raise failure
-
-
-def _check_existing_work_file(storage: TaskStorage, work_file: WorkFile) -> Exception | None:
     task_id = work_file.task.task_id
     try:
-        existing = storage.read(work_file.work_uri)
-    except Exception as error:
-        return _storage_failure(task_id, error, f"read task {task_id}'s work file")
-    if existing == work_file.data:
-        return None
-    return WorkFileConflict(
-        f"Another file is at the place of task {task_id}'s work file, so Robin wrote and "
-        "submitted nothing. Report this defect.",
-        details={"task_id": str(task_id)},
+        invoke_adapter(
+            partial(storage.create, work_file.work_uri, work_file.data),
+            partial(_get_storage_failure, task_id, f"wrote task {task_id}'s work file"),
+            passing=(FileExistsError,),
+        )
+    except FileExistsError:
+        pass
+    else:
+        return
+    # Checked outside the handler, so that an error of the check has no link to the
+    # FileExistsError.
+    _check_existing_work_file(storage, work_file)
+
+
+def _check_existing_work_file(storage: TaskStorage, work_file: WorkFile) -> None:
+    """Accept the existing work file if it has the same bytes. Raises
+    `WorkFileConflict` if it does not."""
+    task_id = work_file.task.task_id
+    existing = invoke_adapter(
+        partial(storage.read, work_file.work_uri),
+        partial(_get_storage_failure, task_id, f"read task {task_id}'s work file"),
+    )
+    if existing != work_file.data:
+        raise WorkFileConflict(
+            f"Another file is at the place of task {task_id}'s work file, so Robin wrote "
+            "and submitted nothing. Report this defect.",
+            details={"task_id": str(task_id)},
+        )
+
+
+def _get_describe_failure(task_id: UUID, error_type: str) -> ComputeUnavailable:
+    return ComputeUnavailable(
+        f"The compute adapter failed with {error_type} when Robin checked task {task_id}. "
+        "Its message is not shown, because it can hold a credential. Robin changed "
+        "nothing; a later pass checks the task again.",
+        details={"task_id": str(task_id), "error_type": error_type},
     )
 
 
-def _get_uncertain_submit(task_id: UUID, error: Exception) -> OutcomeUncertain:
+def _get_uncertain_submit(task_id: UUID, error_type: str) -> OutcomeUncertain:
     return OutcomeUncertain(
-        f"The compute adapter failed with {type(error).__name__} when Robin submitted "
-        f"task {task_id}. Its message is not shown, because it can hold a credential. "
-        "The task may have started, so it keeps its slot; a later pass checks it.",
-        details={"task_id": str(task_id), "error_type": type(error).__name__},
+        f"The compute adapter failed with {error_type} when Robin submitted task "
+        f"{task_id}. Its message is not shown, because it can hold a credential. The "
+        "task may have started, so it keeps its slot; a later pass checks it.",
+        details={"task_id": str(task_id), "error_type": error_type},
     )
 
 
-def _storage_failure(task_id: UUID, error: Exception, action: str) -> StorageUnavailable:
+def _get_storage_failure(task_id: UUID, action: str, error_type: str) -> StorageUnavailable:
     """`action` says what Robin did, such as "wrote task 1's work file"."""
     return StorageUnavailable(
-        f"The task storage failed with {type(error).__name__} when Robin {action}. Its "
-        "message is not shown, because it can hold a credential. Robin submitted "
-        "nothing; a later pass tries again.",
-        details={"task_id": str(task_id), "error_type": type(error).__name__},
+        f"The task storage failed with {error_type} when Robin {action}. Its message is "
+        "not shown, because it can hold a credential. Robin submitted nothing; a later "
+        "pass tries again.",
+        details={"task_id": str(task_id), "error_type": error_type},
     )
 
 

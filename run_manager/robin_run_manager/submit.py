@@ -11,7 +11,7 @@ from psycopg.types.json import Json, Jsonb
 from robin_contracts.cards import HeadCard, ModelCard
 from robin_contracts.tasks import ModelOutputVersion
 from robin_run_manager.configuration import BackboneInput, UnresolvedConfiguration
-from robin_run_manager.database import Database, transaction
+from robin_run_manager.database import NOTIFY_CHANNEL, Database, transaction
 from robin_run_manager.errors import (
     INVALID_REQUEST,
     UNKNOWN_PRESET,
@@ -61,6 +61,9 @@ def submit_run(
         stored = get_stored_configuration(connection, digest)
         versions = get_frozen_output_versions(_get_cards(connection, stored), release_versions)
         _check_locations(execution_settings["compute"]["kind"], recordings, stored)
+        # PostgreSQL sends the notice at commit, and not at all if the transaction rolls
+        # back, so its place in the transaction does not matter.
+        connection.execute(f"NOTIFY {NOTIFY_CHANNEL}")
         run_id = _insert_run(connection, actor, execution_settings, digest, versions, recordings)
     return Submitted(
         run_id=run_id, configuration_digest=digest, recording_count=len(recordings.recordings)

@@ -1,19 +1,22 @@
-"""The task folder, and the work file of a task.
+"""The task folder, the work file of a task, and its result file.
 
 Each task has its own folder under its run's frozen storage root. The work file is built
 from the database only, so a rebuild gives the same bytes even if the profile changed.
 """
 
 from dataclasses import dataclass
+from functools import partial
 from uuid import UUID
 
 import psycopg
 
 from robin_contracts.canonical import canonical_json_bytes, checksum_bytes
 from robin_contracts.local_files import get_file_uri
+from robin_contracts.ports.storage import TaskStorage
 from robin_contracts.tasks import InferenceTask, ModelOutputVersion, output_version_id
 from robin_contracts.work import InferenceWork, InputArtifact, RecordingRef
 from robin_run_manager.configuration import Configuration
+from robin_run_manager.errors import StorageUnavailable, WorkFileConflict, invoke_adapter
 from robin_run_manager.models import get_stored_model
 from robin_run_manager.stored_configurations import get_work_input
 
@@ -45,6 +48,27 @@ def get_task_folder(root: str, run_id: UUID, task_id: UUID) -> str:
 def get_result_uri(work_uri: str) -> str:
     """The URI of the result file in the task folder of the work file `work_uri`."""
     return f"{work_uri.removesuffix(WORK_FILE_NAME)}{RESULT_FILE_NAME}"
+
+
+def read_result(storage: TaskStorage, work_file: WorkFile) -> bytes | None:
+    """The bytes of the task's `result.json`, or None if it is confirmed absent.
+
+    Raises `StorageUnavailable` if the storage cannot say. Its message names only the
+    error's type, because the error's text can hold a credential.
+    """
+    return invoke_adapter(
+        partial(storage.read, get_result_uri(work_file.work_uri)),
+        partial(_get_read_failure, work_file.task.task_id),
+    )
+
+
+def _get_read_failure(task_id: UUID, error_type: str) -> StorageUnavailable:
+    return StorageUnavailable(
+        f"The task storage failed with {error_type} when Robin read task {task_id}'s "
+        "result. Its message is not shown, because it can hold a credential. Robin "
+        "changed nothing; a later pass reads the result again.",
+        details={"task_id": str(task_id), "error_type": error_type},
+    )
 
 
 def build_work_file(connection: psycopg.Connection, task_id: UUID) -> WorkFile:
@@ -79,6 +103,24 @@ def build_work_file(connection: psycopg.Connection, task_id: UUID) -> WorkFile:
         digest=checksum_bytes(data),
         work_uri=f"{folder}/{WORK_FILE_NAME}",
     )
+
+
+def build_reserved_work_file(
+    connection: psycopg.Connection, task_id: UUID, reserved_digest: str
+) -> WorkFile:
+    """Build the work file of `task_id` again, and check it against the digest that its
+    reservation stored.
+
+    Raises `WorkFileConflict` if the bytes differ.
+    """
+    work_file = build_work_file(connection, task_id)
+    if work_file.digest != reserved_digest:
+        raise WorkFileConflict(
+            f"The work file that Robin builds now for task {task_id} is not the one it "
+            "reserved, so Robin used neither. Report this defect.",
+            details={"task_id": str(task_id)},
+        )
+    return work_file
 
 
 def _build_work(connection: psycopg.Connection, task_id: UUID, row: dict) -> InferenceWork:

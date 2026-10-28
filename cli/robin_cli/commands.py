@@ -26,7 +26,7 @@ MODEL_COLUMNS = ("MODEL", "KIND", "CARD_DIGEST")
 PRESET_COLUMNS = ("NAME", "MODEL", "CONFIGURATION_DIGEST")
 RUN_COLUMNS = ("RUN", "STATUS", "SUBMITTED_BY", "CREATED_AT", "RECORDINGS")
 RECORDING_COLUMNS = ("NAMESPACE", "VALUE", "STATE", "SKIP_REASON")
-TASK_COLUMNS = ("TASK", "STATE", "RECORDINGS")
+TASK_COLUMNS = ("TASK", "STATE", "RECORDINGS", "REASON")
 
 
 @dataclass(frozen=True)
@@ -222,7 +222,12 @@ def list_run_tasks(context: Context, arguments) -> Output:
         partial(runs.list_run_tasks, context.services.database, arguments.run_id),
         arguments,
         TASK_COLUMNS,
-        lambda item: (item["task_id"], item["state"], str(item["recording_count"])),
+        lambda item: (
+            item["task_id"],
+            item["state"],
+            str(item["recording_count"]),
+            "-" if item["failure"] is None else item["failure"]["reason"],
+        ),
     )
 
 

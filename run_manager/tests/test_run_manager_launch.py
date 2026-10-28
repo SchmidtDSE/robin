@@ -4,7 +4,6 @@ import threading
 import time
 
 import pytest
-from psycopg.types.json import Json
 
 from robin_adapters.storage.local import LocalTaskStorage
 from robin_adapters.storage.location import split_location
@@ -37,9 +36,14 @@ from robin_run_manager.versions import RELEASE_OUTPUT_VERSIONS
 from run_fixtures import (
     KUBERNETES_SETTINGS,
     LOCAL_SETTINGS,
+    LOCAL_SETUP,
+    add_queued_tasks,
     cancel,
+    count_in_flight,
+    get_task,
     get_tasks,
     register_fixture_models,
+    set_execution_settings,
     submit,
     withdraw,
 )
@@ -52,15 +56,6 @@ NEWER_OWL = tuple(
     for entry in RELEASE_OUTPUT_VERSIONS
 )
 S3_STORAGE_SETTINGS = {**LOCAL_SETTINGS, "storage": {"kind": "s3", "root": "s3://robin/"}}
-# The setup of a pass with local compute and local task storage.
-LOCAL_SETUP = get_setup_parameters(
-    Profile.model_validate({
-        "database": {"host": "localhost", "dbname": "robin", "user": "robin", "password": "x"},
-        "compute": {"kind": "local"},
-        "storage": {"kind": "local", "root": "/data/robin"},
-    }),
-    {"local"},
-)
 
 
 @pytest.fixture
@@ -87,18 +82,6 @@ def make_profile(database_settings, root):
     return make
 
 
-def add_queued_tasks(database, values, *, root, actor="ana", size=1, versions=None):
-    """A prepared run of `values`, cut into tasks of `size`. Returns the run and its tasks."""
-    release_versions = versions or RELEASE_OUTPUT_VERSIONS
-    settings = {**LOCAL_SETTINGS, "storage": {"kind": "local", "root": root}}
-    run_id = submit(
-        database, values, actor=actor, execution_settings=settings,
-        release_versions=release_versions,
-    )
-    prepare_run(database, run_id, recordings_per_task=size, release_versions=release_versions)
-    return run_id, [task["task_id"] for task in get_tasks(database, run_id)]
-
-
 def reserve(database, profile, actor="ana", **options) -> Reservation:
     return reserve_tasks(
         database, actor=actor, profile=profile, storage_kinds={"local"}, **options
@@ -112,13 +95,6 @@ def submit_task(database, task_id, compute, storage=None):
     )
 
 
-def get_task(database, task_id) -> dict:
-    with transaction(database, read_only=True) as connection:
-        return connection.execute(
-            "SELECT * FROM tasks WHERE task_id = %s", (task_id,)
-        ).fetchone()
-
-
 def get_recording_failures(database, task_id) -> list[tuple]:
     with transaction(database, read_only=True) as connection:
         rows = connection.execute(
@@ -126,21 +102,6 @@ def get_recording_failures(database, task_id) -> list[tuple]:
             (task_id,),
         ).fetchall()
     return [(row["state"], row["failure"]["scope"], row["failure"]["code"]) for row in rows]
-
-
-def count_in_flight(database) -> int:
-    with transaction(database, read_only=True) as connection:
-        return connection.execute(
-            "SELECT count(*) AS n FROM tasks "
-            "WHERE state IN ('submitting', 'submitted', 'running')"
-        ).fetchone()["n"]
-
-
-def set_execution_settings(database, run_id, settings) -> None:
-    with transaction(database) as connection:
-        connection.execute(
-            "UPDATE runs SET execution_settings = %s WHERE run_id = %s", (Json(settings), run_id)
-        )
 
 
 @pytest.mark.parametrize("repeat", range(5))
@@ -397,11 +358,13 @@ def test_a_crash_before_the_reservation_commit_leaves_the_task_queued(
     _, [task_id] = add_queued_tasks(registered, ["a"], root=root)
 
     def crash(connection, task_id):
-        raise RuntimeError("the controller stopped")
+        # The operator stops the controller. A reservation keeps an Exception with its
+        # task, but not this.
+        raise KeyboardInterrupt
 
     with monkeypatch.context() as patch:
         patch.setattr(launch, "build_work_file", crash)
-        with pytest.raises(RuntimeError):
+        with pytest.raises(KeyboardInterrupt):
             reserve(registered, make_profile(max_in_flight=1))
 
     task = get_task(registered, task_id)
@@ -529,6 +492,29 @@ def test_an_existing_work_file_with_other_bytes_is_not_submitted(registered, mak
         submit_task(registered, task_id, compute)
 
     assert get_task(registered, task_id)["state"] == "submitting"
+    assert compute.get_calls("submit") == []
+
+
+class WorkFileReadFails(LocalTaskStorage):
+    def read(self, uri):
+        if uri.endswith("work.json"):
+            raise OSError("token=abc123")
+        return super().read(uri)
+
+
+def test_a_failed_read_of_an_existing_work_file_has_no_link_to_any_error(
+    registered, make_profile, root
+):
+    _, [task_id] = add_queued_tasks(registered, ["a"], root=root)
+    reserve(registered, make_profile())
+    LocalTaskStorage().create(get_task(registered, task_id)["work_uri"], b"other bytes")
+    compute = ScriptedCompute()
+
+    with pytest.raises(StorageUnavailable) as raised:
+        submit_task(registered, task_id, compute, storage=WorkFileReadFails())
+
+    assert "token=abc123" not in raised.value.message
+    assert raised.value.__context__ is None
     assert compute.get_calls("submit") == []
 
 

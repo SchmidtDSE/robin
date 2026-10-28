@@ -20,6 +20,8 @@ SKIP_REASONS = (
     "input_has_no_windows",
     "input_location_unsupported",
 )
+# The most failure codes that `runs show` gives.
+FAILURE_CODE_LIMIT = 20
 
 # The run's columns, and its task and recording counts by state, as JSON objects.
 _RUN_COLUMNS = """
@@ -33,18 +35,30 @@ SELECT r.run_id, r.state, r.submitted_by, r.created_at, r.preparation_failure,
         SELECT state, count(*) AS n FROM recording_outcomes o WHERE o.run_id = r.run_id
         GROUP BY state
     ) s) AS recording_counts"""
+# The run's failed recordings counted by the scope and code of their failure, most
+# first. One more than the limit is read, so that the read knows if there are more.
+# The order is given twice, because an aggregate does not keep the order of its
+# subquery.
+_FAILURE_CODES_COLUMN = f"""
+    (SELECT coalesce(json_agg(json_build_object('scope', scope, 'code', code, 'count', n)
+        ORDER BY n DESC, scope, code), '[]') FROM (
+        SELECT o.failure ->> 'scope' AS scope, o.failure ->> 'code' AS code, count(*) AS n
+        FROM recording_outcomes o WHERE o.run_id = r.run_id AND o.state = 'failed'
+        GROUP BY scope, code ORDER BY n DESC, scope, code LIMIT {FAILURE_CODE_LIMIT + 1}
+    ) f) AS failure_codes"""
 # The columns that only `runs show` gives.
 _SHOW_COLUMNS = """,
     r.execution_settings,
     (SELECT coalesce(json_object_agg(skip_reason, n), '{}') FROM (
         SELECT skip_reason, count(*) AS n FROM recording_outcomes o
         WHERE o.run_id = r.run_id AND o.state = 'skipped' GROUP BY skip_reason
-    ) s) AS skip_counts"""
+    ) s) AS skip_counts,""" + _FAILURE_CODES_COLUMN
 _RUN_FROM = """
 FROM runs r JOIN inference_runs i USING (run_id)
 """
 _RUN_SELECT = _RUN_COLUMNS + _RUN_FROM
-# One query, so that the skip counts and the other counts come from one snapshot.
+# One query, so that the skip counts, the failure codes, and the other counts come from
+# one snapshot.
 _RUN_SHOW_SELECT = _RUN_COLUMNS + _SHOW_COLUMNS + _RUN_FROM
 
 
@@ -95,10 +109,14 @@ def list_runs(
 
 
 def show_run(database: Database, run_id: str) -> dict:
-    """One run: its summary, versions, provenance, frozen settings, counts, and failures."""
+    """One run: its summary, versions, provenance, frozen settings, counts, and failures.
+
+    `failures.by_code` counts the failed recordings by the scope and code of their
+    failure, most first. It holds at most `FAILURE_CODE_LIMIT` entries, and
+    `failures.truncated` says if there are more.
+    """
     with transaction(database, read_only=True) as connection:
         row = _get_run_row(connection, run_id, select=_RUN_SHOW_SELECT)
-    failure = row["preparation_failure"]
     return _summarize_run(row) | {
         "output_versions": row["output_versions"],
         "provenance": row["provenance"],
@@ -110,13 +128,7 @@ def show_run(database: Database, run_id: str) -> dict:
         "task_counts": row["task_counts"],
         "recording_counts": row["recording_counts"],
         "skip_counts": row["skip_counts"],
-        "failures": {
-            "preparation": (
-                None
-                if failure is None
-                else {"reason": failure["reason"], "message": failure["message"]}
-            ),
-        },
+        "failures": _get_failures(row),
     }
 
 
@@ -166,13 +178,19 @@ def list_run_recordings(
 def list_run_tasks(
     database: Database, run_id: str, *, limit: int = DEFAULT_LIMIT, cursor: str | None = None
 ) -> Page:
-    """A page of the run's tasks, oldest first, each with its number of recordings."""
+    """A page of the run's tasks, oldest first.
+
+    Each task has its number of recordings, its execution's reference and times, the
+    Robin release that its result names, and its failure with the full detail.
+    """
     paging = start_page("run_tasks", cursor, limit, {"run_id": run_id})
     after = paging.parse_after_key(_parse_aware_time, UUID) or (None, None)
     with transaction(database, read_only=True) as connection:
         found = _get_run_row(connection, run_id)["run_id"]
         rows = connection.execute(
             "SELECT t.task_id, t.state, t.retry_of, t.created_by, t.created_at, "
+            "t.compute_ref, t.submitted_at, t.ended_at, t.released_at, t.robin_release, "
+            "t.failure, "
             "(SELECT count(*) FROM recording_outcomes o "
             "WHERE o.run_id = t.run_id AND o.task_id = t.task_id) "
             "AS recording_count "
@@ -190,14 +208,7 @@ def list_run_tasks(
     return paging.make_page(
         rows,
         key=lambda row: json.dumps([row["created_at"].isoformat(), str(row["task_id"])]),
-        item=lambda row: {
-            "task_id": str(row["task_id"]),
-            "state": row["state"],
-            "recording_count": row["recording_count"],
-            "retry_of": _format_text(row["retry_of"]),
-            "created_by": row["created_by"],
-            "created_at": row["created_at"].isoformat(),
-        },
+        item=_summarize_task,
     )
 
 
@@ -212,6 +223,39 @@ def _get_run_row(connection: psycopg.Connection, run_id: str, *, select: str = _
     if row is None:
         raise Refused(NOT_FOUND, f"There is no run {run_id}.", details={"run_id": run_id})
     return row
+
+
+def _get_failures(row: dict) -> dict:
+    """The run's failures: why preparation failed, and the failure codes of its
+    recordings, at most `FAILURE_CODE_LIMIT` of them."""
+    preparation = row["preparation_failure"]
+    codes = row["failure_codes"]
+    return {
+        "preparation": (
+            None
+            if preparation is None
+            else {"reason": preparation["reason"], "message": preparation["message"]}
+        ),
+        "by_code": codes[:FAILURE_CODE_LIMIT],
+        "truncated": len(codes) > FAILURE_CODE_LIMIT,
+    }
+
+
+def _summarize_task(row: dict) -> dict:
+    return {
+        "task_id": str(row["task_id"]),
+        "state": row["state"],
+        "recording_count": row["recording_count"],
+        "retry_of": _format_text(row["retry_of"]),
+        "created_by": row["created_by"],
+        "created_at": row["created_at"].isoformat(),
+        "compute_ref": row["compute_ref"],
+        "submitted_at": _format_time(row["submitted_at"]),
+        "ended_at": _format_time(row["ended_at"]),
+        "released_at": _format_time(row["released_at"]),
+        "robin_release": row["robin_release"],
+        "failure": row["failure"],
+    }
 
 
 def _summarize_run(row: dict) -> dict:

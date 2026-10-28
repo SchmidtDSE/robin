@@ -1,7 +1,7 @@
 """Errors that an operation raises. The CLI and the API show them in the same shape."""
 
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Callable, Mapping
+from typing import Any, TypeVar
 
 # Reasons are published: Robin may add one, and never renames or removes one.
 NOT_AUTHENTICATED = "not_authenticated"
@@ -153,3 +153,38 @@ class WorkFileConflict(OperationError):
     cannot repair."""
 
     reason = "work_file_conflict"
+
+
+class InternalError(OperationError):
+    """Robin failed because of a defect, with an exception that it did not expect.
+
+    The message names the exception's type only, because its text can hold a credential.
+    `details` holds the request ID of the stack that Robin wrote on stderr.
+    """
+
+    reason = "internal_error"
+
+
+T = TypeVar("T")
+
+
+def invoke_adapter(
+    call: Callable[[], T],
+    get_error: Callable[[str], OperationError],
+    *,
+    passing: tuple[type[Exception], ...] = (),
+) -> T:
+    """Give what `call()` gives. If it raises, raise `get_error(<the error's type name>)`.
+
+    Use it for each call into a compute adapter or a task storage, whose error text can
+    hold a credential. The new error is raised outside the handler, so it has no link
+    to the adapter's error, and no traceback can show that error's text. An exception
+    in `passing` is raised unchanged, for the caller to handle.
+    """
+    try:
+        return call()
+    except passing:
+        raise
+    except Exception as error:
+        error_type = type(error).__name__
+    raise get_error(error_type)

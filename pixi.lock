@@ -2509,6 +2509,7 @@ packages:
   requires_dist:
   - robin-contracts>=0.0,<0.1
   - robin-models>=0.0,<0.1
+  - robin-adapters[ondio]>=0.0,<0.1
   - pydantic>=2.12,<3
   - psycopg[binary]>=3.2,<4
   - psycopg-pool>=3.3,<4

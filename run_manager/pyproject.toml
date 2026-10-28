@@ -12,6 +12,9 @@ authors = [{ name = "Schmidt Center for Data Science and the Environment" }]
 dependencies = [
   "robin-contracts >=0.0,<0.1",
   "robin-models >=0.0,<0.1",
+  # The composition root builds the compute adapter and the task storage, and the
+  # location rule of storage uses ondio.
+  "robin-adapters[ondio] >=0.0,<0.1",
   "pydantic>=2.12,<3",
   "psycopg[binary]>=3.2,<4",
   "psycopg-pool>=3.3,<4",

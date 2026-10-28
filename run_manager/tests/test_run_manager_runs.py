@@ -13,11 +13,15 @@ from robin_run_manager.errors import INVALID_CURSOR, INVALID_REQUEST, NOT_FOUND,
 from robin_run_manager.preparation import prepare_run
 from robin_run_manager.runs import list_run_recordings, list_run_tasks, list_runs, show_run
 from robin_run_manager.versions import RELEASE_OUTPUT_VERSIONS
+from psycopg.types.json import Json
 from run_fixtures import (
     LOCAL_SETTINGS,
+    TASK_FAILURE,
     add_finished_run,
+    add_task,
     cancel,
     register_fixture_models,
+    set_outcome,
     submit,
 )
 
@@ -221,7 +225,7 @@ def test_show_run_gives_the_counts_the_provenance_and_the_settings(registered):
     assert shown["task_counts"] == {"queued": 2}
     assert shown["recording_counts"] == {"pending": 2, "skipped": 1}
     assert shown["skip_counts"] == {"already_covered": 1}
-    assert shown["failures"] == {"preparation": None}
+    assert shown["failures"] == {"preparation": None, "by_code": [], "truncated": False}
     assert (shown["cancelled_at"], shown["cancelled_by"]) == (None, None)
     assert (shown["withdrawn_at"], shown["withdrawn_by"]) == (None, None)
 
@@ -257,6 +261,72 @@ def test_show_run_gives_the_preparation_failure(registered):
     assert shown["status"] == "preparation_failed"
     assert shown["failures"]["preparation"]["reason"] == "output_version_not_current"
     assert set(shown["failures"]["preparation"]) == {"reason", "message"}
+
+
+def fail_recordings(database, run_id, values, scope, code) -> None:
+    """Fail each of the run's recordings in `values` with a failure of `scope` and `code`."""
+    with transaction(database) as connection:
+        connection.execute(
+            "UPDATE recording_outcomes SET state = 'failed', failure = %s "
+            "WHERE run_id = %s AND value = ANY(%s)",
+            (Json({"scope": scope, "code": code, "message": "m"}), run_id, list(values)),
+        )
+
+
+def test_show_counts_failures_by_scope_and_code(registered):
+    run_id = submit(registered, list("abcdef"))
+    prepare_run(registered, run_id, recordings_per_task=6)
+    fail_recordings(registered, run_id, "abc", "task", "no_result")
+    fail_recordings(registered, run_id, "d", "recording", "input_unavailable")
+    # The same code in another scope is counted apart.
+    fail_recordings(registered, run_id, "ef", "recording", "no_result")
+
+    failures = show_run(registered, str(run_id))["failures"]
+
+    assert failures["by_code"] == [
+        {"scope": "task", "code": "no_result", "count": 3},
+        {"scope": "recording", "code": "no_result", "count": 2},
+        {"scope": "recording", "code": "input_unavailable", "count": 1},
+    ]
+    assert failures["truncated"] is False
+
+
+def test_show_gives_at_most_20_failure_codes_and_says_truncated(registered):
+    values = [f"v{number:02}" for number in range(22)]
+    run_id = submit(registered, values)
+    prepare_run(registered, run_id, recordings_per_task=22)
+    fail_recordings(registered, run_id, values[:2], "recording", "most")
+    for value in values[2:]:
+        fail_recordings(registered, run_id, [value], "recording", f"code_{value}")
+
+    failures = show_run(registered, str(run_id))["failures"]
+
+    assert len(failures["by_code"]) == 20
+    assert failures["by_code"][0] == {"scope": "recording", "code": "most", "count": 2}
+    assert failures["truncated"] is True
+
+
+def test_each_status_holds_with_failed_tasks_present(registered):
+    statuses = {}
+    for status, other_state, outcome in [
+        ("running", "running", "pending"),
+        ("queued", "queued", "pending"),
+        ("finished_with_failures", "succeeded", "covered"),
+    ]:
+        # Each run has its own recordings, so that no claim conflicts.
+        failed_value, other_value = f"{status}-a", f"{status}-b"
+        run_id = submit(registered, [failed_value, other_value])
+        with transaction(registered) as connection:
+            connection.execute("UPDATE runs SET state = 'ready' WHERE run_id = %s", (run_id,))
+        failed = add_task(registered, run_id, "failed")
+        set_outcome(registered, run_id, failed_value, "failed", task_id=failed)
+        other = add_task(registered, run_id, other_state)
+        set_outcome(registered, run_id, other_value, outcome, task_id=other)
+        statuses[str(run_id)] = status
+
+    assert {item["run_id"]: item["status"] for item in list_runs(registered).items} == statuses
+    for run_id, status in statuses.items():
+        assert show_run(registered, run_id)["status"] == status
 
 
 @pytest.mark.parametrize("run_id", ["not-a-uuid", "00000000-0000-0000-0000-000000000000"])
@@ -338,8 +408,29 @@ def test_tasks_are_listed_with_their_recording_counts(registered):
     assert {item["state"] for item in items} == {"queued"}
     assert set(items[0]) == {
         "task_id", "state", "recording_count", "retry_of", "created_by", "created_at",
+        "compute_ref", "submitted_at", "ended_at", "released_at", "robin_release", "failure",
     }
     assert (items[0]["retry_of"], items[0]["created_by"]) == (None, "ana")
+    assert {items[0][name] for name in ("compute_ref", "submitted_at", "failure")} == {None}
+
+
+def test_tasks_give_the_failure_detail_and_times(registered):
+    run_id = submit(registered, ["a"])
+    when = START + timedelta(hours=1)
+    failure = {**TASK_FAILURE, "reason": "worker_error", "detail": "MemoryError: out of memory"}
+    task_id = add_task(
+        registered, run_id, "failed", failure=failure, compute_ref="4242", reserved_at=START,
+        submitted_at=START, ended_at=when, released_at=when, robin_release="robin@sha256:1",
+    )
+
+    [item] = list_run_tasks(registered, str(run_id)).items
+
+    assert item["task_id"] == str(task_id)
+    assert item["failure"] == failure
+    assert (item["compute_ref"], item["robin_release"]) == ("4242", "robin@sha256:1")
+    assert (item["submitted_at"], item["ended_at"], item["released_at"]) == (
+        START.isoformat(), when.isoformat(), when.isoformat(),
+    )
 
 
 @pytest.mark.parametrize("bad", ["a\u0000", "a\ud800"])
