@@ -12,6 +12,7 @@ import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, Any, Literal
+from urllib.parse import unquote, urlsplit
 
 from pydantic import (
     BaseModel,
@@ -28,6 +29,7 @@ from pydantic import (
 from robin_contracts.local_files import get_local_path
 from robin_contracts.ports.compute import ComputeRequest
 from robin_contracts.protocols import JsonScalar
+from robin_contracts.tasks import get_unsafe_segment
 from robin_contracts.text_formats import InvalidText, load_yaml
 from robin_contracts.work import FiniteScalarMap
 from robin_run_manager.errors import INVALID_PROFILE, NotConfigured, Refused
@@ -141,8 +143,11 @@ class ModelLaunchSettings(BaseModel):
 class _ComputeLaunchSettings(_PortSettings):
     """The launch fields of both compute kinds. A run does not freeze them.
 
-    `request` is what each task asks of the compute service. `resources` goes into each
-    work file for the worker's code. `models` gives other values for a model ID.
+    `max_in_flight` is the most tasks that this compute setup runs at the same time. It
+    counts every operator's tasks of runs frozen for the same compute settings, and not
+    the tasks of another setup that shares the database. `request` is what each task
+    asks of the compute service. `resources` goes into each work file for the worker's
+    code. `models` gives other values for a model ID.
     """
 
     max_in_flight: int = Field(default=10, ge=1)
@@ -185,7 +190,8 @@ class LocalStorageSettings(_PortSettings):
             get_local_path(root)
         except ValueError:
             raise ValueError("give an absolute path or a local file:// URI") from None
-        return root
+        path = root if root.startswith("/") else unquote(urlsplit(root).path)
+        return _check_root_parts(root, path.removeprefix("/"))
 
 
 class S3StorageSettings(_PortSettings):
@@ -199,7 +205,18 @@ class S3StorageSettings(_PortSettings):
     def _check_root_form(cls, root: str) -> str:
         if not is_s3_uri(root):
             raise ValueError("give an s3:// URI with a bucket")
-        return root
+        return _check_root_parts(root, root.removeprefix("s3://").partition("/")[2])
+
+
+def _check_root_parts(root: str, path: str) -> str:
+    """Refuse a root whose path in its store has an empty, `.`, or `..` part.
+
+    Storage may clean some of these, but a worker refuses a root that keeps one, and a
+    run keeps its root. So the profile refuses them all.
+    """
+    if get_unsafe_segment(path) is not None:
+        raise ValueError("give a root with no empty, '.', or '..' part")
+    return root
 
 
 StorageSettings = Annotated[LocalStorageSettings | S3StorageSettings, Field(discriminator="kind")]

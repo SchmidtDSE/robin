@@ -51,6 +51,22 @@ REFUSAL_REASONS = (
 )
 
 
+# Why a task failed. Published, like the refusal reasons. A task can also fail with the
+# code of the worker's refusal, or the code of the work's failure.
+SUBMISSION_REJECTED = "submission_rejected"
+NO_RESULT = "no_result"
+INVALID_RESULT = "invalid_result"
+WORKER_ERROR = "worker_error"
+
+TASK_FAILURE_REASONS = (
+    SUBMISSION_REJECTED,
+    OUTPUT_VERSION_NOT_CURRENT,
+    NO_RESULT,
+    INVALID_RESULT,
+    WORKER_ERROR,
+)
+
+
 class OperationError(Exception):
     """An operation did not complete. `reason` is a stable code; `message` is for people."""
 
@@ -107,6 +123,33 @@ class CatalogFailed(OperationError):
 
 
 class OutcomeUncertain(OperationError):
-    """The connection failed during commit. The change may or may not have been made."""
+    """The change may or may not have been made: the connection failed during commit,
+    or the compute adapter failed after it may have started a task."""
 
     reason = "outcome_uncertain"
+
+
+class ComputeUnavailable(OperationError):
+    """The compute adapter failed. The task keeps its state, and a later pass tries again.
+
+    The message names the error's type only, because its text can hold a credential.
+    """
+
+    reason = "compute_unavailable"
+
+
+class StorageUnavailable(OperationError):
+    """The task storage failed. The task keeps its state, and a later pass tries again.
+
+    The message names the error's type only, because its text can hold a credential.
+    """
+
+    reason = "storage_unavailable"
+
+
+class WorkFileConflict(OperationError):
+    """The work file that Robin builds now is not the one it reserved, or another file
+    is at its place. Robin wrote and submitted nothing. This is a defect, which Robin
+    cannot repair."""
+
+    reason = "work_file_conflict"

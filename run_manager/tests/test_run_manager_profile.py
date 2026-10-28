@@ -497,6 +497,40 @@ def test_storage_root_must_have_the_form_of_its_kind(tmp_path, storage):
     assert get_problem_fields(invalid(tmp_path)) == [f"storage.{storage['kind']}.root"]
 
 
+@pytest.mark.parametrize(
+    "storage",
+    [
+        {"kind": "local", "root": "/data/../robin"},
+        {"kind": "local", "root": "/data//robin"},
+        {"kind": "local", "root": "/data/./robin"},
+        {"kind": "local", "root": "file:///data/%2E%2E/robin"},
+        {"kind": "s3", "root": "s3://lab/a/../b"},
+        {"kind": "s3", "root": "s3://lab//robin"},
+    ],
+    ids=["parent", "empty", "dot", "encoded-parent", "s3-parent", "s3-empty"],
+)
+def test_storage_root_has_no_empty_dot_or_parent_part(tmp_path, storage):
+    write(tmp_path, "dev.yaml", {"database": DATABASE, "storage": storage})
+
+    assert get_problem_fields(invalid(tmp_path)) == [f"storage.{storage['kind']}.root"]
+
+
+@pytest.mark.parametrize(
+    "storage",
+    [
+        {"kind": "local", "root": "/"},
+        {"kind": "local", "root": "/data/robin/"},
+        {"kind": "local", "root": "file:///data/robin"},
+        {"kind": "s3", "root": "s3://lab"},
+        {"kind": "s3", "root": "s3://lab/robin/"},
+    ],
+)
+def test_a_storage_root_with_safe_parts_loads(tmp_path, storage):
+    write(tmp_path, "dev.yaml", {"database": DATABASE, "storage": storage})
+
+    assert load_profile(tmp_path, "dev", ENVIRON).storage.root == storage["root"]
+
+
 def test_get_execution_settings_freezes_compute_and_storage(tmp_path):
     write(tmp_path, "dev.yaml", {
         "database": DATABASE,

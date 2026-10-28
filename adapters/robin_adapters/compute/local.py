@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from robin_contracts.local_files import get_local_path
-from robin_contracts.ports.compute import ComputeStatus, ComputeTask, SubmitRejected
+from robin_contracts.ports.compute import ComputeStatus, ComputeTask, SubmissionRejected
 
 _PROCESS_TABLE_COMMAND = ("ps", "-ww", "-A", "-o", "pid=,pgid=,args=")
 _PROCESS_TABLE_TIMEOUT_SECONDS = 5
@@ -99,7 +99,9 @@ class LocalCompute:
                     start_new_session=True,
                 )
             except (FileNotFoundError, PermissionError) as error:
-                raise SubmitRejected(f"the worker command cannot start: {error.strerror}") from None
+                raise SubmissionRejected(
+                    f"the worker command cannot start: {error.strerror}"
+                ) from None
         with self._started_lock:
             self._started.append(process)
         return process.pid

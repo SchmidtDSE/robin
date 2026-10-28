@@ -4,7 +4,7 @@ The run manager gives each call a `ComputeTask`. An adapter promises this:
 
 - `submit` starts an execution of the task and returns its `compute_ref`. It never
   starts a second execution while an earlier one may still run: for a task that has an
-  execution, it returns that execution's `compute_ref`. It raises `SubmitRejected` only
+  execution, it returns that execution's `compute_ref`. It raises `SubmissionRejected` only
   when it is sure that nothing runs and nothing will run. Any other exception means
   that the submit is uncertain: an execution may have started.
 - `describe` gives the state of the task's execution. `waiting` means that the compute
@@ -15,7 +15,7 @@ The run manager gives each call a `ComputeTask`. An adapter promises this:
   the task after its outcome is recorded. Both are safe to repeat. `release` never
   deletes `work.json`, `result.json`, or the task's outputs.
 
-Robin reports an exception that is not `SubmitRejected` by its type only, because its
+Robin reports an exception that is not `SubmissionRejected` by its type only, because its
 text can hold a credential.
 """
 
@@ -62,8 +62,12 @@ class ComputeStatus(BaseModel, frozen=True):
     compute_ref: str | None = None
 
 
-class SubmitRejected(Exception):
-    """The compute service refused the task. Nothing runs and nothing will run."""
+class SubmissionRejected(Exception):
+    """The compute service refused the task. Nothing runs and nothing will run.
+
+    Its text is stored on the task and shown, so it holds no credential and no profile
+    value.
+    """
 
 
 class ComputeAdapter(Protocol):

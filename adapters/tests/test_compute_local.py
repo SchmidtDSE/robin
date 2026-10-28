@@ -10,7 +10,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from robin_contracts.ports.compute import ComputeRequest, ComputeTask, SubmitRejected
+from robin_contracts.ports.compute import ComputeRequest, ComputeTask, SubmissionRejected
 
 from robin_adapters.compute.local import LocalCompute
 
@@ -290,7 +290,7 @@ def test_a_failed_process_table_read_is_unknown(script, make_task, tmp_path, mon
     with pytest.raises(Exception) as raised:
         compute.submit(task)
 
-    assert not isinstance(raised.value, SubmitRejected)
+    assert not isinstance(raised.value, SubmissionRejected)
     time.sleep(0.5)
     assert _markers(task) == []
 
@@ -302,7 +302,7 @@ def test_a_command_that_cannot_start_is_submit_rejected(make_task, tmp_path, pro
         command.write_text("#!/bin/sh\n")
         command.chmod(0o644)
 
-    with pytest.raises(SubmitRejected):
+    with pytest.raises(SubmissionRejected):
         LocalCompute(command=(str(command),)).submit(make_task())
 
 

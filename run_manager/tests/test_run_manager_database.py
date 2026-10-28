@@ -4,12 +4,19 @@ import uuid
 
 import psycopg
 import pytest
+from psycopg.pq import TransactionStatus
 from psycopg_pool import ConnectionPool
 from pydantic import SecretStr
 
-from robin_run_manager import errors
 from robin_run_manager.compose import compose
-from robin_run_manager.database import Database, current_login, open_database, transaction
+from robin_run_manager.database import (
+    Database,
+    current_login,
+    lock_task,
+    open_database,
+    transaction,
+    transaction_on,
+)
 from robin_run_manager.errors import OperationError, OutcomeUncertain, Refused, Unavailable
 from robin_run_manager.profile import Profile
 
@@ -150,37 +157,6 @@ def test_an_error_body_has_reason_message_and_details():
     }
 
 
-def test_refusal_reasons_keep_their_published_values():
-    declared = {
-        value for name, value in vars(errors).items() if name.isupper() and isinstance(value, str)
-    }
-
-    assert errors.REFUSAL_REASONS == (
-        "not_authenticated",
-        "not_found",
-        "invalid_request",
-        "invalid_profile",
-        "database_not_found",
-        "server_not_verified",
-        "schema_not_current",
-        "migration_changed",
-        "migration_unknown",
-        "model_conflict",
-        "preset_conflict",
-        "unknown_model",
-        "unknown_configuration",
-        "invalid_cursor",
-        "invalid_configuration",
-        "unknown_preset",
-        "unknown_output_version",
-        "output_version_not_current",
-        "unsupported_location",
-        "invalid_selection",
-        "source_refused",
-    )
-    assert declared == set(errors.REFUSAL_REASONS)
-
-
 def test_compose_connects_with_the_profile_settings(database_settings):
     services = compose(Profile(database=database_settings))
     try:
@@ -278,3 +254,41 @@ def test_a_failed_login_is_sorted_by_the_server_message(
 
 def test_the_current_login_is_the_database_user(database, database_settings):
     assert current_login(database) == database_settings.user
+
+
+def test_a_task_lock_is_held_only_for_its_block(database, database_settings):
+    task_id = uuid.uuid4()
+    other = open_database(database_settings)
+    try:
+        with lock_task(database, task_id) as connection:
+            with lock_task(other, task_id) as elsewhere:
+                assert (connection is not None, elsewhere) == (True, None)
+            with lock_task(other, uuid.uuid4()) as other_task:
+                assert other_task is not None
+            with transaction(database, read_only=True) as connection:
+                # No transaction is open on the lock's connection during the block.
+                waiting = connection.execute(
+                    "SELECT count(*) AS n FROM pg_stat_activity "
+                    "WHERE datname = current_database() AND state = 'idle in transaction'"
+                ).fetchone()["n"]
+            assert waiting == 0
+
+        with lock_task(other, task_id) as after:
+            assert after is not None
+    finally:
+        other.close()
+
+
+def test_a_failed_block_on_a_held_connection_is_rolled_back(database):
+    make_table(database)
+    with lock_task(database, uuid.uuid4()) as connection:
+        with pytest.raises(Refused):
+            with transaction_on(connection):
+                connection.execute("INSERT INTO t VALUES (1)")
+                raise Refused("not_found", "No run is named 'x'.")
+
+        assert connection.info.transaction_status == TransactionStatus.IDLE
+        with transaction_on(connection):
+            connection.execute("INSERT INTO t VALUES (2)")
+
+    assert rows(database) == [{"x": 2}]

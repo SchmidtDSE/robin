@@ -24,6 +24,7 @@ from robin_contracts.tasks import (
     ModelOutputVersion,
     TaskRefusal,
     WorkerError,
+    get_unsafe_segment,
     output_root_problem,
     output_version_id,
     task_result_problem,
@@ -551,6 +552,14 @@ def test_a_usable_root_has_no_problem(root):
 def test_an_unusable_root_is_explained(root, fact):
     reason = output_root_problem(root, split_location=split_location)
     assert root in reason and fact in reason
+
+
+@pytest.mark.parametrize(
+    ("path", "segment"),
+    [("a/../b", ".."), ("a//b", ""), ("./b", "."), ("a/b/", None), ("", None)],
+)
+def test_the_first_unsafe_segment_of_a_path_is_found(path, segment):
+    assert get_unsafe_segment(path) == segment
 
 
 @pytest.mark.parametrize("root", ["s3://bucket/a/../b", "s3://bucket/a//b"])

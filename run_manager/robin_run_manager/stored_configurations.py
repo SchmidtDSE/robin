@@ -5,10 +5,11 @@ from typing import NamedTuple
 import psycopg
 from psycopg.types.json import Json
 
-from robin_contracts.work import PinnedModel
+from robin_contracts.work import AudioInput, EmbeddingArtifactInput, PinnedModel
 from robin_run_manager.configuration import (
     BackboneInput,
     Configuration,
+    ConfigurationInput,
     UnresolvedConfiguration,
     get_configuration_digest,
     get_embedding_input,
@@ -33,11 +34,7 @@ def add_configuration(
     For a head, the backbone configuration must be stored already.
     """
     model = get_stored_model(connection, unresolved.model)
-    if isinstance(unresolved.input, BackboneInput):
-        backbone = get_stored_configuration(connection, unresolved.input.backbone_configuration)
-        work_input = get_embedding_input(backbone.configuration, backbone.model)
-    else:
-        work_input = unresolved.input
+    work_input = get_work_input(connection, unresolved.input)
     configuration = resolve_configuration(unresolved, model, work_input)
     digest = get_configuration_digest(configuration)
     connection.execute(
@@ -67,3 +64,17 @@ def get_stored_configuration(connection: psycopg.Connection, digest: str) -> Sto
         configuration=Configuration.model_validate(row["configuration"]),
         model=get_stored_model(connection, row["model_id"]),
     )
+
+
+def get_work_input(
+    connection: psycopg.Connection, configuration_input: ConfigurationInput
+) -> AudioInput | EmbeddingArtifactInput:
+    """The input that the engine reads for `configuration_input`.
+
+    The audio input is used as written. A head reads the embeddings of its backbone
+    configuration, which must be stored already.
+    """
+    if not isinstance(configuration_input, BackboneInput):
+        return configuration_input
+    backbone = get_stored_configuration(connection, configuration_input.backbone_configuration)
+    return get_embedding_input(backbone.configuration, backbone.model)

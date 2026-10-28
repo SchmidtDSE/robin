@@ -5,6 +5,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
+from uuid import UUID
 
 import psycopg
 from psycopg.pq import TransactionStatus
@@ -22,8 +23,17 @@ from robin_run_manager.errors import (
 )
 from robin_run_manager.profile import DatabaseSettings
 
-# Key for pg_advisory_xact_lock.
+# Keys for pg_advisory_xact_lock.
 MIGRATION_LOCK = 1
+LAUNCH_LOCK = 2
+
+# The task lock is a name that one session holds.
+# Robin's rule is that only the session that holds a task's name calls the compute
+# adapter for that task, so two passes never submit, check, or release one task at
+# the same time. The name is two numbers: _TASK_LOCK and the hashtext of the task ID.
+# The migration and launch locks are named by one number, and a name of one number is
+# never the same lock as a name of two, i.e. lock 3 and lock (3, x) are different locks.
+_TASK_LOCK = 3
 
 # psycopg gives no SQLSTATE for a failed login, so these match the server's message.
 _REFUSED_LOGIN = re.compile(
@@ -154,6 +164,22 @@ def transaction(database: Database, *, read_only: bool = False) -> Iterator[psyc
         # PoolTimeout is an OperationalError.
         raise Unavailable("Robin could not connect to its database. Nothing changed.") from error
     try:
+        with transaction_on(connection, read_only=read_only):
+            yield connection
+    finally:
+        _give_back(database, connection)
+
+
+@contextmanager
+def transaction_on(
+    connection: psycopg.Connection, *, read_only: bool = False
+) -> Iterator[psycopg.Connection]:
+    """Run the block in one transaction on a connection that the caller holds, then commit.
+
+    It raises as `transaction` does. If the block fails, the transaction is rolled back,
+    so no transaction stays open on the connection.
+    """
+    try:
         try:
             yield connection
         except psycopg.OperationalError as error:
@@ -172,15 +198,63 @@ def transaction(database: Database, *, read_only: bool = False) -> Iterator[psyc
                 "The database connection failed during commit. The change may have been "
                 "made. Read the current state to check, or repeat the request."
             ) from error
+    except BaseException:
+        _roll_back(connection)
+        raise
+
+
+@contextmanager
+def lock_task(database: Database, task_id: UUID) -> Iterator[psycopg.Connection | None]:
+    """Hold the lock of one task for the block.
+
+    Gives the connection that holds the lock, or None if another session holds it. The
+    block runs its steps on that connection with `transaction_on`, so one pooled
+    connection does the whole step. Between those transactions none is open, so the
+    block can call the compute adapter. Two tasks can share a lock key; then one of
+    them waits for a later pass.
+
+    Raises `Unavailable` if the lock cannot be taken.
+    """
+    try:
+        connection = database.pool.getconn()
+    except psycopg.OperationalError as error:
+        raise Unavailable("Robin could not connect to its database. Nothing changed.") from error
+    try:
+        with transaction_on(connection, read_only=True):
+            locked = connection.execute(
+                "SELECT pg_try_advisory_lock(%s, hashtext(%s::text)) AS locked",
+                (_TASK_LOCK, task_id),
+            ).fetchone()["locked"]
+        try:
+            yield connection if locked else None
+        finally:
+            if locked:
+                _unlock_task(connection, task_id)
     finally:
         _give_back(database, connection)
 
 
+def _unlock_task(connection: psycopg.Connection, task_id: UUID) -> None:
+    try:
+        connection.execute(
+            "SELECT pg_advisory_unlock(%s, hashtext(%s::text))", (_TASK_LOCK, task_id)
+        )
+        connection.commit()
+    except psycopg.Error:
+        # The session ends, and its locks end with it.
+        connection.close()
+
+
 def _give_back(database: Database, connection: psycopg.Connection) -> None:
-    # Roll back an open transaction. The pool discards a broken connection.
+    # The pool discards a broken connection.
+    _roll_back(connection)
+    database.pool.putconn(connection)
+
+
+def _roll_back(connection: psycopg.Connection) -> None:
+    """Roll back an open transaction. Close the connection if that fails."""
     if not connection.closed and connection.info.transaction_status != TransactionStatus.IDLE:
         try:
             connection.rollback()
         except psycopg.Error:
             connection.close()
-    database.pool.putconn(connection)

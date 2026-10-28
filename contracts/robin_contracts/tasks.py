@@ -180,10 +180,15 @@ def output_root_problem(root: str, *, split_location: SplitLocation) -> str | No
     place = split_location(root)
     if place is None:
         return f"output_root {root!r} is not a location storage supports"
-    bad = [segment for segment in _root_parts(place[1]) if segment in _UNSAFE_SEGMENTS]
-    if bad:
-        return f"output_root {root!r} has an empty, '.', or '..' segment: {bad[0]!r}"
+    segment = get_unsafe_segment(place[1])
+    if segment is not None:
+        return f"output_root {root!r} has an empty, '.', or '..' segment: {segment!r}"
     return None
+
+
+def get_unsafe_segment(path: str) -> str | None:
+    """The first empty, `.`, or `..` segment of a path in a store, or None if it has none."""
+    return next((part for part in _root_parts(path) if part in _UNSAFE_SEGMENTS), None)
 
 
 _UNSAFE_SEGMENTS = frozenset({"", ".", ".."})
