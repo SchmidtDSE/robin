@@ -361,6 +361,61 @@ def test_a_pass_refuses_with_no_compute(registered, profile):
         reconcile_once(services, actor="ana")
 
 
+class StoppingCompute(ScriptedCompute):
+    """Asks the pass to stop during each submit."""
+
+    def __init__(self, stop) -> None:
+        super().__init__()
+        self._stop = stop
+
+    def submit(self, task):
+        self._stop.set()
+        return super().submit(task)
+
+
+def test_a_stop_during_a_run_operation_starts_no_other_operation(
+    registered, profile, monkeypatch
+):
+    run_ids = [submit_here(registered, profile, [value]) for value in ("a", "b")]
+    stop = threading.Event()
+    compute = ScriptedCompute()
+
+    def prepare_and_stop(*args, **kwargs):
+        stop.set()
+        return real_prepare_run(*args, **kwargs)
+
+    real_prepare_run = reconcile.prepare_run
+    monkeypatch.setattr(reconcile, "prepare_run", prepare_and_stop)
+
+    report = reconcile_once(
+        get_services(registered, profile, compute), actor="ana", should_stop=stop.is_set
+    )
+
+    assert (report.prepared, report.launched) == (1, 0)
+    assert [get_run_row(registered, run_id)["state"] for run_id in run_ids] == [
+        "ready", "preparing"
+    ]
+    assert compute.calls == []
+
+
+def test_a_stop_during_a_task_operation_starts_no_other_operation(registered, profile):
+    run_id = submit_here(registered, profile, ["a", "b"])
+    prepare_run(registered, run_id, recordings_per_task=1)
+    stop = threading.Event()
+    compute = StoppingCompute(stop)
+
+    report = reconcile_once(
+        get_services(registered, profile, compute), actor="ana", should_stop=stop.is_set
+    )
+
+    assert report.launched == 1
+    assert len(compute.get_calls("submit")) == 1
+    # The other reserved task waits for the recovery step of a later pass.
+    assert Counter(task["state"] for task in get_tasks(registered, run_id)) == Counter(
+        {"submitted": 1, "submitting": 1}
+    )
+
+
 def connect(settings) -> psycopg.Connection:
     return psycopg.connect(
         host=settings.host, port=settings.port, dbname=settings.dbname, user=settings.user,

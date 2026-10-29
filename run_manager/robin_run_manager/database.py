@@ -53,12 +53,20 @@ _NOT_VERIFIED = re.compile(
 # Makes the password for each new connection with `auth: rds_iam`.
 TokenMaker = Callable[[], str]
 
+# Makes the connection values for each new connection, with a new token for `rds_iam`.
+ConnectionValues = Callable[[], dict[str, Any]]
+
 
 @dataclass(frozen=True)
 class Database:
-    """A pool of connections with autocommit off. Close it when done."""
+    """A pool of connections with autocommit off. Close it when done.
+
+    `get_connection_values` makes the values of a new connection, as the pool does, for
+    a connection outside the pool.
+    """
 
     pool: ConnectionPool
+    get_connection_values: ConnectionValues
 
     def close(self) -> None:
         self.pool.close()
@@ -79,7 +87,7 @@ def open_database(settings: DatabaseSettings, *, make_token: TokenMaker | None =
         # Called for each new connection, so each gets a new token.
         return _connection_kwargs(settings, make_token)
 
-    _check_login(get_kwargs())
+    _connect(get_kwargs()).close()
     pool = ConnectionPool(
         kwargs=get_kwargs,
         min_size=settings.pool_min_size,
@@ -90,7 +98,57 @@ def open_database(settings: DatabaseSettings, *, make_token: TokenMaker | None =
         name="robin",
         open=True,
     )
-    return Database(pool=pool)
+    return Database(pool=pool, get_connection_values=get_kwargs)
+
+
+def check_login(database: Database) -> None:
+    """Log in once more with a new connection, outside the pool.
+
+    The pool keeps its open connections, so it does not show that the database now
+    refuses the login. Raises what `open_database` raises.
+    """
+    _connect(database.get_connection_values()).close()
+
+
+class NoticeListener:
+    """A connection of its own that listens for the notice on `NOTIFY_CHANNEL`. Close it
+    when done."""
+
+    def __init__(self, connection: psycopg.Connection) -> None:
+        self._connection = connection
+
+    def wait(self, timeout: float) -> bool:
+        """Wait at most `timeout` seconds for a notice. True if one came.
+
+        It takes every notice that waits, so that a group of notices starts one pass.
+        Raises `Unavailable` if the connection failed.
+        """
+        try:
+            received = list(self._connection.notifies(timeout=timeout, stop_after=1))
+            if received:
+                list(self._connection.notifies(timeout=0))
+            return bool(received)
+        except psycopg.OperationalError:
+            pass
+        # Raised outside the handler, as for a failed login.
+        raise Unavailable("The database connection that listens for notices failed.")
+
+    def close(self) -> None:
+        self._connection.close()
+
+
+def listen(database: Database) -> NoticeListener:
+    """Open a connection outside the pool that listens for the notice of a submit.
+
+    Raises what `open_database` raises.
+    """
+    connection = _connect({**database.get_connection_values(), "autocommit": True})
+    try:
+        connection.execute(f"LISTEN {NOTIFY_CHANNEL}")
+        return NoticeListener(connection)
+    except psycopg.OperationalError:
+        connection.close()
+    raise Unavailable("Robin could not listen for notices on its database.")
 
 
 def current_login(database: Database) -> str:
@@ -123,10 +181,10 @@ def _connection_kwargs(
     return kwargs
 
 
-def _check_login(kwargs: dict[str, Any]) -> None:
+def _connect(kwargs: dict[str, Any]) -> psycopg.Connection:
+    """A new connection. Raises `Refused`, or `Unavailable`, for a failed login."""
     try:
-        psycopg.connect(**kwargs).close()
-        return
+        return psycopg.connect(**kwargs)
     except psycopg.OperationalError as error:
         server_says = str(error)
     # Raise outside the handler: the psycopg error holds the password.

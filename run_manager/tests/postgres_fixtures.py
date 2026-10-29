@@ -25,12 +25,14 @@ from robin_run_manager.migrations import migrate
 from robin_run_manager.profile import DatabaseSettings
 
 __all__ = [
+    "change_password",
     "commit_lost",
     "database",
     "database_settings",
     "fake_aws_credentials",
     "migrated_database",
     "no_aws_credentials",
+    "own_login_settings",
     "postgres_server",
     "unreachable_settings",
     "without_tls",
@@ -117,6 +119,52 @@ def database_settings(postgres_server) -> DatabaseSettings:
 
 
 @pytest.fixture
+def own_login_settings(postgres_server) -> DatabaseSettings:
+    """Settings for a new login role and a new, empty database that the role owns.
+
+    Use them where a test changes the login, so that other tests keep theirs. The
+    database and the role are dropped after the test.
+    """
+    name = f"robin_test_{uuid.uuid4().hex}"
+    password = uuid.uuid4().hex
+    with psycopg.connect(dbname="postgres", autocommit=True, **postgres_server) as admin:
+        admin.execute(
+            sql.SQL("CREATE ROLE {} LOGIN PASSWORD {}").format(
+                sql.Identifier(name), sql.Literal(password)
+            )
+        )
+        admin.execute(
+            sql.SQL("CREATE DATABASE {} OWNER {}").format(sql.Identifier(name), sql.Identifier(name))
+        )
+    yield DatabaseSettings(
+        host=postgres_server["host"],
+        port=postgres_server["port"],
+        dbname=name,
+        user=name,
+        password=password,
+    )
+    with psycopg.connect(dbname="postgres", autocommit=True, **postgres_server) as admin:
+        admin.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name)))
+        admin.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(name)))
+
+
+def change_password(postgres_server: dict, user: str, *, disconnect: bool) -> None:
+    """Give `user` a new password that no test knows. With `disconnect`, also end the
+    user's open connections."""
+    with psycopg.connect(dbname="postgres", autocommit=True, **postgres_server) as admin:
+        admin.execute(
+            sql.SQL("ALTER ROLE {} PASSWORD {}").format(
+                sql.Identifier(user), sql.Literal(uuid.uuid4().hex)
+            )
+        )
+        if disconnect:
+            admin.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = %s",
+                (user,),
+            )
+
+
+@pytest.fixture
 def database(database_settings) -> Database:
     database = open_database(database_settings)
     # Wait for the first connection. Otherwise the first request makes the pool grow,
@@ -178,7 +226,10 @@ def commit_lost():
     The wrapper shares the pool of the `Database` it wraps, so the fixture that made
     that `Database` still closes the pool.
     """
-    return lambda database: Database(pool=_CommitLostPool(database.pool))
+    return lambda database: Database(
+        pool=_CommitLostPool(database.pool),
+        get_connection_values=database.get_connection_values,
+    )
 
 
 _AWS_VARIABLES = (

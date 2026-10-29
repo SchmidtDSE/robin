@@ -16,7 +16,7 @@ All steps except preparation act only on the actor's runs that this setup handle
 import sys
 import traceback
 import uuid
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -115,6 +115,7 @@ class _Pass:
     storages: tuple[tuple[TaskStorage, Mapping[str, Any]], ...]
     release_versions: Sequence[ModelOutputVersion]
     report: ReconcileReport
+    should_stop: Callable[[], bool]
 
 
 def reconcile_once(
@@ -122,11 +123,14 @@ def reconcile_once(
     *,
     actor: str,
     release_versions: Sequence[ModelOutputVersion] = RELEASE_OUTPUT_VERSIONS,
+    should_stop: Callable[[], bool] = lambda: False,
 ) -> ReconcileReport:
     """Do one pass of the steps in the module's list, and give its report.
 
-    A failure in one task or run is added to the report, and the pass goes on. Raises
-    `NotConfigured` if the profile has no compute that this version can use.
+    A failure in one task or run is added to the report, and the pass goes on. Before
+    each step, and before the operation on each task or run, the pass calls
+    `should_stop`; if it gives True, the pass starts no more operations. Raises `NotConfigured` if the profile has no compute that this version can
+    use.
     """
     profile = services.profile
     # Raises NotConfigured if the profile has no compute section.
@@ -148,13 +152,19 @@ def reconcile_once(
         ),
         release_versions=release_versions,
         report=ReconcileReport(),
+        should_stop=should_stop,
     )
-    _recover_submissions(one_pass)
-    _update_tasks(one_pass)
-    _store_outcomes(one_pass)
-    _release_tasks(one_pass)
-    _prepare_runs(one_pass)
-    _launch_tasks(one_pass)
+    for step in (
+        _recover_submissions,
+        _update_tasks,
+        _store_outcomes,
+        _release_tasks,
+        _prepare_runs,
+        _launch_tasks,
+    ):
+        if should_stop():
+            break
+        step(one_pass)
     return one_pass.report
 
 
@@ -166,7 +176,7 @@ def _recover_submissions(one_pass: _Pass) -> None:
             task_ids = get_tasks_in_state(
                 database, "submitting", actor=one_pass.actor, setup=setup
             )
-        for task_id in task_ids:
+        for task_id in _until_stopped(one_pass, task_ids):
             with _add_failures(one_pass, "recovery", task_id=task_id):
                 outcome = recover_submission(
                     database, task_id, setup=setup, compute=one_pass.compute,
@@ -184,7 +194,7 @@ def _update_tasks(one_pass: _Pass) -> None:
             task_ids = get_tasks_in_state(
                 database, state, actor=one_pass.actor, setup=one_pass.setup
             )
-        for task_id in task_ids:
+        for task_id in _until_stopped(one_pass, task_ids):
             with _add_failures(one_pass, "update", task_id=task_id):
                 update_task_from_compute(
                     database, task_id, setup=one_pass.setup, compute=one_pass.compute
@@ -199,7 +209,7 @@ def _store_outcomes(one_pass: _Pass) -> None:
             task_ids = get_tasks_in_state(
                 database, "finalizing", actor=one_pass.actor, setup=setup
             )
-        for task_id in task_ids:
+        for task_id in _until_stopped(one_pass, task_ids):
             with _add_failures(one_pass, "outcome", task_id=task_id):
                 outcome = store_task_outcome(
                     database, task_id, setup=setup, storage=storage,
@@ -214,7 +224,7 @@ def _release_tasks(one_pass: _Pass) -> None:
     task_ids: list[UUID] = []
     with _add_failures(one_pass, "release"):
         task_ids = get_tasks_to_release(database, actor=one_pass.actor, setup=one_pass.setup)
-    for task_id in task_ids:
+    for task_id in _until_stopped(one_pass, task_ids):
         with _add_failures(one_pass, "release", task_id=task_id):
             if release_task(
                 database, task_id, setup=one_pass.setup, compute=one_pass.compute
@@ -228,7 +238,7 @@ def _prepare_runs(one_pass: _Pass) -> None:
     run_ids: list[UUID] = []
     with _add_failures(one_pass, "preparation"):
         run_ids = get_runs_to_prepare(database)[:PREPARATION_LIMIT]
-    for run_id in run_ids:
+    for run_id in _until_stopped(one_pass, run_ids):
         with _add_failures(one_pass, "preparation", run_id=run_id):
             # A run that gives `try_again` waits for the next pass.
             prepared = prepare_run(
@@ -251,7 +261,8 @@ def _launch_tasks(one_pass: _Pass) -> None:
         report.tasks_queued_elsewhere = reservation.tasks_queued_elsewhere
         for problem in reservation.problems:
             _add_failure(one_pass, "launch", problem.error, task_id=problem.task_id)
-        for task_id in reservation.task_ids:
+        # A reserved task that this pass does not submit waits for a later recovery step.
+        for task_id in _until_stopped(one_pass, reservation.task_ids):
             with _add_failures(one_pass, "launch", task_id=task_id):
                 if _submit_with_its_storage(one_pass, task_id) == "submitted":
                     report.launched += 1
@@ -259,6 +270,14 @@ def _launch_tasks(one_pass: _Pass) -> None:
         report.tasks_active_elsewhere = len(
             get_active_tasks_elsewhere(database, actor=one_pass.actor, setup=one_pass.setup)
         )
+
+
+def _until_stopped(one_pass: _Pass, ids: Iterable[UUID]) -> Iterator[UUID]:
+    """The IDs in turn, until the pass is asked to stop."""
+    for one_id in ids:
+        if one_pass.should_stop():
+            return
+        yield one_id
 
 
 def _submit_with_its_storage(one_pass: _Pass, task_id: UUID) -> SubmissionOutcome:

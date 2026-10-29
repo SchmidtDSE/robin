@@ -4,18 +4,20 @@ Each handler takes a `Context` and the parsed arguments, and returns an `Output`
 """
 
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import Any
 
 from robin_cli.catalog import get_manifest_from_catalog, parse_selection
-from robin_run_manager import migrations, models, presets, runs, submit
+from robin_run_manager import migrations, models, presets, reconcile, runs, submit
 from robin_run_manager.compose import Services
 from robin_run_manager.configuration import read_configuration
+from robin_run_manager.errors import OperationError
 from robin_run_manager.pages import Page
 from robin_run_manager.profile import get_execution_settings
+from robin_run_manager.reconcile import ReconcileReport, StepFailure
 from robin_run_manager.recording_inputs import (
     RecordingManifest,
     read_recordings_file,
@@ -36,6 +38,8 @@ class Output:
     Without --json, a list command sets `columns` and `rows`, a show command sets
     `fields`, the `(name, value)` pairs to print, and other commands set `text`.
     `notice` is an extra message for people. It goes to stderr, and only without --json.
+    `errors` are failures that the command reported in its result and went on past.
+    The most serious of them gives the exit code.
     """
 
     data: Any
@@ -44,6 +48,7 @@ class Output:
     columns: tuple[str, ...] = ()
     rows: tuple[tuple[str, ...], ...] = ()
     fields: tuple[tuple[str, str], ...] = ()
+    errors: tuple[OperationError, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -229,6 +234,45 @@ def list_run_tasks(context: Context, arguments) -> Output:
             "-" if item["failure"] is None else item["failure"]["reason"],
         ),
     )
+
+
+def reconcile_once(
+    context: Context,
+    arguments,
+    *,
+    should_stop: Callable[[], bool] = lambda: False,
+    failures: Sequence[StepFailure] = (),
+) -> Output:
+    """One pass. `failures` happened before the pass, and go first in its report."""
+    report = reconcile.reconcile_once(
+        context.services, actor=context.actor, should_stop=should_stop
+    )
+    report.failures[:0] = failures
+    return get_pass_output(report)
+
+
+def get_pass_output(report: ReconcileReport) -> Output:
+    body = report.body()
+    return Output(
+        data=body,
+        text="\n".join([_get_report_line(body), *map(_get_failure_line, body["failures"])]),
+        errors=tuple(failure.error for failure in report.failures),
+    )
+
+
+def _get_report_line(body: dict) -> str:
+    """The counts of a pass, such as `prepared 1, launched 2, ...`. A count of tasks
+    that another setup handles is shown only if it is not 0."""
+    names = ["prepared", "launched", "outcomes_recorded", "released"]
+    names += [name for name in ("tasks_queued_elsewhere", "tasks_active_elsewhere") if body[name]]
+    counts = [f"{name.replace('_', ' ')} {body[name]}" for name in names]
+    return ", ".join([*counts, f"failures {len(body['failures'])}"])
+
+
+def _get_failure_line(failure: dict) -> str:
+    where = [failure["step"]]
+    where += [f"{name} {failure[f'{name}_id']}" for name in ("run", "task") if failure[f"{name}_id"]]
+    return f"  {', '.join(where)}: {failure['message']} ({failure['reason']})"
 
 
 def _read_recordings(context: Context, arguments) -> RecordingManifest:

@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from robin_cli.main import _run
+from robin_cli.main import _get_context
 from robin_run_manager import rds
 from robin_run_manager.compose import Services
 from robin_run_manager.errors import Refused
@@ -64,30 +64,23 @@ def test_an_unknown_database_exits_1(robin, environ, tmp_path, database_settings
 def test_a_command_that_needs_the_schema_is_refused_before_migrate(
     packaged_migration, database, tmp_path
 ):
-    called = []
-    arguments = argparse.Namespace(
-        needs_schema=True, run=lambda context, arguments: called.append(context)
-    )
+    arguments = argparse.Namespace(needs_schema=True)
 
     with pytest.raises(Refused) as raised:
-        _run(arguments, Services(profile=None, database=database), tmp_path, "test", {})
+        _get_context(arguments, Services(profile=None, database=database), tmp_path, "test", {})
 
     assert raised.value.reason == "schema_not_current"
     assert "robin db migrate" in raised.value.message
-    assert called == []
 
 
 def test_a_command_gets_the_actor_and_the_profile(database, database_settings, tmp_path):
-    called = []
-    arguments = argparse.Namespace(
-        needs_schema=False, run=lambda context, arguments: called.append(context)
+    arguments = argparse.Namespace(needs_schema=False)
+
+    c = _get_context(arguments, Services(profile=None, database=database), tmp_path, "test", {})
+
+    assert (c.actor, c.profile, c.environment, c.environ) == (
+        database_settings.user, tmp_path, "test", {}
     )
-
-    _run(arguments, Services(profile=None, database=database), tmp_path, "test", {})
-
-    assert [(c.actor, c.profile, c.environment, c.environ) for c in called] == [
-        (database_settings.user, tmp_path, "test", {})
-    ]
 
 
 def rds_environ(environ, tmp_path, database_settings):

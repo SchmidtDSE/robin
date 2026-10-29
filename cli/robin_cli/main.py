@@ -10,8 +10,12 @@ import argparse
 import contextlib
 import json
 import logging
+import math
 import os
+import signal
 import sys
+import threading
+import time
 import traceback
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -21,18 +25,22 @@ from pathlib import Path
 from robin_contracts.local_files import has_uri_scheme
 from robin_run_manager import models
 from robin_run_manager.compose import Services, compose
-from robin_run_manager.database import current_login
+from robin_run_manager.database import NoticeListener, check_login, current_login, listen
 from robin_run_manager.errors import (
     CatalogFailed,
+    ComputeUnavailable,
+    InternalError,
     NotConfigured,
     OperationError,
     OutcomeUncertain,
     SourceUnavailable,
+    StorageUnavailable,
     Unavailable,
 )
 from robin_run_manager.migrations import require_current_schema
 from robin_run_manager.pages import DEFAULT_LIMIT, MAX_LIMIT
 from robin_run_manager.profile import load_profile
+from robin_run_manager.reconcile import ReconcileReport, StepFailure
 from robin_run_manager.runs import RECORDING_STATES, SKIP_REASONS
 
 from robin_cli import commands
@@ -48,6 +56,19 @@ EXIT_LOCAL_PROBLEM = 2
 EXIT_OUTCOME_UNCERTAIN = 3
 EXIT_UNAVAILABLE = 4
 EXIT_INTERNAL_ERROR = 5
+
+# When a command reports more than one failure, the first code in this order wins.
+EXIT_CODES_MOST_SERIOUS_FIRST = (
+    EXIT_OUTCOME_UNCERTAIN,
+    EXIT_INTERNAL_ERROR,
+    EXIT_UNAVAILABLE,
+    EXIT_LOCAL_PROBLEM,
+    EXIT_REFUSED,
+)
+
+DEFAULT_INTERVAL_SECONDS = 30
+# The longest time the loop waits before it sees a stop signal.
+_STOP_CHECK_SECONDS = 0.5
 
 # The pool logs each failed background connection. With no handler, Python prints these
 # records on stderr, which would break the rule of one JSON body on stderr. A failure
@@ -130,7 +151,10 @@ def main(argv: Sequence[str] | None = None, *, environ: Mapping[str, str] | None
             print(add_color(line, DIM, enabled=error_color), file=sys.stderr)
         services = compose(profile)
         with contextlib.closing(services.database):
-            output = _run(arguments, services, directory, environment, environ)
+            context = _get_context(arguments, services, directory, environment, environ)
+            if getattr(arguments, "loop", False):
+                return _reconcile_in_loop(context, arguments, json_mode=json_mode)
+            output = arguments.run(context, arguments)
     except _LocalProblem as problem:
         _print_local_problem(problem, json_mode=json_mode, color=error_color)
         return EXIT_LOCAL_PROBLEM
@@ -141,20 +165,20 @@ def main(argv: Sequence[str] | None = None, *, environ: Mapping[str, str] | None
     except Exception:
         return _report_defect(json_mode=json_mode, color=error_color)
     _print(output, json_mode=json_mode, table=table, color=color, notice_color=error_color)
-    return EXIT_SUCCESS
+    return _get_most_serious_exit_code(output.errors)
 
 
-def _run(
+def _get_context(
     arguments: argparse.Namespace,
     services: Services,
     directory: Path,
     environment: str,
     environ: Mapping[str, str],
-) -> Output:
+) -> Context:
     actor = current_login(services.database)
     if arguments.needs_schema:
         require_current_schema(services.database)
-    return arguments.run(Context(services, actor, directory, environment, environ), arguments)
+    return Context(services, actor, directory, environment, environ)
 
 
 def _parse(parser: argparse.ArgumentParser, argv: list[str]) -> argparse.Namespace:
@@ -211,17 +235,18 @@ The usual order of work:
   robin models register owl/v4 --file weights=.model_assets/owl/v4/weights.h5
   robin presets create dawn-owl --configuration owl.yaml
   robin runs submit --uris uris.txt --namespace survey --preset dawn-owl
+  robin reconcile --loop
   robin runs show RUN
 
-This version stores submitted runs but does not prepare or run them yet. A submitted
-run stays in "preparing".
+robin reconcile --loop prepares each submitted run, starts its tasks with the
+profile's compute, and records their results. Stop it with Ctrl-C.
 
 Human output has color only on a terminal. Set NO_COLOR, or TERM=dumb, to turn
 color off.
 
 Use --json in scripts. Exit codes: 0 success, 1 refused, 2 command or profile
-problem, 3 outcome uncertain, 4 the database or a catalog source is unavailable,
-5 internal error or a catalog adapter failed.
+problem, 3 outcome uncertain, 4 the database, a catalog source, the compute, or
+the task storage is unavailable, 5 internal error or a catalog adapter failed.
 
 Give robin COMMAND ACTION --help for the details of each command.
 """
@@ -278,6 +303,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_model_commands(nouns)
     _add_preset_commands(nouns)
     _add_run_commands(nouns)
+    _add_reconcile_command(nouns)
     return parser
 
 
@@ -512,8 +538,8 @@ RUN_HELP = "the run's ID, from robin runs submit or robin runs list"
 
 RUN_SUBMIT_EPILOG = f"""\
 Robin stores the run, its configuration, and its recordings, with the status
-preparing. This version does not prepare or run it yet. Give a preset, or a
-configuration file in the format that robin presets create --help describes.
+preparing. robin reconcile prepares and runs it. Give a preset, or a configuration
+file in the format that robin presets create --help describes.
 
 The profile must have a compute section and a storage section. The run keeps
 both, so a later change to the profile does not change the run. Without a compute
@@ -613,6 +639,175 @@ def _add_run_commands(nouns) -> None:
 
 
 # ---------------------------------------------------------------------------
+# robin reconcile
+# ---------------------------------------------------------------------------
+
+
+RECONCILE_EPILOG = f"""\
+One pass does these steps in this order. A failure in one task or run is reported,
+and the pass goes on.
+
+  1. ask the compute about each task whose submit may not have been made, and
+     submit it again only if it has no result and no execution
+  2. ask the compute about each submitted or running task
+  3. record the result of each task whose execution ended
+  4. release each ended task in the compute
+  5. prepare at most 10 submitted runs, of any user, oldest first
+  6. start queued tasks, oldest first, while the compute has free slots
+     (compute.max_in_flight in the profile)
+
+Steps 1 to 4 and 6 act only on your runs, and only on runs that were submitted
+with the same compute and storage settings as the profile. The pass counts your
+other tasks as tasks_queued_elsewhere and tasks_active_elsewhere. They are not
+failures.
+
+The profile must have a compute section with a kind that this version can run:
+local. Otherwise the command stops with not_configured (exit code 2).
+
+The report gives the counts prepared, launched, outcomes_recorded, released,
+stops_requested, tasks_queued_elsewhere, and tasks_active_elsewhere, and one entry
+in failures for each failure: its step, run_id, task_id, reason, message, and
+details. The exit code is 0 if nothing failed. Otherwise it is the most serious
+failure's code, in the order 3 (outcome uncertain), 5 (internal error), 4 (the
+database, the compute, or the task storage is unavailable), and 1. An internal
+error writes its stack and a request ID on stderr, without the error's text.
+
+With --loop, Robin does a pass, then waits until a run is submitted or --interval
+seconds have passed, and does the next pass. With --json it prints each report on
+one line; without --json it prints a short line on stderr for each pass. Before each
+pass it logs in to the database again. If the database cannot be reached, the
+report of the next pass has the failure, with the step login or listen, and the loop
+tries again later. A pass that cannot log in or listen does no steps. If the database refuses the login, it stops with exit
+code 1; if your AWS credentials ended, it stops with exit code 2: sign in again.
+SIGINT (Ctrl-C) or SIGTERM stops it after the current operation on a task or run,
+with exit code 0.
+
+Examples:
+
+  robin reconcile
+  robin --json reconcile --loop --interval 60
+"""
+
+
+def _add_reconcile_command(nouns) -> None:
+    command = _add_command(
+        nouns, "reconcile", commands.reconcile_once,
+        "prepare runs, start tasks, and record their results", check=_check_reconcile,
+        epilog=RECONCILE_EPILOG,
+    )
+    command.add_argument(
+        "--loop", action="store_true", help="do passes until SIGINT or SIGTERM"
+    )
+    command.add_argument(
+        "--interval", metavar="SECONDS", type=_parse_interval,
+        help=f"with --loop: the longest wait between passes (default {DEFAULT_INTERVAL_SECONDS})",
+    )
+
+
+def _parse_interval(text: str) -> float:
+    try:
+        seconds = float(text)
+    except ValueError:
+        seconds = math.nan
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a number of seconds greater than 0")
+    return seconds
+
+
+def _reconcile_in_loop(
+    context: Context, arguments: argparse.Namespace, *, json_mode: bool
+) -> int:
+    """Do passes until SIGINT or SIGTERM, and give exit code 0.
+
+    Before each pass, a new login checks that the database still accepts the profile's
+    login. An `Unavailable` from the login check or the listener is a failure in the
+    report of that pass, which then does no steps, and the loop goes on. Any other
+    error stops the loop, and the caller reports it.
+    """
+    database = context.services.database
+    interval = arguments.interval or DEFAULT_INTERVAL_SECONDS
+    stopping = threading.Event()
+    listener: NoticeListener | None = None
+    # The failures of the last wait, which go in the report of the next pass.
+    failures: list[StepFailure] = []
+    with _stop_on_signals(stopping):
+        try:
+            while not stopping.is_set():
+                step = "login"
+                try:
+                    check_login(database)
+                    step = "listen"
+                    # Listen before the pass, so that a submit during the pass is seen.
+                    listener = listener or listen(database)
+                except Unavailable as error:
+                    failures.append(StepFailure(step, None, None, error))
+                    output = commands.get_pass_output(ReconcileReport(failures=failures))
+                else:
+                    output = commands.reconcile_once(
+                        context, arguments, should_stop=stopping.is_set, failures=failures
+                    )
+                _print_pass(output, json_mode=json_mode)
+                failures = []
+                listener = _wait_for_next_pass(listener, interval, stopping, failures)
+        finally:
+            if listener is not None:
+                listener.close()
+    return EXIT_SUCCESS
+
+
+@contextlib.contextmanager
+def _stop_on_signals(stopping: threading.Event):
+    """Set `stopping` on SIGINT or SIGTERM in the block, in place of stopping Robin."""
+    numbers = (signal.SIGINT, signal.SIGTERM)
+    previous = {number: signal.signal(number, lambda *_: stopping.set()) for number in numbers}
+    try:
+        yield
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+
+
+def _wait_for_next_pass(
+    listener: NoticeListener | None,
+    interval: float,
+    stopping: threading.Event,
+    failures: list[StepFailure],
+) -> NoticeListener | None:
+    """Wait for a notice, `interval` seconds, or a stop signal, whichever comes first.
+
+    Gives the listener, or None if it failed or there was none. A failed listener is
+    added to `failures`, and the next pass opens a new one.
+    """
+    deadline = time.monotonic() + interval
+    while not stopping.is_set():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        # Wait in short parts, because a signal does not end a wait.
+        part = min(remaining, _STOP_CHECK_SECONDS)
+        if listener is None:
+            time.sleep(part)
+            continue
+        try:
+            if listener.wait(part):
+                break
+        except Unavailable as error:
+            failures.append(StepFailure("listen", None, None, error))
+            listener.close()
+            listener = None
+    return listener
+
+
+def _print_pass(output: Output, *, json_mode: bool) -> None:
+    """Print the report of one pass of the loop: a JSON line on stdout with --json, else
+    its lines on stderr."""
+    if json_mode:
+        print(json.dumps(output.data), flush=True)
+    else:
+        print(f"robin: {time.strftime('%H:%M:%S')} {output.text}", file=sys.stderr, flush=True)
+
+
+# ---------------------------------------------------------------------------
 # Add groups, commands, and their shared options.
 # ---------------------------------------------------------------------------
 
@@ -706,6 +901,12 @@ def _check_submit(arguments: argparse.Namespace) -> str | None:
     return None
 
 
+def _check_reconcile(arguments: argparse.Namespace) -> str | None:
+    if arguments.interval is not None and not arguments.loop:
+        return "--interval is used only with --loop."
+    return None
+
+
 def _check_register(arguments: argparse.Namespace) -> str | None:
     """Check the register options that argparse cannot: one model source, and each role once."""
     if arguments.model is None and arguments.card is None:
@@ -791,15 +992,24 @@ def _get_field_lines(fields: tuple[tuple[str, str], ...], *, color: bool) -> lis
 
 def _report(error: OperationError, *, json_mode: bool, color: bool) -> int:
     _print_error(error.body(), json_mode=json_mode, color=color)
+    return _get_exit_code(error)
+
+
+def _get_exit_code(error: OperationError) -> int:
     if isinstance(error, NotConfigured):
         return EXIT_LOCAL_PROBLEM
     if isinstance(error, OutcomeUncertain):
         return EXIT_OUTCOME_UNCERTAIN
-    if isinstance(error, (Unavailable, SourceUnavailable)):
+    if isinstance(error, (Unavailable, SourceUnavailable, ComputeUnavailable, StorageUnavailable)):
         return EXIT_UNAVAILABLE
-    if isinstance(error, CatalogFailed):
+    if isinstance(error, (CatalogFailed, InternalError)):
         return EXIT_INTERNAL_ERROR
     return EXIT_REFUSED
+
+
+def _get_most_serious_exit_code(errors: Sequence[OperationError]) -> int:
+    codes = {_get_exit_code(error) for error in errors}
+    return next((code for code in EXIT_CODES_MOST_SERIOUS_FIRST if code in codes), EXIT_SUCCESS)
 
 
 def _report_defect(*, json_mode: bool, color: bool) -> int:

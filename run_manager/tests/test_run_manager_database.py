@@ -11,6 +11,7 @@ from pydantic import SecretStr
 from robin_run_manager.compose import compose
 from robin_run_manager.database import (
     Database,
+    check_login,
     current_login,
     lock_task,
     open_database,
@@ -19,6 +20,8 @@ from robin_run_manager.database import (
 )
 from robin_run_manager.errors import OperationError, OutcomeUncertain, Refused, Unavailable
 from robin_run_manager.profile import Profile
+
+from postgres_fixtures import change_password
 
 
 def make_table(database):
@@ -59,20 +62,16 @@ def test_a_database_that_cannot_be_reached_is_unavailable(unreachable_settings):
 
 
 def test_a_transaction_is_unavailable_when_the_pool_has_no_connection(unreachable_settings):
-    pool = ConnectionPool(
-        kwargs={
-            "host": unreachable_settings.host,
-            "port": unreachable_settings.port,
-            "dbname": unreachable_settings.dbname,
-            "user": unreachable_settings.user,
-            "password": "x",
-            "connect_timeout": 1,
-        },
-        min_size=1,
-        timeout=1,
-        open=True,
-    )
-    unreachable = Database(pool=pool)
+    values = {
+        "host": unreachable_settings.host,
+        "port": unreachable_settings.port,
+        "dbname": unreachable_settings.dbname,
+        "user": unreachable_settings.user,
+        "password": "x",
+        "connect_timeout": 1,
+    }
+    pool = ConnectionPool(kwargs=values, min_size=1, timeout=1, open=True)
+    unreachable = Database(pool=pool, get_connection_values=lambda: values)
     try:
         with pytest.raises(Unavailable):
             with transaction(unreachable):
@@ -254,6 +253,20 @@ def test_a_failed_login_is_sorted_by_the_server_message(
 
 def test_the_current_login_is_the_database_user(database, database_settings):
     assert current_login(database) == database_settings.user
+
+
+def test_check_login_makes_a_new_connection(own_login_settings, postgres_server):
+    database = open_database(own_login_settings)
+    try:
+        database.pool.wait()
+        change_password(postgres_server, own_login_settings.user, disconnect=False)
+
+        assert current_login(database) == own_login_settings.user
+        with pytest.raises(Refused) as refused:
+            check_login(database)
+        assert refused.value.reason == "not_authenticated"
+    finally:
+        database.close()
 
 
 def test_a_task_lock_is_held_only_for_its_block(database, database_settings):

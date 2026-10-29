@@ -67,9 +67,13 @@ other services. `robin whoami` shows the login.
 | `robin runs show RUN` | Show one run, with its status and counts. |
 | `robin runs recordings RUN` | List the recordings of a run. Filter with `--state` and `--skip-reason`. |
 | `robin runs tasks RUN` | List the tasks of a run. |
+| `robin reconcile` | Do one pass: prepare submitted runs, start queued tasks, and record the results of tasks that ended. |
+| `robin reconcile --loop` | Do passes until Ctrl-C or SIGTERM. A new pass starts when a run is submitted, or after `--interval` seconds (default 30). |
 
-A submitted run is `preparing` until Robin claims its recordings and makes its tasks.
-No command does that yet.
+A submitted run is `preparing` until `robin reconcile` claims its recordings and makes
+its tasks. Each pass then starts tasks while the compute has free slots, and records
+each task's result when its execution ends. `robin reconcile --help` lists the steps,
+the report, and the exit codes.
 
 Each list command takes `--limit N`, and `--cursor C` or `--all`. Add `--json` to any
 command for JSON output.
@@ -83,6 +87,9 @@ Besides `database`, a profile has these sections:
 - `compute` says where runs execute: `kind: local`, or `kind: kubernetes` with
   `namespace`, `s3_secret_name`, and `s3_endpoint`. `runs submit` needs this
   section, and checks that the compute kind can read each recording's location.
+  `robin reconcile` needs `kind: local`; this version cannot run tasks on Kubernetes.
+  The section also has launch fields, which a run does not keep: `robin reconcile`
+  reads them each time that it starts a task.
 - `storage` says where Robin writes a run's files, with `kind` and `root`: for
   example `{kind: local, root: /data/robin}`, or `{kind: s3, root: s3://lab/robin/}`.
   A profile with `compute` needs it, and `kubernetes` compute needs `s3` storage.
@@ -115,6 +122,66 @@ catalog:                  # the rows of a CSV file
 ```
 
 `robin runs submit --help` gives the details and the errors.
+
+The launch fields of `compute`:
+
+```yaml
+compute:
+  kind: local
+  max_in_flight: 4            # the most tasks that run at the same time (default 10)
+  request:                    # what each task asks of the compute service
+    requests: {cpu: "2", memory: 8Gi}
+    limits: {memory: 8Gi}
+    active_deadline_seconds: 21600
+  resources: {batch_size: 32} # given to the model's code in each task's work file
+  models:
+    perch/v8:                 # other values for one model; each field replaces the default as a whole
+      request: {requests: {cpu: "4", memory: 20Gi}}
+      resources: {batch_size: 16}
+```
+
+`max_in_flight` counts the tasks of every user whose runs were submitted with the
+same compute settings. Local compute does not enforce `request`: a local worker can
+use more CPU or memory than it gives, and it is not stopped at
+`active_deadline_seconds`.
+
+### A full local run
+
+```sh
+pixi run setup
+robin models register owl/v4 --file weights=.model_assets/owl/v4/weights.h5
+robin presets create dawn-owl --configuration owl.yaml
+robin runs submit --uris uris.txt --namespace survey --preset dawn-owl
+robin reconcile --loop        # stop it with Ctrl-C when the run is finished
+robin runs show RUN
+```
+
+Local compute starts `robin-worker` from the `PATH` of `robin reconcile`, as a process
+that keeps running if `robin reconcile` stops. So install `robin-worker` and the
+model's runtime, such as `robin-models[owl]`, where `robin reconcile` runs. Each task's
+files are under the storage root, in `runs/RUN/tasks/TASK/`: `work.json`, the
+worker's `result.json` and `worker.log`, and the output files in `outputs/`.
+
+### The current files
+
+The view `current_files` in the database gives one row for each output file of each
+recording's current result. It is a published interface: its name and columns change
+only with a breaking release.
+
+| Column | What it holds |
+|---|---|
+| `namespace`, `value` | The recording. |
+| `configuration_digest` | The configuration that made the result. |
+| `output_versions` | The model output versions of the result, as a JSON object. |
+| `up_to_date` | True if no result has a higher version of any of these output versions. |
+| `kind` | `scores`, `embeddings`, or `detections`. |
+| `contract_id` | The file's format, such as `robin.scores.parquet/1`. |
+| `uri` | Where the file is. |
+| `checksum` | The file's `sha256:` checksum. |
+| `run_id` | The run that made the result. |
+
+The current result of a recording and a configuration is its result in a run that is
+not withdrawn, with the newest output versions.
 
 ### Run the tests
 
