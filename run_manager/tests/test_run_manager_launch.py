@@ -735,6 +735,47 @@ def test_a_result_found_before_a_repeated_submit_prevents_it(registered, make_pr
     assert count_in_flight(registered) == 1
 
 
+def test_a_kept_task_keeps_the_compute_ref_that_describe_gave_for_later_calls(
+    registered, make_profile, root
+):
+    _, [task_id] = add_queued_tasks(registered, ["a"], root=root)
+    reserve(registered, make_profile())
+    write_result(registered, task_id)
+    compute = ScriptedCompute()
+    compute.script(
+        "describe",
+        ComputeStatus(state="running", compute_ref="ref-9"),
+        ComputeStatus(state="not_found"),
+    )
+
+    assert recover(registered, task_id, compute) == "kept"
+    assert get_task(registered, task_id)["compute_ref"] == "ref-9"
+
+    assert recover(registered, task_id, compute) == "finalizing"
+
+    assert [call.compute_ref for call in compute.get_calls("describe")] == [None, "ref-9"]
+    assert get_task(registered, task_id)["compute_ref"] == "ref-9"
+
+
+def test_a_repeated_submit_gets_the_stored_compute_ref(registered, make_profile, root):
+    _, [task_id] = add_queued_tasks(registered, ["a"], root=root)
+    reserve(registered, make_profile())
+    set_compute_ref(registered, task_id, "ref-9")
+    compute = ScriptedCompute()
+
+    assert recover(registered, task_id, compute) == "resubmitted"
+
+    [call] = compute.get_calls("submit")
+    assert call.compute_ref == "ref-9"
+
+
+def set_compute_ref(database, task_id, compute_ref) -> None:
+    with transaction(database) as connection:
+        connection.execute(
+            "UPDATE tasks SET compute_ref = %s WHERE task_id = %s", (compute_ref, task_id)
+        )
+
+
 @pytest.mark.parametrize("found", ["ended", "not_found"])
 def test_a_result_and_an_ended_execution_make_the_task_finalizing(
     registered, make_profile, root, found

@@ -656,10 +656,12 @@ and the pass goes on.
   6. start queued tasks, oldest first, while the compute has free slots
      (compute.max_in_flight in the profile)
 
-Steps 1 to 4 and 6 act only on your runs, and only on runs that were submitted
-with the same compute and storage settings as the profile. The pass counts your
-other tasks as tasks_queued_elsewhere and tasks_active_elsewhere. They are not
-failures.
+Steps 1 to 4 and 6 act only on your runs whose compute settings, kept from the
+submit, are the same as the profile's, and whose storage kind this version can
+use. The launch fields of compute (max_in_flight, request, resources, and models)
+are not compared. Each run keeps the storage root that it was submitted with,
+also if the profile's root changed. The pass counts your other tasks as
+tasks_queued_elsewhere and tasks_active_elsewhere. They are not failures.
 
 The profile must have a compute section with a kind that this version can run:
 local. Otherwise the command stops with not_configured (exit code 2).

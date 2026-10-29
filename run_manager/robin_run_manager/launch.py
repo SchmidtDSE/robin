@@ -317,9 +317,11 @@ def _settle_submission(
             )
             return submitted_as if outcome == "submitted" else outcome
         state = _get_recovered_state(status, has_result=has_result)
-        if state is None:
-            return "kept"
         with transaction_on(connection):
+            if state is None:
+                # Later calls need the reference, to find what is left of the execution.
+                _record_compute_ref(connection, task_id, status.compute_ref)
+                return "kept"
             changed = _record_recovered(connection, task_id, state, status.compute_ref)
     return state if changed else "skipped"
 
@@ -365,12 +367,28 @@ def _get_recovered_state(
 def _record_recovered(
     connection: psycopg.Connection, task_id: UUID, state: str, compute_ref: str | None
 ) -> bool:
-    """Move a recovered task to `state`. False if it is no longer `submitting`."""
+    """Move a recovered task to `state`. False if it is no longer `submitting`.
+
+    An empty `compute_ref` keeps the stored one.
+    """
     return connection.execute(
-        f"UPDATE tasks SET state = %s, compute_ref = %s, {_RECOVERED_TIMES[state]} "
+        f"UPDATE tasks SET state = %s, compute_ref = coalesce(%s, compute_ref), "
+        f"{_RECOVERED_TIMES[state]} "
         "WHERE task_id = %s AND state = 'submitting'",
         (state, compute_ref, task_id),
     ).rowcount == 1
+
+
+def _record_compute_ref(
+    connection: psycopg.Connection, task_id: UUID, compute_ref: str | None
+) -> None:
+    """Store the `compute_ref` of a task that stays `submitting`. An empty one changes
+    nothing."""
+    if compute_ref is not None:
+        connection.execute(
+            "UPDATE tasks SET compute_ref = %s WHERE task_id = %s AND state = 'submitting'",
+            (compute_ref, task_id),
+        )
 
 
 def get_compute_status(compute: ComputeAdapter, compute_task: ComputeTask) -> ComputeStatus:
@@ -491,7 +509,7 @@ def _get_submission(
     Raises `WorkFileConflict` if the rebuilt work file is not the one reserved.
     """
     row = connection.execute(
-        "SELECT t.work_file_digest, t.compute_request, r.execution_settings "
+        "SELECT t.work_file_digest, t.compute_request, t.compute_ref, r.execution_settings "
         "FROM tasks t JOIN runs r USING (run_id) "
         f"WHERE t.task_id = %(task_id)s AND t.state = 'submitting' AND {SAME_SETUP}",
         {**setup, "task_id": task_id},
@@ -504,6 +522,7 @@ def _get_submission(
         work_uri=work_file.work_uri,
         settings=row["execution_settings"]["compute"],
         request=ComputeRequest.model_validate(row["compute_request"]),
+        compute_ref=row["compute_ref"],
     )
     return Submission(work_file=work_file, compute_task=compute_task)
 

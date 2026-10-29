@@ -51,22 +51,17 @@ class LocalCompute:
         work_uri = work_path.as_uri()
         with _lock_task_folder(work_path.parent):
             self._collect_started()
-            worker = _find_worker(_read_process_table(), work_uri)
-            if worker is not None:
-                return str(worker.pid)
+            compute_ref = _find_execution(_read_process_table(), task, work_uri)
+            if compute_ref is not None:
+                return compute_ref
             return str(self._start(work_path.parent, work_uri))
 
     def describe(self, task: ComputeTask) -> ComputeStatus:
         work_uri = _check_work_path(task).as_uri()
         self._collect_started()
-        processes = _read_process_table()
-        worker = _find_worker(processes, work_uri)
-        if worker is not None:
-            return ComputeStatus(state="running", compute_ref=str(worker.pid))
-        if task.compute_ref is not None:
-            group = int(task.compute_ref)
-            if any(process.group == group for process in processes):
-                return ComputeStatus(state="running", compute_ref=task.compute_ref)
+        compute_ref = _find_execution(_read_process_table(), task, work_uri)
+        if compute_ref is not None:
+            return ComputeStatus(state="running", compute_ref=compute_ref)
         return ComputeStatus(state="not_found")
 
     def stop(self, task: ComputeTask) -> None:
@@ -147,6 +142,22 @@ def _read_process_table() -> list[_Process]:
     if not processes:
         raise ValueError("the process table is empty")
     return processes
+
+
+def _find_execution(processes: list[_Process], task: ComputeTask, work_uri: str) -> str | None:
+    """The `compute_ref` of the task's execution, or None if none runs.
+
+    The execution runs while its worker runs, or while a process stays in the group of
+    the task's `compute_ref`.
+    """
+    worker = _find_worker(processes, work_uri)
+    if worker is not None:
+        return str(worker.pid)
+    if task.compute_ref is not None:
+        group = int(task.compute_ref)
+        if any(process.group == group for process in processes):
+            return task.compute_ref
+    return None
 
 
 def _find_worker(processes: list[_Process], work_uri: str) -> _Process | None:

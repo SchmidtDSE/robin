@@ -272,6 +272,23 @@ def test_a_worker_child_that_outlives_the_worker_keeps_the_task_running(script, 
     _wait_for(lambda: compute.describe(task).state == "not_found")
 
 
+def test_a_submit_while_a_worker_child_runs_starts_nothing(script, make_task):
+    task = make_task()
+    compute = _compute(script, "child")
+    task = _with_ref(task, compute.submit(task))
+    _wait_for(lambda: _markers(task, "child"))
+    worker = int(task.compute_ref)
+
+    def has_worker_ended():
+        compute.describe(task)  # collects the worker after it exits
+        return not _is_alive(worker)
+
+    _wait_for(has_worker_ended)
+
+    assert compute.submit(task) == task.compute_ref
+    assert len(_markers(task)) == 1
+
+
 @pytest.mark.parametrize(
     "ps_script", ["exit 1", "echo 'not a process table'"], ids=["fails", "unparsable"]
 )
