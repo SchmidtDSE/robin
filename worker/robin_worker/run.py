@@ -1,8 +1,14 @@
-"""One task: read the work file, check it, run it, and write the result beside it."""
+"""One task: read the work file, check it, run it, and write the result beside it.
+
+Each execution writes its outputs in its own folder under the task's `output_root`,
+named by an ID it makes at start. Only the first execution writes the result, so a
+later execution of the same task cannot change the files that the result names.
+"""
 
 import json
 import shutil
 import tempfile
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -65,8 +71,10 @@ def run_task(work_uri: str, *, versions: Mapping[str, int], release: str, log: L
     gives. A stop signal passes through, and no result is written.
     """
     reading = _Reading(started_at=_now())
+    execution_id = str(uuid.uuid4())
+    log(f"execution {execution_id}")
     try:
-        outcome = _run(work_uri, reading, versions=versions, log=log)
+        outcome = _run(work_uri, reading, execution_id, versions=versions, log=log)
     except _Refused as refusal:
         outcome = TaskRefusal(code=refusal.code, detail=refusal.detail)
     except Exception as exc:
@@ -85,13 +93,18 @@ def run_task(work_uri: str, *, versions: Mapping[str, int], release: str, log: L
 
 
 def _run(
-    work_uri: str, reading: _Reading, *, versions: Mapping[str, int], log: Log
+    work_uri: str,
+    reading: _Reading,
+    execution_id: str,
+    *,
+    versions: Mapping[str, int],
+    log: Log,
 ) -> InferenceResult:
     data = _read(work_uri)
     reading.digest = checksum_bytes(data)
     task = _parse(data)
     reading.task_id = task.task_id
-    writer = _checked_writer(task.output_root)
+    writer = _get_artifact_writer(task.output_root, execution_id)
     _check_output_version(task, versions)
     scratch = Path(tempfile.mkdtemp(prefix="robin-worker-"))
     try:
@@ -130,11 +143,16 @@ def _parse(data: bytes) -> InferenceTask:
         raise _Refused("work_file_invalid", f"the work file is not a task: {exc}") from exc
 
 
-def _checked_writer(output_root: str) -> ArtifactWriter:
+def _get_artifact_writer(output_root: str, execution_id: str) -> ArtifactWriter:
     problem = output_root_problem(output_root, split_location=split_location)
     if problem is not None:
         raise _Refused("work_file_invalid", problem)
-    return storage.artifact_writer(output_root)
+    return storage.artifact_writer(_get_execution_root(output_root, execution_id))
+
+
+def _get_execution_root(output_root: str, execution_id: str) -> str:
+    # The root may end in `/`. An empty segment would make the result invalid.
+    return output_root.removesuffix("/") + "/" + execution_id
 
 
 def _check_output_version(task: InferenceTask, versions: Mapping[str, int]) -> None:

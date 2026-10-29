@@ -2,12 +2,14 @@
 
 import json
 import shutil
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import ondio
 import pytest
 from robin_adapters.storage.location import split_location
 from robin_contracts.canonical import checksum_file
+from robin_contracts.local_files import get_local_path
 from robin_contracts.results import InferenceCompleted
 from robin_contracts.tasks import (
     InferenceTaskResult,
@@ -290,6 +292,44 @@ def test_an_existing_result_is_not_changed(builder):
     assert code == 3
     assert builder.result_path.read_bytes() == b"earlier"
     assert any("already exists" in line for line in lines)
+
+
+def test_each_execution_writes_its_outputs_in_its_own_folder(builder):
+    builder.write()
+    code, result = run_and_read(builder)
+    committed = builder.result_path.read_bytes()
+
+    second = run.run_task(
+        str(builder.work_path), versions=TEST_VERSIONS, release="r", log=[].append
+    )
+
+    assert (code, second) == (0, 3)
+    assert builder.result_path.read_bytes() == committed
+    folders = sorted(builder.outputs.iterdir())
+    assert len(folders) == 2
+    assert all(one.is_dir() and uuid.UUID(one.name) for one in folders)
+    artifacts = result.result.artifacts
+    paths = [get_local_path(one.uri) for one in artifacts]
+    assert len({path.relative_to(builder.outputs).parts[0] for path in paths}) == 1
+    for artifact, path in zip(artifacts, paths, strict=True):
+        assert checksum_file(path) == artifact.checksum
+
+
+@pytest.mark.parametrize("form", ["path_with_slash", "file_uri_with_slash"])
+def test_an_output_root_with_a_trailing_slash_gives_artifacts_that_pass_the_check(
+    builder, form
+):
+    root = {
+        "path_with_slash": f"{builder.outputs}/",
+        "file_uri_with_slash": f"{builder.outputs.as_uri()}/",
+    }[form]
+    _, task = builder.write(output_root=root)
+
+    code, result = run_and_read(builder)
+
+    assert code == 0
+    assert result.result.outcome == "completed"
+    assert problem_of(result, task, builder) is None
 
 
 def test_a_failed_result_write_says_the_result_is_unknown(builder, monkeypatch):

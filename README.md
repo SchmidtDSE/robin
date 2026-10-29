@@ -160,7 +160,9 @@ Local compute starts `robin-worker` from the `PATH` of `robin reconcile`, as a p
 that keeps running if `robin reconcile` stops. So install `robin-worker` and the
 model's runtime, such as `robin-models[owl]`, where `robin reconcile` runs. Each task's
 files are under the storage root, in `runs/RUN/tasks/TASK/`: `work.json`, the
-worker's `result.json` and `worker.log`, and the output files in `outputs/`.
+worker's `result.json` and `worker.log`, and the output files in
+`outputs/EXECUTION/`. Each execution of the worker writes its own folder, and the
+result names only the files of the execution that wrote it.
 
 ### The current files
 

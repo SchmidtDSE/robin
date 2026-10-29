@@ -3,10 +3,12 @@
 moto's S3 runs in the test process, so these tests call the worker in that process.
 """
 
+import uuid
+
 import boto3
 import pytest
 from robin_adapters.storage.location import split_location
-from robin_contracts.canonical import checksum_file
+from robin_contracts.canonical import checksum_bytes, checksum_file
 from robin_contracts.tasks import InferenceTaskResult, task_result_problem
 
 from robin_worker.cli import main
@@ -131,6 +133,30 @@ def test_an_existing_result_on_s3_is_not_changed(tmp_path, s3):
     assert code == 3
     assert read_object(s3, result_uri) == b"earlier"
     assert any("already exists" in line for line in lines)
+
+
+def test_a_second_execution_on_s3_writes_its_own_folder(tmp_path, s3):
+    base = tmp_path / "task"
+    builder = TaskBuilder(base, location=s3_location(base))
+    work_path, task = builder.write()
+    upload_tree(s3, base)
+    work_uri = s3_location(base)(work_path)
+    result_uri = work_uri.removesuffix("work.json") + "result.json"
+
+    first = main(["run", work_uri], versions=(task.output_version,))
+    committed = read_object(s3, result_uri)
+    second = main(["run", work_uri], versions=(task.output_version,))
+
+    assert (first, second) == (0, 3)
+    assert read_object(s3, result_uri) == committed
+    prefix = key(task.output_root) + "/"
+    objects = s3.list_objects_v2(Bucket="robin-test", Prefix=prefix)["Contents"]
+    folders = {one["Key"].removeprefix(prefix).split("/")[0] for one in objects}
+    assert len(folders) == 2
+    assert all(uuid.UUID(one) for one in folders)
+    result = InferenceTaskResult.model_validate_json(committed)
+    for artifact in result.result.artifacts:
+        assert checksum_bytes(read_object(s3, artifact.uri)) == artifact.checksum
 
 
 def test_an_s3_root_with_a_query_is_refused_as_invalid(tmp_path, s3):
