@@ -504,8 +504,19 @@ selection, bad catalog settings, or a refusal from the source; 2 if the profile 
 no catalog section or the adapter is not installed; 4 if the source is unavailable
 (try again); and 5 if the adapter failed. --json gives the reason.
 
+The profile's compute.models must list the configuration's model, by its model ID,
+or for a head, by head_runtime:RUNTIME. Robin refuses a model that is not listed with
+model_not_in_profile, and stores nothing. The run keeps the settings of the model's
+setup, its request and resources, and the storage section, as they are at submit.
+
+Setup names are shared by every profile that uses the database. If a run of the
+model's setup name still has work and was submitted with another compute kind (or
+namespace) or another storage section, Robin refuses the submit with
+not_configured, and stores nothing. Give the new settings a new setup name, or
+let the earlier runs finish first.
+
 Each audio location, and each file of the configuration's model, must have a form
-that the profile's compute kind can read:
+that the compute kind of the model's setup can read:
 
   local                   an absolute path, a file:/// URI, or an s3:// URI
   kubernetes              an s3:// URI
@@ -654,25 +665,33 @@ and the pass goes on.
   4. release each ended task in the compute
   5. prepare at most 10 submitted runs, of any user, oldest first
   6. start queued tasks, oldest first, while the compute has free slots
-     (compute.max_in_flight in the profile)
+     (max_in_flight of the setup in the profile)
 
-Steps 1 to 4 and 6 act only on your runs whose compute settings, kept from the
-submit, are the same as the profile's, and whose storage kind this version can
-use. The launch fields of compute (max_in_flight, request, resources, and models)
-are not compared. Each run keeps the storage root that it was submitted with,
-also if the profile's root changed. The pass counts your other tasks as
+Steps 1 to 4 run for each setup of the profile, in name order, then step 5 runs
+once, then step 6 runs for each setup. Steps 1 to 4 and 6 act only on your runs
+that were submitted with the setup's name, whose kept compute settings have the
+setup's kind (and namespace, for kubernetes), whose kept storage section is the
+profile's, and whose storage kind this version can use. A run keeps its other
+settings from the submit, such as its request and resources. Only max_in_flight
+is read from the profile at each pass. The pass counts your tasks whose setup name
+the profile does not have, or whose storage kind this version cannot use, as
 tasks_queued_elsewhere and tasks_active_elsewhere. They are not failures.
 
-The profile must have a compute section with a kind that this version can run:
-local. Otherwise the command stops with not_configured (exit code 2).
+A setup whose kind this version cannot run, such as kubernetes, is a failure of
+step setup, and the pass goes on with the other setups. So is a setup whose name
+has runs with work that were submitted with another kind (or namespace) or another
+storage section, of any user: the pass does none of that setup's steps. If the
+profile has no compute section, or no setup of a kind that this version can run
+(local), the command stops with not_configured (exit code 2).
 
 The report gives the counts prepared, launched, outcomes_recorded, released,
 stops_requested, tasks_queued_elsewhere, and tasks_active_elsewhere, and one entry
 in failures for each failure: its step, run_id, task_id, reason, message, and
 details. The exit code is 0 if nothing failed. Otherwise it is the most serious
 failure's code, in the order 3 (outcome uncertain), 5 (internal error), 4 (the
-database, the compute, or the task storage is unavailable), and 1. An internal
-error writes its stack and a request ID on stderr, without the error's text.
+database, the compute, or the task storage is unavailable), 2 (a local problem,
+such as a setup failure), and 1. An internal error writes its stack and a request
+ID on stderr, without the error's text.
 
 With --loop, Robin does a pass, then waits until a run is submitted or --interval
 seconds have passed, and does the next pass. With --json it prints each report on

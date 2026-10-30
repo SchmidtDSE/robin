@@ -56,6 +56,9 @@ def postgres_server():
             "--env", f"POSTGRES_USER={_USER}",
             "--env", f"POSTGRES_PASSWORD={_PASSWORD}",
             "--publish", "127.0.0.1::5432",
+            # The image keeps its data in a volume. A volume would stay after the
+            # container is removed, so the data is kept in memory.
+            "--tmpfs", "/var/lib/postgresql/data",
             POSTGRES_IMAGE,
         ],
         capture_output=True,
@@ -77,7 +80,7 @@ def postgres_server():
         _wait_until_ready(server)
         yield server
     finally:
-        subprocess.run([docker, "rm", "--force", container], capture_output=True)
+        subprocess.run([docker, "rm", "--force", "--volumes", container], capture_output=True)
 
 
 def _published_port(docker: str, container: str) -> int:

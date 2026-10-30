@@ -16,7 +16,7 @@ from robin_run_manager.compose import Services
 from robin_run_manager.configuration import read_configuration
 from robin_run_manager.errors import OperationError
 from robin_run_manager.pages import Page
-from robin_run_manager.profile import get_execution_settings
+from robin_run_manager.profile import get_compute_section, get_resolved_settings
 from robin_run_manager.reconcile import ReconcileReport, StepFailure
 from robin_run_manager.recording_inputs import (
     RecordingManifest,
@@ -150,7 +150,8 @@ def show_preset(context: Context, arguments) -> Output:
 
 
 def submit_run(context: Context, arguments) -> Output:
-    execution_settings = get_execution_settings(context.services.profile)
+    # Refused before the recordings are read, so that a catalog error does not hide it.
+    get_compute_section(context.services.profile)
     recordings = _read_recordings(context, arguments)
     configuration = (
         read_configuration(arguments.configuration)
@@ -163,7 +164,7 @@ def submit_run(context: Context, arguments) -> Output:
         preset=arguments.preset,
         configuration=configuration,
         recordings=recordings,
-        execution_settings=execution_settings,
+        get_resolved_settings=partial(get_resolved_settings, context.services.profile),
         actor=context.actor,
     )
     data = {

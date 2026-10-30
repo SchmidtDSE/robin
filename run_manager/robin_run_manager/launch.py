@@ -42,7 +42,7 @@ from robin_run_manager.errors import (
     WorkFileConflict,
     invoke_adapter,
 )
-from robin_run_manager.profile import Profile, get_execution_settings, get_launch_settings
+from robin_run_manager.profile import Profile, get_setup_target
 from robin_run_manager.status import ACTIVE_TASK_STATES
 from robin_run_manager.task_files import (
     WorkFile,
@@ -98,27 +98,38 @@ class Reservation:
     """The result of `reserve_tasks`.
 
     `task_ids` are the reserved tasks, oldest first. `outdated_tasks` counts the queued
-    tasks that failed because their output versions are not current.
-    `tasks_queued_elsewhere` counts the actor's queued tasks that another compute or
-    storage setup must launch. `problems` are the tasks that could not be reserved,
-    which stay `queued`.
+    tasks that failed because their output versions are not current. `problems` are the
+    tasks that could not be reserved, which stay `queued`.
     """
 
     task_ids: tuple[UUID, ...]
     outdated_tasks: int
-    tasks_queued_elsewhere: int
     problems: tuple[TaskProblem, ...]
 
 
 # The conditions that a run `r` was frozen for this setup. Every step that uses the
 # compute adapter or the task storage selects its tasks with them, with the parameters
-# that `get_setup_parameters` gives. A query that uses them names the runs table `r`.
+# that `get_setup_query_parameters` gives. A query that uses them names the runs table
+# `r`.
 #
-# A slot belongs to one compute setup: the same compute settings, compared as JSON values.
-SAME_COMPUTE = "(r.execution_settings::jsonb -> 'compute') = %(compute)s"
-# The same compute settings, and a storage kind that this pass has a task storage for.
-SAME_SETUP = (
-    f"{SAME_COMPUTE} AND r.execution_settings -> 'storage' ->> 'kind' = ANY(%(storage_kinds)s)"
+# A slot belongs to one setup name. The run's frozen compute must also hold the setup's
+# target fields as the profile gives them, and its storage must be the profile's. Other
+# frozen compute fields, such as a job definition revision, can differ.
+MATCHES_SETUP_TARGET = (
+    "(r.execution_settings ->> 'setup') = %(setup)s "
+    "AND (r.execution_settings::jsonb -> 'compute') @> %(target_compute)s "
+    "AND (r.execution_settings::jsonb -> 'storage') = %(storage)s"
+)
+# The same setup, and a storage kind that this pass has a task storage for.
+MATCHES_SETUP_WITH_SUPPORTED_STORAGE = (
+    f"{MATCHES_SETUP_TARGET} "
+    "AND r.execution_settings -> 'storage' ->> 'kind' = ANY(%(storage_kinds)s)"
+)
+# A run `r` that no setup of the pass handles: the profile has no setup of its name
+# (`setups`), or its storage kind has no task storage (`storage_kinds`).
+_ELSEWHERE = (
+    "NOT ((r.execution_settings ->> 'setup') = ANY(%(setups)s) "
+    "AND r.execution_settings -> 'storage' ->> 'kind' = ANY(%(storage_kinds)s))"
 )
 
 
@@ -128,15 +139,21 @@ _LAUNCHABLE_RUN = (
 )
 
 
-def get_setup_parameters(profile: Profile, storage_kinds: Collection[str]) -> dict[str, Any]:
-    """The parameters of `SAME_COMPUTE` and `SAME_SETUP` for this profile.
+def get_setup_query_parameters(
+    profile: Profile, setup: str, storage_kinds: Collection[str]
+) -> dict[str, Any]:
+    """The parameters of `MATCHES_SETUP_TARGET` and `MATCHES_SETUP_WITH_SUPPORTED_STORAGE`
+    for the profile's setup `setup`.
 
-    `storage_kinds` are the kinds that have a task storage. The profile's compute
-    settings are sent as JSON, as a run stores them, so equal settings compare equal.
-    Raises `NotConfigured` if the profile has no `compute` section.
+    `storage_kinds` are the kinds that have a task storage. The target is sent as JSON,
+    as a run stores it, so equal values compare equal. Raises `NotConfigured` if the
+    profile has no `compute` section, and `KeyError` if it has no setup of that name.
     """
+    target_compute, storage = get_setup_target(profile, setup)
     return {
-        "compute": Jsonb(get_execution_settings(profile)["compute"]),
+        "setup": setup,
+        "target_compute": Jsonb(target_compute),
+        "storage": Jsonb(storage),
         "storage_kinds": list(storage_kinds),
     }
 
@@ -146,33 +163,33 @@ def reserve_tasks(
     *,
     actor: str,
     profile: Profile,
+    setup: str,
     storage_kinds: Collection[str],
     release_versions: Sequence[ModelOutputVersion] = RELEASE_OUTPUT_VERSIONS,
 ) -> Reservation:
-    """Reserve a free slot for each of the actor's oldest queued tasks that this profile
-    can launch, and build the work file of each.
+    """Reserve a free slot for each of the actor's oldest queued tasks of the profile's
+    setup `setup`, and build the work file of each.
 
     First, the actor's queued tasks of this setup whose output versions are not current
     in `release_versions` fail. Every task in `submitting`, `submitted`, or `running`
-    holds a slot of its compute setup, whoever submitted it, and `max_in_flight` caps
-    the slots of this profile's setup. A task that cannot be reserved because of an
-    error stays `queued`, and the next queued task takes the slot. Raises
+    holds a slot of its setup, whoever submitted it, and the setup's `max_in_flight`,
+    read from the profile now, caps its slots. A task that cannot be reserved because of
+    an error stays `queued`, and the next queued task takes the slot. Raises
     `NotConfigured` if the profile has no `compute` section.
     """
     # Raises NotConfigured before the transaction starts.
-    setup = get_setup_parameters(profile, storage_kinds)
+    parameters = get_setup_query_parameters(profile, setup, storage_kinds)
     assert profile.compute is not None
-    max_in_flight = profile.compute.max_in_flight
+    max_in_flight = profile.compute.setups[setup].max_in_flight
     with transaction(database) as connection:
         connection.execute("SELECT pg_advisory_xact_lock(%s)", (LAUNCH_LOCK,))
-        outdated_tasks = _fail_outdated_tasks(connection, actor, setup, release_versions)
+        outdated_tasks = _fail_outdated_tasks(connection, actor, parameters, release_versions)
         in_flight = connection.execute(
             "SELECT count(*) AS n FROM tasks t JOIN runs r USING (run_id) "
-            f"WHERE t.state = ANY(%(states)s) AND {SAME_COMPUTE}",
-            {**setup, "states": list(_IN_FLIGHT_STATES)},
+            f"WHERE t.state = ANY(%(states)s) AND {MATCHES_SETUP_TARGET}",
+            {**parameters, "states": list(_IN_FLIGHT_STATES)},
         ).fetchone()["n"]
-        queued = _get_queued_tasks(connection, actor, setup)
-        here = [row["task_id"] for row in queued if row["same_setup"]]
+        here = _get_queued_tasks(connection, actor, parameters)
         free = max(max_in_flight - in_flight, 0)
         reserved, problems = [], []
         for task_id in here:
@@ -181,7 +198,7 @@ def reserve_tasks(
             try:
                 # A savepoint: a failure undoes this task's changes only.
                 with connection.transaction():
-                    if _reserve_task(connection, task_id, profile):
+                    if _reserve_task(connection, task_id):
                         reserved.append(task_id)
             # Also an error that Robin does not expect, so that a defect in one task
             # does not undo the reservations of the others.
@@ -190,7 +207,6 @@ def reserve_tasks(
     return Reservation(
         task_ids=tuple(reserved),
         outdated_tasks=outdated_tasks,
-        tasks_queued_elsewhere=len(queued) - len(here),
         problems=tuple(problems),
     )
 
@@ -206,7 +222,7 @@ def submit_reserved_task(
 ) -> SubmissionOutcome:
     """Write the work file of a `submitting` task, submit it, and record the submit.
 
-    `setup` comes from `get_setup_parameters`. Gives `skipped` if another pass holds the
+    `setup` comes from `get_setup_query_parameters`. Gives `skipped` if another pass holds the
     task, or if it is not a `submitting` task of this setup, also when it changed during
     the submit. Gives `rejected`, and fails the task, if the compute service refused it.
 
@@ -229,35 +245,54 @@ def get_tasks_in_state(
 ) -> list[UUID]:
     """The actor's tasks in `state` whose runs are of this setup, oldest first.
 
-    `setup` comes from `get_setup_parameters`.
+    `setup` comes from `get_setup_query_parameters`.
     """
     with transaction(database, read_only=True) as connection:
         rows = connection.execute(
             "SELECT t.task_id FROM tasks t JOIN runs r USING (run_id) "
-            f"WHERE t.state = %(state)s AND r.submitted_by = %(actor)s AND {SAME_SETUP} "
+            "WHERE t.state = %(state)s AND r.submitted_by = %(actor)s "
+            f"AND {MATCHES_SETUP_WITH_SUPPORTED_STORAGE} "
             "ORDER BY t.created_at, t.task_id",
             {**setup, "state": state, "actor": actor},
         ).fetchall()
     return [row["task_id"] for row in rows]
 
 
-def get_active_tasks_elsewhere(
-    database: Database, *, actor: str, setup: Mapping[str, Any]
+def get_queued_tasks_elsewhere(
+    database: Database, *, actor: str, setups: Collection[str], storage_kinds: Collection[str]
 ) -> list[UUID]:
-    """The actor's started tasks that another compute or storage setup must handle.
+    """The actor's queued tasks of launchable runs whose setup name is not in `setups`,
+    or whose storage kind is not in `storage_kinds`."""
+    with transaction(database, read_only=True) as connection:
+        rows = connection.execute(
+            "SELECT t.task_id FROM tasks t JOIN runs r USING (run_id) "
+            f"WHERE t.state = 'queued' AND r.submitted_by = %(actor)s AND {_LAUNCHABLE_RUN} "
+            f"AND {_ELSEWHERE} ORDER BY t.created_at, t.task_id",
+            {"setups": list(setups), "storage_kinds": list(storage_kinds), "actor": actor},
+        ).fetchall()
+    return [row["task_id"] for row in rows]
+
+
+def get_active_tasks_elsewhere(
+    database: Database, *, actor: str, setups: Collection[str], storage_kinds: Collection[str]
+) -> list[UUID]:
+    """The actor's started tasks whose setup name is not in `setups`, or whose storage
+    kind is not in `storage_kinds`.
 
     A started task still needs a step: it is `submitting`, `submitted`, `running`, or
-    `finalizing`, or it ended after its reservation and is not released. `setup` comes
-    from `get_setup_parameters`.
+    `finalizing`, or it ended after its reservation and is not released.
     """
     with transaction(database, read_only=True) as connection:
         rows = connection.execute(
             "SELECT t.task_id FROM tasks t JOIN runs r USING (run_id) "
             "WHERE (t.state = ANY(%(states)s) "
             "OR (t.reserved_at IS NOT NULL AND t.released_at IS NULL)) "
-            f"AND r.submitted_by = %(actor)s AND NOT ({SAME_SETUP}) "
+            f"AND r.submitted_by = %(actor)s AND {_ELSEWHERE} "
             "ORDER BY t.created_at, t.task_id",
-            {**setup, "states": list(ACTIVE_TASK_STATES), "actor": actor},
+            {
+                "setups": list(setups), "storage_kinds": list(storage_kinds),
+                "states": list(ACTIVE_TASK_STATES), "actor": actor,
+            },
         ).fetchall()
     return [row["task_id"] for row in rows]
 
@@ -439,7 +474,8 @@ def _fail_outdated_tasks(
     current in `release_versions`. Returns how many tasks failed."""
     runs = connection.execute(
         "SELECT r.run_id, i.output_versions FROM runs r JOIN inference_runs i USING (run_id) "
-        f"WHERE r.submitted_by = %(actor)s AND {_LAUNCHABLE_RUN} AND {SAME_SETUP} AND EXISTS ("
+        f"WHERE r.submitted_by = %(actor)s AND {_LAUNCHABLE_RUN} "
+        f"AND {MATCHES_SETUP_WITH_SUPPORTED_STORAGE} AND EXISTS ("
         "SELECT 1 FROM tasks t WHERE t.run_id = r.run_id AND t.state = 'queued')",
         {**setup, "actor": actor},
     ).fetchall()
@@ -461,35 +497,35 @@ def _fail_outdated_tasks(
 
 def _get_queued_tasks(
     connection: psycopg.Connection, actor: str, setup: dict[str, Any]
-) -> list[dict]:
-    """The actor's queued tasks of runs that can launch, oldest first.
-
-    `same_setup` is true for a task that this setup launches.
-    """
-    return connection.execute(
-        f"SELECT t.task_id, {SAME_SETUP} AS same_setup "
-        "FROM tasks t JOIN runs r USING (run_id) "
+) -> list[UUID]:
+    """The actor's queued tasks of runs of this setup that can launch, oldest first."""
+    rows = connection.execute(
+        "SELECT t.task_id FROM tasks t JOIN runs r USING (run_id) "
         f"WHERE t.state = 'queued' AND r.submitted_by = %(actor)s AND {_LAUNCHABLE_RUN} "
-        "ORDER BY t.created_at, t.task_id",
+        f"AND {MATCHES_SETUP_WITH_SUPPORTED_STORAGE} ORDER BY t.created_at, t.task_id",
         {**setup, "actor": actor},
     ).fetchall()
+    return [row["task_id"] for row in rows]
 
 
-def _reserve_task(connection: psycopg.Connection, task_id: UUID, profile: Profile) -> bool:
-    """Lock the task and its run, check them again, and reserve the task's slot."""
+def _reserve_task(connection: psycopg.Connection, task_id: UUID) -> bool:
+    """Lock the task and its run, check them again, and reserve the task's slot.
+
+    The task takes the request and resources that its run froze at submit.
+    """
     row = connection.execute(
-        f"SELECT t.state, {_LAUNCHABLE_RUN} AS launchable, c.model_id "
-        "FROM tasks t JOIN runs r USING (run_id) JOIN inference_runs i USING (run_id) "
-        "JOIN configurations c ON c.digest = i.configuration_digest "
+        f"SELECT t.state, {_LAUNCHABLE_RUN} AS launchable "
+        "FROM tasks t JOIN runs r USING (run_id) "
         "WHERE t.task_id = %s FOR UPDATE OF t, r",
         (task_id,),
     ).fetchone()
     if row["state"] != "queued" or not row["launchable"]:
         return False
-    settings = get_launch_settings(profile, row["model_id"])
     connection.execute(
-        "UPDATE tasks SET compute_request = %s, work_resources = %s WHERE task_id = %s",
-        (Json(settings.request.model_dump(mode="json")), Json(dict(settings.resources)), task_id),
+        "UPDATE tasks SET compute_request = r.execution_settings -> 'request', "
+        "work_resources = r.execution_settings -> 'resources' "
+        "FROM runs r WHERE r.run_id = tasks.run_id AND tasks.task_id = %s",
+        (task_id,),
     )
     work_file = build_work_file(connection, task_id)
     connection.execute(
@@ -511,7 +547,8 @@ def _get_submission(
     row = connection.execute(
         "SELECT t.work_file_digest, t.compute_request, t.compute_ref, r.execution_settings "
         "FROM tasks t JOIN runs r USING (run_id) "
-        f"WHERE t.task_id = %(task_id)s AND t.state = 'submitting' AND {SAME_SETUP}",
+        "WHERE t.task_id = %(task_id)s AND t.state = 'submitting' "
+        f"AND {MATCHES_SETUP_WITH_SUPPORTED_STORAGE}",
         {**setup, "task_id": task_id},
     ).fetchone()
     if row is None:

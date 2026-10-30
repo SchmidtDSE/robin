@@ -35,7 +35,7 @@ def test_a_supported_location_names_its_store_and_path(uri, expected):
         "s3://",
         "s3://bucket/a?b",
         "s3://bucket/a#b",
-        "gs://bucket/a.parquet",
+        "example://bucket/a.parquet",
         "https://example.org/a.parquet",
         "",
     ],

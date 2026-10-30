@@ -366,12 +366,14 @@ def build_completed(task: InferenceTask, **overrides) -> InferenceCompleted:
 
 
 def split_location(location: str) -> tuple[str, str] | None:
-    """A stand-in for storage: `s3://` keys as written, and `enc://` paths decoded."""
+    """A stand-in for storage: `s3://` keys as written, and `file:///` paths decoded."""
+    if location.startswith("file:///"):
+        return "file://", unquote(location.removeprefix("file:///"))
     scheme, separator, rest = location.partition("://")
     store, _, path = rest.partition("/")
-    if not separator or scheme not in ("s3", "enc") or not store:
+    if not separator or scheme != "s3" or not store:
         return None
-    return f"{scheme}://{store}", unquote(path) if scheme == "enc" else path
+    return f"{scheme}://{store}", path
 
 
 def problem(result_outcome, task: InferenceTask | None = None, **result_fields) -> str | None:
@@ -476,8 +478,8 @@ def test_a_result_that_names_an_unassigned_recording_is_refused():
         pytest.param(OUTPUT_ROOT, id="the_root_itself"),
         pytest.param(f"{OUTPUT_ROOT}/", id="the_root_with_a_slash"),
         pytest.param("s3://other/runs/r1/tasks/t1/outputs/x.parquet", id="other_bucket"),
-        pytest.param("enc://bucket/runs/r1/tasks/t1/outputs/x.parquet", id="other_store"),
-        pytest.param("gs://bucket/runs/r1/tasks/t1/outputs/x.parquet", id="unsupported"),
+        pytest.param("file:///runs/r1/tasks/t1/outputs/x.parquet", id="other_store"),
+        pytest.param("example://bucket/runs/r1/tasks/t1/outputs/x.parquet", id="unsupported"),
     ],
 )
 def test_an_artifact_outside_the_output_root_is_refused(uri):
@@ -500,7 +502,7 @@ def test_an_artifact_under_the_output_root_passes(root):
 @pytest.mark.parametrize(
     "root",
     [
-        pytest.param("gs://bucket/runs", id="unsupported"),
+        pytest.param("example://bucket/runs", id="unsupported"),
         pytest.param("s3://bucket/runs/../runs", id="parent_segment"),
         pytest.param("s3://bucket/runs//r1", id="empty_segment"),
     ],
@@ -509,7 +511,7 @@ def test_no_artifact_is_under_an_output_root_storage_cannot_name(root):
     assert artifact_problem(f"{root}/x.parquet", root=root) is not None
 
 
-ENCODED_ROOT = "enc://disk/data/outputs"
+ENCODED_ROOT = "file:///data/outputs"
 
 
 @pytest.mark.parametrize(
@@ -520,12 +522,12 @@ ENCODED_ROOT = "enc://disk/data/outputs"
     ],
 )
 def test_the_check_reads_the_path_storage_reads(uri):
-    # The stand-in decodes `enc://` paths, so these leave the root once decoded.
+    # The stand-in decodes `file:///` paths, so these leave the root once decoded.
     assert uri in artifact_problem(uri, root=ENCODED_ROOT)
 
 
 def test_a_root_is_matched_in_the_form_storage_reads():
-    assert artifact_problem(f"{ENCODED_ROOT}/x.parquet", root="enc://disk/data/%6futputs") is None
+    assert artifact_problem(f"{ENCODED_ROOT}/x.parquet", root="file:///data/%6futputs") is None
 
 
 def test_a_key_storage_does_not_decode_is_compared_as_written():
@@ -543,7 +545,7 @@ def test_a_usable_root_has_no_problem(root):
     ("root", "fact"),
     [
         ("relative/outputs", "not a location"),
-        ("gs://bucket/outputs", "not a location"),
+        ("example://bucket/outputs", "not a location"),
         ("s3://bucket/a/../b", "'..'"),
         ("s3://bucket/a//b", "''"),
         ("s3://bucket/./b", "'.'"),

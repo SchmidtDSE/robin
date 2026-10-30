@@ -4,13 +4,15 @@ Robin has no operations yet that cancel or withdraw, so the tests write those ro
 Tests also write outcome rows here to set up a state without running a whole task.
 """
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
-from psycopg.types.json import Json
+from psycopg.types.json import Json, Jsonb
 from robin_adapters.storage.local import LocalTaskStorage
 from robin_adapters.storage.location import split_location
+from robin_contracts.cards import HeadCard, ModelCard
 from robin_contracts.local_files import get_local_path
 from robin_contracts.ports.catalog import RequestedRecording
 from robin_contracts.ports.compute import ComputeStatus
@@ -26,11 +28,11 @@ from robin_contracts.tasks import InferenceTaskResult
 from robin_contracts.work import work_digest
 from robin_run_manager.configuration import UnresolvedConfiguration, read_configuration
 from robin_run_manager.database import Database, transaction
-from robin_run_manager.launch import get_setup_parameters, reserve_tasks, submit_reserved_task
+from robin_run_manager.launch import get_setup_query_parameters, reserve_tasks, submit_reserved_task
 from robin_run_manager.models import register_model
 from robin_run_manager.outcomes import update_task_from_compute
 from robin_run_manager.preparation import prepare_run
-from robin_run_manager.profile import Profile
+from robin_run_manager.profile import KubernetesSetup, LocalSetup, Profile, ResolvedSettings
 from robin_run_manager.recording_inputs import RecordingManifest
 from robin_run_manager.submit import submit_run
 from robin_run_manager.task_files import WorkFile, build_work_file
@@ -44,27 +46,80 @@ OWL_CONFIGURATION = read_configuration(FIXTURES / "configuration-owl-v4.yaml")
 PERCH_CONFIGURATION = read_configuration(FIXTURES / "configuration-perch-v8.yaml")
 HEAD_CONFIGURATION = read_configuration(FIXTURES / "configuration-songbird-head-v1.yaml")
 NAMESPACE = "survey"
+# A request that gives nothing, as a run stores it.
+NO_REQUEST = {"requests": {}, "limits": {}, "active_deadline_seconds": None}
 LOCAL_SETTINGS = {
+    "setup": "local",
     "compute": {"kind": "local"},
     "storage": {"kind": "local", "root": "/data/robin"},
+    "request": NO_REQUEST,
+    "resources": {},
 }
 KUBERNETES_SETTINGS = {
-    "compute": {
-        "kind": "kubernetes",
-        "namespace": "robin",
-        "s3_secret_name": "robin-s3",
-        "s3_endpoint": "https://s3.example",
-    },
-    "storage": {"kind": "s3", "root": "s3://robin/"},
+    "setup": "cluster",
+    "compute": {"kind": "kubernetes", "namespace": "robin", "s3_secret_name": "robin-s3"},
+    "storage": {"kind": "s3", "root": "s3://robin/", "endpoint": "https://s3.example"},
+    "request": NO_REQUEST,
+    "resources": {},
 }
-# A profile with local compute and local storage. Its database is never opened.
-LOCAL_PROFILE = Profile.model_validate({
-    "database": {"host": "localhost", "dbname": "robin", "user": "robin", "password": "x"},
-    "compute": {"kind": "local"},
-    "storage": {"kind": "local", "root": "/data/robin"},
-})
-# The setup of a pass with local compute and local task storage.
-LOCAL_SETUP = get_setup_parameters(LOCAL_PROFILE, {"local"})
+_TARGET_FIELDS = {"local": LocalSetup.TARGET_FIELDS, "kubernetes": KubernetesSetup.TARGET_FIELDS}
+
+
+def get_fixed_settings(settings) -> Callable[[ModelCard | HeadCard], ResolvedSettings]:
+    """A `get_resolved_settings` for `submit_run` that gives `settings` for every model."""
+    compute = settings["compute"]
+    resolved = ResolvedSettings(
+        setup=settings["setup"],
+        target_compute={name: compute[name] for name in _TARGET_FIELDS[compute["kind"]]},
+        storage=settings["storage"],
+        execution_settings=settings,
+    )
+    return lambda card: resolved
+
+
+def get_task_setup(database, task_id):
+    """The setup of a pass that handles the task's run, with local task storage: what
+    `get_setup_query_parameters` gives for a profile that matches the run."""
+    with transaction(database, read_only=True) as connection:
+        settings = connection.execute(
+            "SELECT r.execution_settings FROM tasks t JOIN runs r USING (run_id) "
+            "WHERE t.task_id = %s",
+            (task_id,),
+        ).fetchone()["execution_settings"]
+    resolved = get_fixed_settings(settings)(None)
+    return {
+        "setup": resolved.setup,
+        "target_compute": Jsonb(resolved.target_compute),
+        "storage": Jsonb(resolved.storage),
+        "storage_kinds": ["local"],
+    }
+# The models of the fixture configurations.
+# The fixture head has no entry of its own; its runtime entry covers it.
+FIXTURE_MODELS = {"owl/v4": {}, "perch/v8": {}, "head_runtime:onnx": {}}
+
+
+def make_compute_section(models=None, **setup):
+    """A profile's compute section with one setup, `local`, and the fixture models."""
+    return {
+        "setups": {"local": {"kind": "local", **setup}},
+        "models": FIXTURE_MODELS if models is None else models,
+    }
+
+
+def get_local_profile(root):
+    """A profile with one local setup and local storage at `root`. Its database is
+    never opened."""
+    return Profile.model_validate({
+        "database": {"host": "localhost", "dbname": "robin", "user": "robin", "password": "x"},
+        "compute": make_compute_section(),
+        "storage": {"kind": "local", "root": root},
+    })
+
+
+def get_local_setup(root):
+    """The setup of a pass with the local profile at `root` and local task storage. It
+    matches the runs of `add_queued_tasks` with the same root."""
+    return get_setup_query_parameters(get_local_profile(root), "local", {"local"})
 
 
 def register_fixture_models(database: Database) -> None:
@@ -95,7 +150,7 @@ def submit(
         preset=None,
         configuration=configuration,
         recordings=make_recording_manifest(values),
-        execution_settings=execution_settings,
+        get_resolved_settings=get_fixed_settings(execution_settings),
         actor=actor,
         release_versions=release_versions,
     ).run_id
@@ -276,10 +331,13 @@ def get_tasks(database: Database, run_id: UUID) -> list[dict]:
     return rows
 
 
-def add_queued_tasks(database, values, *, root, actor="ana", size=1, versions=None):
-    """A prepared run of `values`, cut into tasks of `size`. Returns the run and its tasks."""
+def add_queued_tasks(database, values, *, root, actor="ana", size=1, versions=None, **frozen):
+    """A prepared run of `values`, cut into tasks of `size`. Returns the run and its tasks.
+
+    `frozen` replaces fields of the run's execution settings, such as `request`.
+    """
     release_versions = versions or RELEASE_OUTPUT_VERSIONS
-    settings = {**LOCAL_SETTINGS, "storage": {"kind": "local", "root": root}}
+    settings = {**LOCAL_SETTINGS, "storage": {"kind": "local", "root": root}, **frozen}
     run_id = submit(
         database, values, actor=actor, execution_settings=settings,
         release_versions=release_versions,
@@ -388,10 +446,14 @@ def add_submitted_task(database, root, values=("a", "b"), *, actor="ana"):
     _, [task_id] = add_queued_tasks(
         database, list(values), root=root, actor=actor, size=len(values)
     )
-    reserve_tasks(database, actor=actor, profile=LOCAL_PROFILE, storage_kinds={"local"})
+    reserve_tasks(
+        database, actor=actor, profile=get_local_profile(root), setup="local",
+        storage_kinds={"local"},
+    )
     compute = ScriptedCompute()
     assert submit_reserved_task(
-        database, task_id, setup=LOCAL_SETUP, compute=compute, storage=LocalTaskStorage(),
+        database, task_id, setup=get_task_setup(database, task_id), compute=compute,
+        storage=LocalTaskStorage(),
         split_location=split_location,
     ) == "submitted"
     return task_id, compute
@@ -406,4 +468,6 @@ def add_finalizing_task(database, root, values=("a", "b")):
 
 
 def update_task(database, task_id, compute):
-    return update_task_from_compute(database, task_id, setup=LOCAL_SETUP, compute=compute)
+    return update_task_from_compute(
+        database, task_id, setup=get_task_setup(database, task_id), compute=compute
+    )

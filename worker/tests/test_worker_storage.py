@@ -28,8 +28,8 @@ def test_reading_a_missing_file_raises_os_error(tmp_path):
 
 
 def test_reading_an_unsupported_scheme_raises_value_error():
-    with pytest.raises(ValueError, match="gs://b/x"):
-        storage.read_bytes("gs://b/x")
+    with pytest.raises(ValueError, match="example://b/x"):
+        storage.read_bytes("example://b/x")
 
 
 def test_create_writes_the_bytes(tmp_path):
@@ -89,7 +89,7 @@ def test_an_s3_root_gets_the_ondio_writer():
     assert isinstance(storage.artifact_writer("s3://bucket/outputs"), OndioArtifactWriter)
 
 
-@pytest.mark.parametrize("root", ["gs://bucket/x", "s3://bucket/a?b"])
+@pytest.mark.parametrize("root", ["example://bucket/x", "s3://bucket/a?b"])
 def test_an_unsupported_root_raises_value_error(root):
     with pytest.raises(ValueError):
         storage.artifact_writer(root)
@@ -128,8 +128,8 @@ def test_one_local_file_fetched_twice_is_released_twice(tmp_path):
 
 
 def test_fetching_an_unsupported_scheme_names_the_uri(tmp_path):
-    with pytest.raises(ValueError, match="gs://b/x"):
-        TaskFiles(tmp_path / "scratch").fetch("gs://b/x")
+    with pytest.raises(ValueError, match="example://b/x"):
+        TaskFiles(tmp_path / "scratch").fetch("example://b/x")
 
 
 def test_releasing_a_path_it_did_not_return_is_refused(tmp_path):

@@ -25,6 +25,7 @@ OUTPUT_VERSION_NOT_CURRENT = "output_version_not_current"
 UNSUPPORTED_LOCATION = "unsupported_location"
 INVALID_SELECTION = "invalid_selection"
 SOURCE_REFUSED = "source_refused"
+MODEL_NOT_IN_PROFILE = "model_not_in_profile"
 
 REFUSAL_REASONS = (
     NOT_AUTHENTICATED,
@@ -48,6 +49,7 @@ REFUSAL_REASONS = (
     UNSUPPORTED_LOCATION,
     INVALID_SELECTION,
     SOURCE_REFUSED,
+    MODEL_NOT_IN_PROFILE,
 )
 
 

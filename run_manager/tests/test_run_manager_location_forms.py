@@ -12,7 +12,7 @@ SAMPLES = {
     "s3-with-nothing": "s3://",
     "robin-models": "robin-models:owl/v4/taxa_registry.csv",
     "http": "http://lab.example/a.wav",
-    "gs": "gs://lab/a.wav",
+    "example": "example://lab/a.wav",
     "relative": "data/a.wav",
 }
 

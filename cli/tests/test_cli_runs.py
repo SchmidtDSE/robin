@@ -230,6 +230,29 @@ def test_submit_without_compute_exits_2(robin, owl_preset, environ):
     assert ran.error()["reason"] == "not_configured"
 
 
+def test_submit_without_compute_stops_before_the_catalog_step(robin, owl_preset, environ):
+    catalog = {"code": "fixture_catalog:build_raising_adapter", "error": "SourceUnavailable"}
+    write_environment_file(environ, {"compute": None, "storage": None, "catalog": catalog})
+
+    ran = robin(
+        "--json", "runs", "submit", "--selection", '{"values": ["a"]}', "--preset", "owl"
+    )
+
+    assert ran.code == 2
+    assert ran.error()["reason"] == "not_configured"
+
+
+def test_submit_with_a_model_that_the_profile_does_not_list(robin, owl_preset, environ):
+    compute = {"setups": {"local": {"kind": "local"}}, "models": {"perch/v8": {}}}
+    write_environment_file(environ, {"compute": compute})
+
+    ran = robin("--json", "runs", "submit", "--recordings", str(RECORDINGS), "--preset", "owl")
+
+    assert ran.code == 1
+    assert ran.error()["reason"] == "model_not_in_profile"
+    assert get_run_count(robin) == 0
+
+
 def test_a_new_storage_root_does_not_change_a_submitted_run(robin, owl_preset, environ, tmp_path):
     config = yaml.safe_load((Path(environ["ROBIN_PROFILE"]) / "config.yaml").read_text())
     run_id = submit(robin, "--recordings", str(RECORDINGS), "--preset", "owl")["run_id"]

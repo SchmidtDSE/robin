@@ -74,8 +74,10 @@ def test_the_folder_is_under_the_runs_frozen_root(registered):
     run_id, [task_id] = add_prepared_tasks(
         registered, ["a"], execution_settings=get_settings("/data/robin")
     )
-    # The profile's root changes, and a later run freezes the new root.
-    add_prepared_tasks(registered, ["b"], execution_settings=get_settings("/moved"))
+    # The profile's root changes under a new setup name, and a later run freezes it.
+    add_prepared_tasks(
+        registered, ["b"], execution_settings={**get_settings("/moved"), "setup": "moved"}
+    )
 
     work_file = build(registered, task_id)
 

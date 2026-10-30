@@ -19,15 +19,15 @@ from robin_run_manager.profile import Profile
 class Services:
     """What the operations use.
 
-    `compute` is None if the profile has no compute section, or names compute that this
-    version has no adapter for. `task_storage` holds a task storage for each storage
-    kind that this version can read and write task files in. `split_location` is the
-    location rule of the storage that the worker writes with.
+    `compute` holds a compute adapter for each compute kind that a setup of the profile
+    uses and that this version has an adapter for. `task_storage` holds a task storage
+    for each storage kind that this version can read and write task files in.
+    `split_location` is the location rule of the storage that the worker writes with.
     """
 
     profile: Profile
     database: Database
-    compute: ComputeAdapter | None = None
+    compute: Mapping[str, ComputeAdapter] = field(default_factory=dict)
     task_storage: Mapping[str, TaskStorage] = field(default_factory=dict)
     split_location: SplitLocation | None = None
 
@@ -42,13 +42,15 @@ def compose(profile: Profile) -> Services:
     )
 
 
-def _get_compute(profile: Profile) -> ComputeAdapter | None:
-    # The Kubernetes adapter is not in this version.
-    if profile.compute is None or profile.compute.kind != "local":
-        return None
+def _get_compute(profile: Profile) -> dict[str, ComputeAdapter]:
+    # Only local compute has an adapter in this version.
+    if profile.compute is None:
+        return {}
+    if "local" not in {setup.kind for setup in profile.compute.setups.values()}:
+        return {}
     from robin_adapters.compute.local import LocalCompute
 
-    return LocalCompute()
+    return {"local": LocalCompute()}
 
 
 def _get_task_storage(profile: Profile) -> dict[str, TaskStorage]:

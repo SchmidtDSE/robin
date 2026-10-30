@@ -82,7 +82,7 @@ def test_a_missing_input_fails_only_its_recording(builder):
 
 
 def test_an_input_on_an_unsupported_scheme_fails_only_its_recording(builder):
-    recordings = (builder.recording("r1"), builder.recording("r2", audio_uri="gs://b/a.wav"))
+    recordings = (builder.recording("r1"), builder.recording("r2", audio_uri="example://b/a.wav"))
     builder.write(work=builder.work(recordings))
 
     code, result = run_and_read(builder)
@@ -91,7 +91,7 @@ def test_an_input_on_an_unsupported_scheme_fails_only_its_recording(builder):
     assert [one.value for one in result.result.coverage] == ["r1"]
     (failed,) = result.result.failed
     assert failed.failure.stage == "acquire_input"
-    assert "gs://b/a.wav" in failed.failure.detail
+    assert "example://b/a.wav" in failed.failure.detail
 
 
 def test_a_model_file_at_the_wrong_digest_fails_the_whole_work(builder):
@@ -207,10 +207,10 @@ def test_a_work_file_that_does_not_parse_is_refused_with_its_digest(builder, wri
 
 
 def unusable_roots(builder):
-    return ["relative/outputs", f"{builder.task_dir}/a/../outputs", "gs://b/x"]
+    return ["relative/outputs", f"{builder.task_dir}/a/../outputs", "example://b/x"]
 
 
-@pytest.mark.parametrize("which", range(3), ids=["relative", "dot-dot", "gs"])
+@pytest.mark.parametrize("which", range(3), ids=["relative", "dot-dot", "example"])
 def test_an_output_root_that_cannot_hold_artifacts_is_refused(builder, which):
     root = unusable_roots(builder)[which]
     work_path, task = builder.write(output_root=root)

@@ -17,7 +17,7 @@ from robin_run_manager.preparation import prepare_run
 from run_fixtures import (
     KUBERNETES_SETTINGS,
     LOCAL_SETTINGS,
-    LOCAL_SETUP,
+    get_task_setup,
     ROBIN_RELEASE,
     add_finalizing_task,
     add_submitted_task,
@@ -58,8 +58,8 @@ def root(tmp_path):
 
 def store_outcome(database, task_id, storage=None):
     return store_task_outcome(
-        database, task_id, setup=LOCAL_SETUP, storage=storage or LocalTaskStorage(),
-        split_location=split_location,
+        database, task_id, setup=get_task_setup(database, task_id),
+        storage=storage or LocalTaskStorage(), split_location=split_location,
     )
 
 

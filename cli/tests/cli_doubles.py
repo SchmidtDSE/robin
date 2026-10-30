@@ -28,7 +28,7 @@ def write_profile(folder, database_settings, **changes):
     database = {name: value for name, value in database.items() if value is not None}
     sections = {
         "database": database,
-        "compute": {"kind": "local"},
+        "compute": {"setups": {"local": {"kind": "local"}}, "models": {"owl/v4": {}}},
         "storage": {"kind": "local", "root": str(folder / "storage")},
     }
     (folder / "config.yaml").write_text(yaml.safe_dump(sections))

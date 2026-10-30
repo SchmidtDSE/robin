@@ -10,7 +10,11 @@ run:
 5. `preparation`: prepare the oldest runs that wait for it, of any actor.
 6. `launch`: reserve free slots for queued tasks, and submit each reserved task.
 
-All steps except preparation act only on the actor's runs that this setup handles.
+Steps 1 to 4 run for each setup of the profile, in name order, then step 5 runs once,
+then step 6 runs for each setup. All steps except preparation act only on the actor's
+runs of that setup. A setup whose compute kind has no adapter in this version is a
+failure of step `setup`, and the pass goes on with the other setups. So is a setup
+whose name has runs with work that were submitted with another target.
 """
 
 import sys
@@ -31,7 +35,8 @@ from robin_run_manager.errors import InternalError, NotConfigured, OperationErro
 from robin_run_manager.launch import (
     SubmissionOutcome,
     get_active_tasks_elsewhere,
-    get_setup_parameters,
+    get_queued_tasks_elsewhere,
+    get_setup_query_parameters,
     get_tasks_in_state,
     recover_submission,
     reserve_tasks,
@@ -44,6 +49,8 @@ from robin_run_manager.outcomes import (
     update_task_from_compute,
 )
 from robin_run_manager.preparation import get_runs_to_prepare, prepare_run
+from robin_run_manager.profile import get_compute_section, get_setup_target
+from robin_run_manager.setup_targets import refuse_conflicting_setup_target
 from robin_run_manager.versions import RELEASE_OUTPUT_VERSIONS
 
 # The most runs that one pass prepares. The others wait for a later pass.
@@ -73,11 +80,13 @@ class StepFailure:
 class ReconcileReport:
     """What one pass did.
 
-    `launched` counts the tasks that this pass submitted, also again after an uncertain
-    submit. `tasks_queued_elsewhere` counts the actor's queued tasks that another compute
-    or storage setup must launch, and `tasks_active_elsewhere` the actor's started tasks
-    that still need a step there, also a release. They
-    are not failures. `stops_requested` is always 0 in this version.
+    Each count except the elsewhere counts is the sum over the pass's setups. `launched`
+    counts the tasks that this pass submitted, also again after an uncertain submit.
+    `tasks_queued_elsewhere` counts the actor's queued tasks whose setup name the profile
+    does not have, or whose storage kind has no task storage, and `tasks_active_elsewhere`
+    the actor's started tasks of that kind that still need a step, also a release. They
+    are counted once for the whole profile, and they are not failures. `stops_requested`
+    is always 0 in this version.
     """
 
     prepared: int = 0
@@ -104,14 +113,16 @@ class ReconcileReport:
 
 @dataclass(frozen=True)
 class _Pass:
-    """What each step of one pass uses."""
+    """What each step of one pass uses for one setup. The setups of a pass share its
+    report."""
 
     services: Services
     actor: str
+    setup_name: str
     compute: ComputeAdapter
-    # The setup of all of this pass's task storage kinds.
-    setup: Mapping[str, Any]
-    # Each task storage, with the setup of its kind only.
+    # The setup's query parameters, for all of this pass's task storage kinds.
+    query_parameters: Mapping[str, Any]
+    # Each task storage, with the setup's query parameters for its kind only.
     storages: tuple[tuple[TaskStorage, Mapping[str, Any]], ...]
     release_versions: Sequence[ModelOutputVersion]
     report: ReconcileReport
@@ -128,58 +139,129 @@ def reconcile_once(
     """Do one pass of the steps in the module's list, and give its report.
 
     A failure in one task or run is added to the report, and the pass goes on. Before
-    each step, and before the operation on each task or run, the pass calls
-    `should_stop`; if it gives True, the pass starts no more operations. Raises `NotConfigured` if the profile has no compute that this version can
-    use.
+    each setup's target check, each step, and the operation on each task or run, the
+    pass calls `should_stop`; if it gives True, the pass starts no more operations. Raises
+    `NotConfigured` if the profile has no `compute` section, or if no setup of the
+    profile has compute that this version can use.
     """
-    profile = services.profile
-    # Raises NotConfigured if the profile has no compute section.
-    setup = get_setup_parameters(profile, services.task_storage)
-    assert profile.compute is not None
-    if services.compute is None:
-        raise NotConfigured(
-            f"This version of Robin cannot use {profile.compute.kind} compute, so it cannot "
-            "reconcile. Use a profile with local compute."
-        )
-    one_pass = _Pass(
-        services=services,
-        actor=actor,
-        compute=services.compute,
-        setup=setup,
-        storages=tuple(
-            (storage, get_setup_parameters(profile, {kind}))
-            for kind, storage in services.task_storage.items()
-        ),
-        release_versions=release_versions,
-        report=ReconcileReport(),
-        should_stop=should_stop,
-    )
-    for step in (
-        _recover_submissions,
-        _update_tasks,
-        _store_outcomes,
-        _release_tasks,
-        _prepare_runs,
-        _launch_tasks,
-    ):
+    report = ReconcileReport()
+    passes = _get_passes(services, actor, release_versions, report, should_stop)
+    checked_passes: list[_Pass] = []
+    for one_pass in passes:
+        # A check reads the database, so a stop is not held up by every setup's check.
+        if should_stop():
+            return report
+        if _check_target(one_pass):
+            checked_passes.append(one_pass)
+    for step, one_pass in _get_steps_in_order(passes, checked_passes):
         if should_stop():
             break
         step(one_pass)
-    return one_pass.report
+    return report
+
+
+def _get_passes(
+    services: Services,
+    actor: str,
+    release_versions: Sequence[ModelOutputVersion],
+    report: ReconcileReport,
+    should_stop: Callable[[], bool],
+) -> list[_Pass]:
+    """A pass for each setup of the profile whose kind has an adapter, in name order.
+
+    A setup whose kind has none is added to the report as a `setup` failure. Raises
+    `NotConfigured` if the profile has no `compute` section, or no setup has an adapter.
+    """
+    profile = services.profile
+    setups = get_compute_section(profile).setups
+    passes: list[_Pass] = []
+    for name in sorted(setups):
+        kind = setups[name].kind
+        if kind not in services.compute:
+            report.failures.append(StepFailure(
+                step="setup", run_id=None, task_id=None,
+                error=NotConfigured(
+                    f"This version of Robin cannot use {kind} compute, so the pass did "
+                    f"nothing for setup {name}.",
+                    details={"setup": name},
+                ),
+            ))
+            continue
+        passes.append(_Pass(
+            services=services,
+            actor=actor,
+            setup_name=name,
+            compute=services.compute[kind],
+            query_parameters=get_setup_query_parameters(profile, name, services.task_storage),
+            storages=tuple(
+                (storage, get_setup_query_parameters(profile, name, {storage_kind}))
+                for storage_kind, storage in services.task_storage.items()
+            ),
+            release_versions=release_versions,
+            report=report,
+            should_stop=should_stop,
+        ))
+    if not passes:
+        kinds = ", ".join(sorted({setup.kind for setup in setups.values()}))
+        raise NotConfigured(
+            f"This version of Robin cannot use {kinds} compute, so it cannot reconcile. "
+            "Use a profile with a local setup."
+        )
+    return passes
+
+
+def _get_steps_in_order(
+    passes: list[_Pass], checked_passes: list[_Pass]
+) -> Iterator[tuple[Callable[[_Pass], None], _Pass]]:
+    """Each step of the pass, with the setup's pass that it runs for, in the order of
+    the module's list.
+
+    Preparation and the elsewhere counts are not of one setup, so each runs once, with
+    the first pass for its services and report, also when every setup failed its check.
+    """
+    for one_pass in checked_passes:
+        yield _recover_submissions, one_pass
+        yield _update_tasks, one_pass
+        yield _store_outcomes, one_pass
+        yield _release_tasks, one_pass
+    yield _prepare_runs, passes[0]
+    for one_pass in checked_passes:
+        yield _launch_tasks, one_pass
+    yield _count_tasks_elsewhere, passes[0]
+
+
+def _check_target(one_pass: _Pass) -> bool:
+    """Give True if no run of the setup name has work and another target. Otherwise add
+    a `setup` failure, and give False: the pass skips that setup's steps.
+
+    The check takes no lock. A run of another target that is submitted after it is safe,
+    because each step selects only the runs of the setup's target.
+    """
+    target_compute, storage = get_setup_target(
+        one_pass.services.profile, one_pass.setup_name
+    )
+    checked = False
+    with _add_failures(one_pass, "setup"):
+        with transaction(one_pass.services.database, read_only=True) as connection:
+            refuse_conflicting_setup_target(
+                connection, one_pass.setup_name, target_compute, storage
+            )
+        checked = True
+    return checked
 
 
 def _recover_submissions(one_pass: _Pass) -> None:
     database = one_pass.services.database
-    for storage, setup in one_pass.storages:
+    for storage, query_parameters in one_pass.storages:
         task_ids: list[UUID] = []
         with _add_failures(one_pass, "recovery"):
             task_ids = get_tasks_in_state(
-                database, "submitting", actor=one_pass.actor, setup=setup
+                database, "submitting", actor=one_pass.actor, setup=query_parameters
             )
         for task_id in _until_stopped(one_pass, task_ids):
             with _add_failures(one_pass, "recovery", task_id=task_id):
                 outcome = recover_submission(
-                    database, task_id, setup=setup, compute=one_pass.compute,
+                    database, task_id, setup=query_parameters, compute=one_pass.compute,
                     storage=storage, split_location=one_pass.services.split_location,
                 )
                 if outcome == "resubmitted":
@@ -192,27 +274,27 @@ def _update_tasks(one_pass: _Pass) -> None:
         task_ids: list[UUID] = []
         with _add_failures(one_pass, "update"):
             task_ids = get_tasks_in_state(
-                database, state, actor=one_pass.actor, setup=one_pass.setup
+                database, state, actor=one_pass.actor, setup=one_pass.query_parameters
             )
         for task_id in _until_stopped(one_pass, task_ids):
             with _add_failures(one_pass, "update", task_id=task_id):
                 update_task_from_compute(
-                    database, task_id, setup=one_pass.setup, compute=one_pass.compute
+                    database, task_id, setup=one_pass.query_parameters, compute=one_pass.compute
                 )
 
 
 def _store_outcomes(one_pass: _Pass) -> None:
     database = one_pass.services.database
-    for storage, setup in one_pass.storages:
+    for storage, query_parameters in one_pass.storages:
         task_ids: list[UUID] = []
         with _add_failures(one_pass, "outcome"):
             task_ids = get_tasks_in_state(
-                database, "finalizing", actor=one_pass.actor, setup=setup
+                database, "finalizing", actor=one_pass.actor, setup=query_parameters
             )
         for task_id in _until_stopped(one_pass, task_ids):
             with _add_failures(one_pass, "outcome", task_id=task_id):
                 outcome = store_task_outcome(
-                    database, task_id, setup=setup, storage=storage,
+                    database, task_id, setup=query_parameters, storage=storage,
                     split_location=one_pass.services.split_location,
                 )
                 if outcome == "recorded":
@@ -223,11 +305,13 @@ def _release_tasks(one_pass: _Pass) -> None:
     database = one_pass.services.database
     task_ids: list[UUID] = []
     with _add_failures(one_pass, "release"):
-        task_ids = get_tasks_to_release(database, actor=one_pass.actor, setup=one_pass.setup)
+        task_ids = get_tasks_to_release(
+            database, actor=one_pass.actor, setup=one_pass.query_parameters
+        )
     for task_id in _until_stopped(one_pass, task_ids):
         with _add_failures(one_pass, "release", task_id=task_id):
             if release_task(
-                database, task_id, setup=one_pass.setup, compute=one_pass.compute
+                database, task_id, setup=one_pass.query_parameters, compute=one_pass.compute
             ) == "released":
                 one_pass.report.released += 1
 
@@ -255,10 +339,9 @@ def _launch_tasks(one_pass: _Pass) -> None:
     with _add_failures(one_pass, "launch"):
         reservation = reserve_tasks(
             database, actor=one_pass.actor, profile=one_pass.services.profile,
-            storage_kinds=one_pass.services.task_storage,
+            setup=one_pass.setup_name, storage_kinds=one_pass.services.task_storage,
             release_versions=one_pass.release_versions,
         )
-        report.tasks_queued_elsewhere = reservation.tasks_queued_elsewhere
         for problem in reservation.problems:
             _add_failure(one_pass, "launch", problem.error, task_id=problem.task_id)
         # A reserved task that this pass does not submit waits for a later recovery step.
@@ -266,9 +349,26 @@ def _launch_tasks(one_pass: _Pass) -> None:
             with _add_failures(one_pass, "launch", task_id=task_id):
                 if _submit_with_its_storage(one_pass, task_id) == "submitted":
                     report.launched += 1
+
+
+def _count_tasks_elsewhere(one_pass: _Pass) -> None:
+    """Count the actor's queued and started tasks that no setup of the pass handles.
+
+    The counts do not depend on the setups' steps, so they are given also when every
+    setup failed its check.
+    """
+    services = one_pass.services
+    elsewhere = {
+        "actor": one_pass.actor,
+        "setups": get_compute_section(services.profile).setups,
+        "storage_kinds": services.task_storage,
+    }
     with _add_failures(one_pass, "launch"):
-        report.tasks_active_elsewhere = len(
-            get_active_tasks_elsewhere(database, actor=one_pass.actor, setup=one_pass.setup)
+        one_pass.report.tasks_queued_elsewhere = len(
+            get_queued_tasks_elsewhere(services.database, **elsewhere)
+        )
+        one_pass.report.tasks_active_elsewhere = len(
+            get_active_tasks_elsewhere(services.database, **elsewhere)
         )
 
 
@@ -287,9 +387,9 @@ def _submit_with_its_storage(one_pass: _Pass, task_id: UUID) -> SubmissionOutcom
     storage is tried in turn until one does not skip it.
     """
     outcome: SubmissionOutcome = "skipped"
-    for storage, setup in one_pass.storages:
+    for storage, query_parameters in one_pass.storages:
         outcome = submit_reserved_task(
-            one_pass.services.database, task_id, setup=setup, compute=one_pass.compute,
+            one_pass.services.database, task_id, setup=query_parameters, compute=one_pass.compute,
             storage=storage, split_location=one_pass.services.split_location,
         )
         if outcome != "skipped":

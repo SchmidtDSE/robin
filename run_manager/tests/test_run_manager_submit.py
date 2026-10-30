@@ -1,5 +1,8 @@
 """Submit: store a run in `preparing`, with its configuration, versions, and recording list."""
 
+import threading
+import time
+from functools import partial
 from pathlib import Path
 from unittest.mock import ANY
 
@@ -8,22 +11,28 @@ import pytest
 from robin_contracts.ports.catalog import RequestedRecording
 from robin_contracts.tasks import ModelOutputVersion
 from robin_run_manager.configuration import read_configuration
-from robin_run_manager.database import transaction
+from psycopg.types.json import Json
+
+from robin_run_manager.database import SETUP_LOCK, open_database, transaction
 from robin_run_manager.errors import (
     INVALID_REQUEST,
+    MODEL_NOT_IN_PROFILE,
     UNKNOWN_OUTPUT_VERSION,
     UNKNOWN_PRESET,
     UNSUPPORTED_LOCATION,
+    NotConfigured,
     Refused,
 )
 from robin_run_manager.models import register_model
 from robin_run_manager.presets import create_preset
+from robin_run_manager.profile import Profile, get_resolved_settings
 from robin_run_manager.recording_inputs import RecordingManifest
+from robin_run_manager.setup_targets import lock_setup_name
 from robin_run_manager.submit import submit_run
 from robin_run_manager.versions import RELEASE_OUTPUT_VERSIONS
 
 from model_fixtures import read_pinned_model
-from run_fixtures import KUBERNETES_SETTINGS, LOCAL_SETTINGS
+from run_fixtures import KUBERNETES_SETTINGS, LOCAL_SETTINGS, get_fixed_settings
 
 FIXTURES = Path(__file__).parent / "fixtures"
 OWL_CONFIGURATION = read_configuration(FIXTURES / "configuration-owl-v4.yaml")
@@ -75,7 +84,7 @@ def test_a_run_from_a_preset_is_stored_preparing(registered):
         preset="owl",
         configuration=None,
         recordings=submitted_list,
-        execution_settings=LOCAL_SETTINGS,
+        get_resolved_settings=get_fixed_settings(LOCAL_SETTINGS),
         actor="ben",
     )
 
@@ -102,7 +111,7 @@ def test_a_preset_and_its_configuration_give_the_same_digest(registered):
         preset="owl",
         configuration=None,
         recordings=make_recording_manifest(),
-        execution_settings=LOCAL_SETTINGS,
+        get_resolved_settings=get_fixed_settings(LOCAL_SETTINGS),
         actor="ana",
     )
     from_file = submit_run(
@@ -110,7 +119,7 @@ def test_a_preset_and_its_configuration_give_the_same_digest(registered):
         preset=None,
         configuration=OWL_CONFIGURATION,
         recordings=make_recording_manifest(),
-        execution_settings=LOCAL_SETTINGS,
+        get_resolved_settings=get_fixed_settings(LOCAL_SETTINGS),
         actor="ana",
     )
 
@@ -123,7 +132,7 @@ def test_a_full_configuration_is_stored_for_later_heads(registered):
         preset=None,
         configuration=PERCH_CONFIGURATION,
         recordings=make_recording_manifest(),
-        execution_settings=LOCAL_SETTINGS,
+        get_resolved_settings=get_fixed_settings(LOCAL_SETTINGS),
         actor="ana",
     )
 
@@ -145,7 +154,7 @@ def test_both_or_neither_is_an_invalid_request(registered, both):
             preset="owl" if both else None,
             configuration=OWL_CONFIGURATION if both else None,
             recordings=make_recording_manifest(),
-            execution_settings=LOCAL_SETTINGS,
+            get_resolved_settings=get_fixed_settings(LOCAL_SETTINGS),
             actor="ana",
         )
 
@@ -157,7 +166,7 @@ def test_an_unknown_preset_is_refused(registered):
     with pytest.raises(Refused) as refused:
         submit_run(
             registered, preset="absent", configuration=None, recordings=make_recording_manifest(),
-            execution_settings=LOCAL_SETTINGS,
+            get_resolved_settings=get_fixed_settings(LOCAL_SETTINGS),
             actor="ana",
         )
 
@@ -178,7 +187,7 @@ def test_a_model_not_in_the_release_is_refused_and_nothing_is_stored(registered)
             preset=None,
             configuration=OWL_CONFIGURATION,
             recordings=make_recording_manifest(),
-            execution_settings=LOCAL_SETTINGS,
+            get_resolved_settings=get_fixed_settings(LOCAL_SETTINGS),
             actor="ana",
             release_versions=release_versions,
         )
@@ -199,7 +208,7 @@ def test_a_head_run_freezes_both_versions(registered):
         preset=None,
         configuration=HEAD_CONFIGURATION,
         recordings=make_recording_manifest(),
-        execution_settings=LOCAL_SETTINGS,
+        get_resolved_settings=get_fixed_settings(LOCAL_SETTINGS),
         actor="ana",
         release_versions=release_versions,
     )
@@ -218,7 +227,7 @@ def test_the_provenance_is_stored_with_the_recording_count(registered):
         preset=None,
         configuration=OWL_CONFIGURATION,
         recordings=make_recording_manifest(5),
-        execution_settings=LOCAL_SETTINGS,
+        get_resolved_settings=get_fixed_settings(LOCAL_SETTINGS),
         actor="ana",
     )
 
@@ -233,12 +242,14 @@ def test_the_provenance_is_stored_with_the_recording_count(registered):
 def test_the_same_submission_twice_makes_two_runs(registered):
     first = submit_run(
         registered, preset=None, configuration=OWL_CONFIGURATION,
-        recordings=make_recording_manifest(), execution_settings=LOCAL_SETTINGS,
+        recordings=make_recording_manifest(),
+        get_resolved_settings=get_fixed_settings(LOCAL_SETTINGS),
         actor="ana",
     )
     second = submit_run(
         registered, preset=None, configuration=OWL_CONFIGURATION,
-        recordings=make_recording_manifest(), execution_settings=LOCAL_SETTINGS,
+        recordings=make_recording_manifest(),
+        get_resolved_settings=get_fixed_settings(LOCAL_SETTINGS),
         actor="ana",
     )
 
@@ -252,7 +263,7 @@ def test_a_list_of_20000_recordings_is_stored(registered):
         preset=None,
         configuration=OWL_CONFIGURATION,
         recordings=make_recording_manifest(20000),
-        execution_settings=LOCAL_SETTINGS,
+        get_resolved_settings=get_fixed_settings(LOCAL_SETTINGS),
         actor="ana",
     )
 
@@ -278,7 +289,7 @@ def submit_configuration(
         preset=None,
         configuration=configuration,
         recordings=recordings,
-        execution_settings=execution_settings,
+        get_resolved_settings=get_fixed_settings(execution_settings),
         actor="ana",
     )
 
@@ -306,6 +317,129 @@ def test_submit_freezes_the_execution_settings(registered):
         registered, "SELECT execution_settings FROM runs WHERE run_id = %s", submitted.run_id
     )
     assert run["execution_settings"] == KUBERNETES_SETTINGS
+
+
+def make_profile(models) -> Profile:
+    """A profile with local setups `a` and `b`, and these `compute.models`."""
+    return Profile.model_validate({
+        "database": {"host": "localhost", "dbname": "robin", "user": "robin", "password": "x"},
+        "compute": {
+            "setups": {
+                "a": {"kind": "local", "request": {"requests": {"cpu": "1"}}},
+                "b": {"kind": "local", "request": {"requests": {"cpu": "2"}}},
+            },
+            "models": models,
+        },
+        "storage": {"kind": "local", "root": "/data/robin"},
+    })
+
+
+def submit_with_profile(database, profile, configuration):
+    return submit_run(
+        database,
+        preset=None,
+        configuration=configuration,
+        recordings=make_recording_manifest(),
+        get_resolved_settings=partial(get_resolved_settings, profile),
+        actor="ana",
+    )
+
+
+def get_frozen_settings(database, run_id) -> dict:
+    [run] = get_rows(database, "SELECT execution_settings FROM runs WHERE run_id = %s", run_id)
+    return run["execution_settings"]
+
+
+def test_submit_freezes_the_settings_of_the_configurations_model(registered):
+    # The head's backbone, perch/v8, has another setup.
+    profile = make_profile({"perch/v8": {"setup": "b"}, "songbird-head/v1": {"setup": "a"}})
+
+    backbone = submit_with_profile(registered, profile, PERCH_CONFIGURATION)
+    head = submit_with_profile(registered, profile, HEAD_CONFIGURATION)
+
+    settings = get_frozen_settings(registered, backbone.run_id)
+    assert (settings["setup"], settings["request"]["requests"]) == ("b", {"cpu": "2"})
+    settings = get_frozen_settings(registered, head.run_id)
+    assert (settings["setup"], settings["request"]["requests"]) == ("a", {"cpu": "1"})
+
+
+def test_submit_of_an_unlisted_model_stores_no_run(registered):
+    profile = make_profile({"owl/v4": {"setup": "a"}})
+
+    with pytest.raises(Refused) as refused:
+        submit_with_profile(registered, profile, PERCH_CONFIGURATION)
+
+    assert refused.value.reason == MODEL_NOT_IN_PROFILE
+    assert (count_rows(registered, "runs"), count_rows(registered, "configurations")) == (0, 0)
+
+
+# Two targets of setup `cpu`: the same local compute, and two storage roots.
+CPU_TARGET_A = {**LOCAL_SETTINGS, "setup": "cpu", "storage": {"kind": "local", "root": "/data/a"}}
+CPU_TARGET_B = {**LOCAL_SETTINGS, "setup": "cpu", "storage": {"kind": "local", "root": "/data/b"}}
+
+
+def test_submit_to_a_setup_with_a_changed_target_stores_no_run(registered):
+    first = submit_configuration(registered, make_recording_manifest(), CPU_TARGET_A)
+
+    with pytest.raises(NotConfigured) as raised:
+        submit_configuration(registered, make_recording_manifest(), CPU_TARGET_B)
+
+    assert raised.value.details == {"setup": "cpu"}
+    assert [row["run_id"] for row in get_rows(registered, "SELECT run_id FROM runs")] == [
+        first.run_id
+    ]
+
+
+def wait_for_a_setup_lock_wait(database) -> None:
+    """Return when a backend waits for a setup lock. Fail after 5 s."""
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        with transaction(database, read_only=True) as connection:
+            waiting = connection.execute(
+                "SELECT count(*) AS n FROM pg_locks WHERE locktype = 'advisory' "
+                "AND NOT granted AND classid = %s AND objsubid = 2",
+                (SETUP_LOCK,),
+            ).fetchone()["n"]
+        if waiting:
+            return
+        time.sleep(0.02)
+    raise AssertionError("The submit did not wait for the setup lock.")
+
+
+def test_a_second_submit_to_a_setup_waits_for_the_first_and_sees_its_target(
+    registered, database_settings
+):
+    errors = []
+    other = open_database(database_settings)
+
+    def submit_b():
+        try:
+            submit_configuration(other, make_recording_manifest(), CPU_TARGET_B)
+        except Exception as error:  # noqa: BLE001 - the test checks the error
+            errors.append(error)
+
+    thread = threading.Thread(target=submit_b)
+    try:
+        with transaction(registered) as connection:
+            lock_setup_name(connection, "cpu")
+            thread.start()
+            wait_for_a_setup_lock_wait(registered)
+            run_id = connection.execute(
+                "INSERT INTO runs (kind, submitted_by, execution_settings) "
+                "VALUES ('inference', 'ana', %s) RETURNING run_id",
+                (Json(CPU_TARGET_A),),
+            ).fetchone()["run_id"]
+            connection.execute(
+                "INSERT INTO tasks (run_id, state, created_by) VALUES (%s, 'queued', 'ana')",
+                (run_id,),
+            )
+    finally:
+        if thread.is_alive():
+            thread.join(30)
+        other.close()
+
+    assert [type(error) for error in errors] == [NotConfigured]
+    assert [row["run_id"] for row in get_rows(registered, "SELECT run_id FROM runs")] == [run_id]
 
 
 def test_submit_stores_the_source_inside_the_provenance(registered):

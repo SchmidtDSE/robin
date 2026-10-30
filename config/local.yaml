@@ -7,11 +7,16 @@ database:
   user: robin
   password: ${ROBIN_DB_PASSWORD}
 compute:
-  kind: local
-  # At most 2 tasks of this compute setup run at the same time. A local worker is
-  # not held to a compute request: it can use more CPU or memory than `request`
-  # gives, and it is not stopped at a deadline.
-  max_in_flight: 2
+  setups:
+    local:
+      kind: local
+      # At most 2 tasks of this setup run at the same time. A local worker is not
+      # held to a compute request: it can use more CPU or memory than `request`
+      # gives, and it is not stopped at a deadline.
+      max_in_flight: 2
+  # The models that runs can use. With one setup, each model uses it.
+  models:
+    owl/v4: {}
 storage:
   kind: local
   root: ${ROBIN_STORAGE_ROOT}

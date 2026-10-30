@@ -2,6 +2,7 @@
 
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -23,7 +24,8 @@ from robin_run_manager.errors import (
 from robin_run_manager.launch import (
     Reservation,
     TaskProblem,
-    get_setup_parameters,
+    get_queued_tasks_elsewhere,
+    get_setup_query_parameters,
     get_tasks_in_state,
     recover_submission,
     reserve_tasks,
@@ -36,12 +38,14 @@ from robin_run_manager.versions import RELEASE_OUTPUT_VERSIONS
 from run_fixtures import (
     KUBERNETES_SETTINGS,
     LOCAL_SETTINGS,
-    LOCAL_SETUP,
+    get_local_setup,
+    get_task_setup,
     add_queued_tasks,
     cancel,
     count_in_flight,
     get_task,
     get_tasks,
+    make_compute_section,
     register_fixture_models,
     set_execution_settings,
     submit,
@@ -72,25 +76,31 @@ def root(tmp_path):
 
 @pytest.fixture
 def make_profile(database_settings, root):
-    def make(max_in_flight=10, **compute):
+    def make(max_in_flight=10, models=None, **setup):
         return Profile.model_validate({
             "database": database_settings.model_dump(),
-            "compute": {"kind": "local", "max_in_flight": max_in_flight, **compute},
+            "compute": make_compute_section(models, max_in_flight=max_in_flight, **setup),
             "storage": {"kind": "local", "root": root},
         })
 
     return make
 
 
-def reserve(database, profile, actor="ana", **options) -> Reservation:
+def reserve(database, profile, actor="ana", setup="local", **options) -> Reservation:
     return reserve_tasks(
-        database, actor=actor, profile=profile, storage_kinds={"local"}, **options
+        database, actor=actor, profile=profile, setup=setup, storage_kinds={"local"}, **options
+    )
+
+
+def get_queued_elsewhere(database, actor="ana"):
+    return get_queued_tasks_elsewhere(
+        database, actor=actor, setups={"local"}, storage_kinds={"local"}
     )
 
 
 def submit_task(database, task_id, compute, storage=None):
     return submit_reserved_task(
-        database, task_id, setup=LOCAL_SETUP, compute=compute,
+        database, task_id, setup=get_task_setup(database, task_id), compute=compute,
         storage=storage or LocalTaskStorage(), split_location=split_location,
     )
 
@@ -189,6 +199,27 @@ def test_tasks_of_another_compute_setup_do_not_take_this_setups_slots(
     assert get_task(registered, other_task)["state"] == "submitting"
 
 
+def test_max_in_flight_counts_each_setup_on_its_own(registered, database_settings, root):
+    profile = Profile.model_validate({
+        "database": database_settings.model_dump(),
+        "compute": {
+            "setups": {
+                "a": {"kind": "local", "max_in_flight": 1},
+                "b": {"kind": "local", "max_in_flight": 1},
+            },
+            "models": {"owl/v4": {"setup": "a"}},
+        },
+        "storage": {"kind": "local", "root": root},
+    })
+    _, [a1, _] = add_queued_tasks(registered, ["a1", "a2"], root=root, setup="a")
+    _, [b1, _] = add_queued_tasks(registered, ["b1", "b2"], root=root, setup="b")
+
+    assert reserve(registered, profile, setup="a").task_ids == (a1,)
+    assert reserve(registered, profile, setup="b").task_ids == (b1,)
+    assert reserve(registered, profile, setup="a").task_ids == ()
+    assert count_in_flight(registered) == 2
+
+
 def test_the_oldest_queued_task_is_reserved_first(registered, make_profile, root):
     settings = {**LOCAL_SETTINGS, "storage": {"kind": "local", "root": root}}
     older_run = submit(registered, ["a"], execution_settings=settings)
@@ -207,9 +238,7 @@ def test_only_the_actors_runs_are_launched(registered, make_profile, root):
 
     reservation = reserve(registered, make_profile())
 
-    assert reservation == Reservation(
-        task_ids=tuple(anas), outdated_tasks=0, tasks_queued_elsewhere=0, problems=()
-    )
+    assert reservation == Reservation(task_ids=tuple(anas), outdated_tasks=0, problems=())
     assert get_task(registered, bobs[0])["state"] == "queued"
 
 
@@ -217,15 +246,16 @@ def test_settings_that_json_changes_still_match_the_frozen_settings(
     registered, make_profile, root, monkeypatch
 ):
     # A tuple in the profile is stored as a JSON list on the run.
-    real = launch.get_execution_settings
+    real = launch.get_setup_target
 
-    def with_tuple(profile):
-        settings = real(profile)
-        return {**settings, "compute": {**settings["compute"], "zones": ("a", "b")}}
+    def with_tuple(profile, setup):
+        target_compute, storage = real(profile, setup)
+        return {**target_compute, "zones": ("a", "b")}, storage
 
-    monkeypatch.setattr(launch, "get_execution_settings", with_tuple)
+    monkeypatch.setattr(launch, "get_setup_target", with_tuple)
     run_id, [task_id] = add_queued_tasks(registered, ["a"], root=root)
     frozen = {
+        **LOCAL_SETTINGS,
         "compute": {"kind": "local", "zones": ["a", "b"]},
         "storage": {"kind": "local", "root": root},
     }
@@ -239,15 +269,15 @@ def test_a_run_frozen_for_other_compute_stays_queued_and_is_counted(
     registered, make_profile, root, settings
 ):
     elsewhere, [task_id] = add_queued_tasks(registered, ["a"], root=root)
-    set_execution_settings(registered, elsewhere, settings)
     _, here = add_queued_tasks(registered, ["b"], root=root)
+    # After both submits: a submit refuses a setup name that has work with another target.
+    set_execution_settings(registered, elsewhere, settings)
 
     reservation = reserve(registered, make_profile())
 
-    assert reservation == Reservation(
-        task_ids=tuple(here), outdated_tasks=0, tasks_queued_elsewhere=1, problems=()
-    )
+    assert reservation == Reservation(task_ids=tuple(here), outdated_tasks=0, problems=())
     assert get_task(registered, task_id)["state"] == "queued"
+    assert get_queued_elsewhere(registered) == [task_id]
 
 
 @pytest.mark.parametrize("stop", [cancel, withdraw])
@@ -256,7 +286,7 @@ def test_cancelled_and_withdrawn_runs_are_not_launched(registered, make_profile,
     stop(registered, run_id)
 
     assert reserve(registered, make_profile()) == Reservation(
-        task_ids=(), outdated_tasks=0, tasks_queued_elsewhere=0, problems=()
+        task_ids=(), outdated_tasks=0, problems=()
     )
     assert get_task(registered, task_id)["state"] == "queued"
 
@@ -283,9 +313,7 @@ def test_outdated_queued_work_fails_and_releases_its_claims(registered, make_pro
 
     reservation = reserve(registered, make_profile(), release_versions=NEWER_OWL)
 
-    assert reservation == Reservation(
-        task_ids=(), outdated_tasks=1, tasks_queued_elsewhere=0, problems=()
-    )
+    assert reservation == Reservation(task_ids=(), outdated_tasks=1, problems=())
     task = get_task(registered, task_id)
     assert (task["state"], task["failure"]["reason"]) == ("failed", "output_version_not_current")
     assert get_recording_failures(registered, task_id) == [
@@ -308,10 +336,9 @@ def test_outdated_work_of_another_setup_stays_queued_and_is_counted(
 
     reservation = reserve(registered, make_profile(), release_versions=NEWER_OWL)
 
-    assert reservation == Reservation(
-        task_ids=(), outdated_tasks=0, tasks_queued_elsewhere=1, problems=()
-    )
+    assert reservation == Reservation(task_ids=(), outdated_tasks=0, problems=())
     assert get_task(registered, task_id)["state"] == "queued"
+    assert get_queued_elsewhere(registered) == [task_id]
     with transaction(registered, read_only=True) as connection:
         [recording] = connection.execute(
             "SELECT state FROM recording_outcomes WHERE task_id = %s", (task_id,)
@@ -398,23 +425,39 @@ def test_a_task_whose_work_file_cannot_be_built_does_not_stop_the_others(
     )
 
 
-def test_the_task_records_the_request_for_its_model(registered, make_profile, root):
-    _, [task_id] = add_queued_tasks(registered, ["a"], root=root)
-    profile = make_profile(
-        request={"requests": {"cpu": "2"}},
-        resources={"batch_size": 32},
-        models={"owl/v4": {"request": {"requests": {"cpu": "4"}, "limits": {"memory": "8Gi"}}}},
+def test_the_task_records_the_request_that_its_run_froze(registered, make_profile, root):
+    request = ComputeRequest(requests={"cpu": "4"}, limits={"memory": "8Gi"})
+    _, [task_id] = add_queued_tasks(
+        registered, ["a"], root=root,
+        request=request.model_dump(mode="json"), resources={"batch_size": 32},
     )
 
-    reserve(registered, profile)
+    reserve(registered, make_profile())
     compute = ScriptedCompute()
     submit_task(registered, task_id, compute)
 
     task = get_task(registered, task_id)
-    request = ComputeRequest(requests={"cpu": "4"}, limits={"memory": "8Gi"})
     assert task["compute_request"] == request.model_dump(mode="json")
     assert task["work_resources"] == {"batch_size": 32}
     assert compute.get_calls("submit")[0].request == request
+
+
+def test_a_profile_change_after_submit_does_not_change_a_tasks_request(
+    registered, make_profile, root
+):
+    request = {"requests": {"cpu": "2"}, "limits": {}, "active_deadline_seconds": None}
+    _, [first, second] = add_queued_tasks(
+        registered, ["a", "b"], root=root, request=request, resources={"batch_size": 8}
+    )
+    changed = {"owl/v4": {"request": {"requests": {"cpu": "4"}}, "resources": {"batch_size": 32}}}
+
+    reserve(registered, make_profile(max_in_flight=1))
+    reserve(registered, make_profile(max_in_flight=2, models=changed))
+
+    for task_id in (first, second):
+        task = get_task(registered, task_id)
+        assert task["state"] == "submitting"
+        assert (task["compute_request"], task["work_resources"]) == (request, {"batch_size": 8})
 
 
 def test_a_rejected_submit_fails_the_task_and_frees_its_slot(registered, make_profile, root):
@@ -450,11 +493,11 @@ def test_an_uncertain_submit_keeps_the_slot(registered, make_profile, root):
 
 
 def test_a_storage_root_that_cannot_be_written_keeps_the_slot_and_submits_nothing(
-    registered, make_profile, tmp_path
+    registered, make_profile, root
 ):
-    blocker = tmp_path / "blocker"
+    # A file in place of the root's folder.
+    blocker = Path(root)
     blocker.write_text("a file, not a folder")
-    root = str(blocker / "storage")
     _, [task_id] = add_queued_tasks(registered, ["a"], root=root)
     reserve(registered, make_profile())
     compute = ScriptedCompute()
@@ -577,9 +620,9 @@ def test_a_task_that_changed_during_the_submit_is_not_recorded(
     assert (task["state"], task["compute_ref"], task["submitted_at"]) == ("cancelled", None, None)
 
 
-def recover(database, task_id, compute, storage=None, setup=LOCAL_SETUP):
+def recover(database, task_id, compute, storage=None, setup=None):
     return recover_submission(
-        database, task_id, setup=setup, compute=compute,
+        database, task_id, setup=setup or get_task_setup(database, task_id), compute=compute,
         storage=storage or LocalTaskStorage(), split_location=split_location,
     )
 
@@ -591,8 +634,8 @@ def write_result(database, task_id) -> None:
     work_file.with_name("result.json").write_bytes(b"{}")
 
 
-def get_submitting(database, actor="ana", setup=LOCAL_SETUP):
-    return get_tasks_in_state(database, "submitting", actor=actor, setup=setup)
+def get_submitting(database, root, actor="ana"):
+    return get_tasks_in_state(database, "submitting", actor=actor, setup=get_local_setup(root))
 
 
 def test_the_tasks_in_a_state_are_the_actors_tasks_of_this_setup_oldest_first(
@@ -605,8 +648,10 @@ def test_the_tasks_in_a_state_are_the_actors_tasks_of_this_setup_oldest_first(
     reserve(registered, make_profile(), actor="bob")
     set_execution_settings(registered, elsewhere, KUBERNETES_SETTINGS)
 
-    assert get_submitting(registered) == anas
-    assert get_tasks_in_state(registered, "queued", actor="ana", setup=LOCAL_SETUP) == []
+    assert get_submitting(registered, root) == anas
+    assert get_tasks_in_state(
+        registered, "queued", actor="ana", setup=get_local_setup(root)
+    ) == []
 
 
 def test_a_submitting_task_of_other_compute_is_not_recovered(registered, make_profile, root):
@@ -700,19 +745,15 @@ def test_a_crash_after_the_submit_converges(registered, make_profile, root, monk
     assert len(compute.get_calls("submit")) == 1
 
 
-def test_a_changed_profile_does_not_change_the_rebuilt_work_file(
-    registered, make_profile, root, tmp_path
-):
-    _, [task_id] = add_queued_tasks(registered, ["a"], root=root)
-    reserve(registered, make_profile(resources={"batch_size": 32}))
-    changed = make_profile(resources={"batch_size": 64}).model_copy(
-        update={"storage": make_profile().storage.model_copy(update={"root": str(tmp_path / "new")})}
-    )
+def test_a_changed_profile_does_not_change_the_rebuilt_work_file(registered, make_profile, root):
+    _, [task_id] = add_queued_tasks(registered, ["a"], root=root, resources={"batch_size": 32})
+    reserve(registered, make_profile())
+    changed = make_profile(resources={"batch_size": 64})
     compute = ScriptedCompute()
 
-    assert recover(registered, task_id, compute, setup=get_setup_parameters(changed, {"local"})) == (
-        "resubmitted"
-    )
+    assert recover(
+        registered, task_id, compute, setup=get_setup_query_parameters(changed, "local", {"local"})
+    ) == "resubmitted"
 
     assert_one_execution(registered, task_id, compute)
     [call] = compute.get_calls("submit")
@@ -955,7 +996,7 @@ def test_two_passes_at_once_submit_once(registered, database_settings, make_prof
 def test_a_delayed_submit_cannot_start_a_released_task(registered, make_profile, root):
     _, [task_id] = add_queued_tasks(registered, ["a"], root=root)
     reserve(registered, make_profile())
-    [read_earlier] = get_submitting(registered)
+    [read_earlier] = get_submitting(registered, root)
     with transaction(registered) as connection:
         # Another pass records the outcome and releases the task.
         connection.execute(

@@ -34,7 +34,7 @@ from robin_run_manager.errors import (
     ComputeUnavailable,
     invoke_adapter,
 )
-from robin_run_manager.launch import SAME_SETUP, get_compute_status
+from robin_run_manager.launch import MATCHES_SETUP_WITH_SUPPORTED_STORAGE, get_compute_status
 from robin_run_manager.task_files import WorkFile, build_reserved_work_file, read_result
 
 _NO_RESULT_MESSAGE = (
@@ -95,7 +95,7 @@ def update_task_from_compute(
 ) -> TaskStateAfterUpdate | Literal["skipped"]:
     """Ask the compute adapter about a `submitted` or `running` task, and give its new state.
 
-    `setup` comes from `get_setup_parameters`. A started execution makes the task
+    `setup` comes from `get_setup_query_parameters`. A started execution makes the task
     `running`. An ended execution, or none, makes it `finalizing`, which frees its slot.
     Gives `skipped` if another pass holds the task, or if it is not a `submitted` or
     `running` task of this setup, also when it changed during the update. Raises
@@ -127,7 +127,7 @@ def store_task_outcome(
 ) -> Literal["recorded", "already_recorded", "skipped"]:
     """Read and check the result of a `finalizing` task, and record its outcome.
 
-    `setup` comes from `get_setup_parameters`, and `split_location` from the storage
+    `setup` comes from `get_setup_query_parameters`, and `split_location` from the storage
     that the worker wrote with. A missing result fails the task with `no_result`, and a
     result that cannot be recorded fails it with `invalid_result`. Gives
     `already_recorded` if the outcome is recorded, and `skipped` if the task is not a
@@ -157,7 +157,7 @@ def get_tasks_to_release(
 ) -> list[UUID]:
     """The actor's tasks of this setup that ended and are not released, oldest first.
 
-    `setup` comes from `get_setup_parameters`. A task that ended before it was reserved
+    `setup` comes from `get_setup_query_parameters`. A task that ended before it was reserved
     has no execution, so it is not released.
     """
     with transaction(database, read_only=True) as connection:
@@ -165,7 +165,7 @@ def get_tasks_to_release(
             "SELECT t.task_id FROM tasks t JOIN runs r USING (run_id) "
             "WHERE t.state = ANY(%(states)s) AND t.reserved_at IS NOT NULL "
             "AND t.released_at IS NULL AND r.submitted_by = %(actor)s "
-            f"AND {SAME_SETUP} ORDER BY t.created_at, t.task_id",
+            f"AND {MATCHES_SETUP_WITH_SUPPORTED_STORAGE} ORDER BY t.created_at, t.task_id",
             {**setup, "states": list(_TERMINAL_STATES), "actor": actor},
         ).fetchall()
     return [row["task_id"] for row in rows]
@@ -176,7 +176,7 @@ def release_task(
 ) -> Literal["released", "skipped"]:
     """Release a task that ended, and record the time of the release.
 
-    `setup` comes from `get_setup_parameters`. Gives `skipped` if another pass holds the
+    `setup` comes from `get_setup_query_parameters`. Gives `skipped` if another pass holds the
     task, or if it is not a task of this setup that ended, was reserved, and is not
     released. Raises `ComputeUnavailable` if the adapter fails; the task does not
     change, and a later pass releases it again.
@@ -210,7 +210,7 @@ def _get_task_to_update(
         "SELECT t.state, t.compute_ref, t.work_uri, t.compute_request, r.execution_settings "
         "FROM tasks t JOIN runs r USING (run_id) "
         "WHERE t.task_id = %(task_id)s AND t.state IN ('submitted', 'running') "
-        f"AND {SAME_SETUP}",
+        f"AND {MATCHES_SETUP_WITH_SUPPORTED_STORAGE}",
         {**setup, "task_id": task_id},
     ).fetchone()
     if row is None:
@@ -245,7 +245,7 @@ def _get_task_to_release(
         "FROM tasks t JOIN runs r USING (run_id) "
         "WHERE t.task_id = %(task_id)s AND t.state = ANY(%(states)s) "
         "AND t.reserved_at IS NOT NULL AND t.released_at IS NULL "
-        f"AND {SAME_SETUP}",
+        f"AND {MATCHES_SETUP_WITH_SUPPORTED_STORAGE}",
         {**setup, "task_id": task_id, "states": list(_TERMINAL_STATES)},
     ).fetchone()
     return None if row is None else _get_compute_task(task_id, row)
@@ -293,7 +293,7 @@ def _get_task_to_store(
     return connection.execute(
         "SELECT t.state, t.outcome_recorded_at, t.work_file_digest "
         "FROM tasks t JOIN runs r USING (run_id) "
-        f"WHERE t.task_id = %(task_id)s AND {SAME_SETUP}",
+        f"WHERE t.task_id = %(task_id)s AND {MATCHES_SETUP_WITH_SUPPORTED_STORAGE}",
         {**setup, "task_id": task_id},
     ).fetchone()
 

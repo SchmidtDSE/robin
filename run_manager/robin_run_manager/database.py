@@ -26,6 +26,8 @@ from robin_run_manager.profile import DatabaseSettings
 # Keys for pg_advisory_xact_lock.
 MIGRATION_LOCK = 1
 LAUNCH_LOCK = 2
+# With the hashtext of a setup name, as two numbers. See `robin_run_manager.setup_targets`.
+SETUP_LOCK = 4
 
 # The channel of the notice that a submit sends at commit. A reconcile loop listens on
 # it, so that it starts a pass without waiting for its interval.

@@ -148,7 +148,9 @@ def split_location_with_a_defect(uri):
 @pytest.mark.parametrize(
     ("change", "code", "reason"),
     [
-        pytest.param({"compute": SecretCompute()}, 4, "compute_unavailable", id="adapter"),
+        pytest.param(
+            {"compute": {"local": SecretCompute()}}, 4, "compute_unavailable", id="adapter"
+        ),
         pytest.param(
             {"split_location": split_location_with_a_defect}, 5, "internal_error", id="defect"
         ),

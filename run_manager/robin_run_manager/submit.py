@@ -1,6 +1,6 @@
 """Submit a run: store it in `preparing` with everything that preparation needs."""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -19,7 +19,9 @@ from robin_run_manager.errors import (
     Refused,
 )
 from robin_run_manager.location_forms import get_unsupported_locations
+from robin_run_manager.profile import ResolvedSettings
 from robin_run_manager.recording_inputs import MAX_PROBLEMS, RecordingManifest
+from robin_run_manager.setup_targets import lock_setup_name, refuse_conflicting_setup_target
 from robin_run_manager.stored_configurations import (
     StoredConfiguration,
     add_configuration,
@@ -43,28 +45,39 @@ def submit_run(
     preset: str | None,
     configuration: UnresolvedConfiguration | None,
     recordings: RecordingManifest,
-    execution_settings: Mapping[str, Any],
+    get_resolved_settings: Callable[[ModelCard | HeadCard], ResolvedSettings],
     actor: str,
     release_versions: Sequence[ModelOutputVersion] = RELEASE_OUTPUT_VERSIONS,
 ) -> Submitted:
     """Store a new run of `recordings` in `preparing`. Give a preset or a configuration.
 
-    The run freezes its configuration, output versions, recording list, and
-    `execution_settings`, which `get_execution_settings` makes from the profile. It
-    claims nothing: preparation does that later. Each recording and model file must have
-    a location form that the settings' compute kind can read.
+    The run freezes its configuration, output versions, recording list, and the
+    settings that `get_resolved_settings` gives for the card of the configuration's model,
+    such as `partial(get_resolved_settings, profile)`. It claims nothing: preparation
+    does that later. Each recording and model file must have a location form that the
+    settings' compute kind can read. Raises `NotConfigured` if a run of the same setup
+    name still has work and was submitted with another target.
     """
     if (preset is None) == (configuration is None):
         raise Refused(INVALID_REQUEST, "Give a preset or a configuration, and not both.")
     with transaction(database) as connection:
         digest = _get_configuration_digest(connection, preset, configuration)
         stored = get_stored_configuration(connection, digest)
-        versions = get_frozen_output_versions(_get_cards(connection, stored), release_versions)
-        _check_locations(execution_settings["compute"]["kind"], recordings, stored)
+        cards = _get_cards(connection, stored)
+        versions = get_frozen_output_versions(cards, release_versions)
+        resolved = get_resolved_settings(cards[0])
+        settings = resolved.execution_settings
+        _refuse_unsupported_locations(settings["compute"]["kind"], recordings, stored)
+        # The lock holds until the run is committed, so a second submit of this setup
+        # name sees this run in its check.
+        lock_setup_name(connection, resolved.setup)
+        refuse_conflicting_setup_target(
+            connection, resolved.setup, resolved.target_compute, resolved.storage
+        )
         # PostgreSQL sends the notice at commit, and not at all if the transaction rolls
         # back, so its place in the transaction does not matter.
         connection.execute(f"NOTIFY {NOTIFY_CHANNEL}")
-        run_id = _insert_run(connection, actor, execution_settings, digest, versions, recordings)
+        run_id = _insert_run(connection, actor, settings, digest, versions, recordings)
     return Submitted(
         run_id=run_id, configuration_digest=digest, recording_count=len(recordings.recordings)
     )
@@ -95,7 +108,7 @@ def _get_cards(
     return cards
 
 
-def _check_locations(
+def _refuse_unsupported_locations(
     compute_kind: str, recordings: RecordingManifest, stored: StoredConfiguration
 ) -> None:
     """Refuse the run if `compute_kind` cannot read a recording or a model file."""

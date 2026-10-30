@@ -235,11 +235,11 @@ def test_a_relative_work_path_is_refused_as_not_absolute(tmp_path):
     assert "usage: robin-worker run" in done.stderr
 
 
-@pytest.mark.parametrize("name", ["task.json", "work.json"], ids=["not work.json", "gs"])
+@pytest.mark.parametrize("name", ["task.json", "work.json"], ids=["not work.json", "example"])
 def test_a_work_uri_with_no_result_location_writes_nothing(tmp_path, name):
     folder = tmp_path / "tasks" / "t"
     folder.mkdir(parents=True)
-    uri = str(folder / name) if name == "task.json" else "gs://b/tasks/t/work.json"
+    uri = str(folder / name) if name == "task.json" else "example://b/tasks/t/work.json"
 
     done = run_worker(tmp_path, ["run", uri], test_versions=False)
 
