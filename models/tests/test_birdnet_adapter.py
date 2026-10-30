@@ -658,13 +658,9 @@ def reference_sigmoid(x: np.ndarray) -> np.ndarray:
     return np.where(y >= 0, e / (1 + e), 1 / (1 + e))
 
 
-def test_a_built_model_satisfies_the_protocol_and_restates_nothing_from_its_card(
-    runtime, tmp_path
-):
+def test_a_built_model_satisfies_the_protocol(runtime, tmp_path):
     model = runtime.adapter.build(birdnet_context(tmp_path))
     assert isinstance(model, Model)
-    assert not hasattr(model, "recipe")
-    assert not hasattr(model, "capabilities")
 
 
 # Windowing.

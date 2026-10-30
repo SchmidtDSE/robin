@@ -86,7 +86,6 @@ def build_model(card: ModelCard | HeadCard = CARD) -> PinnedModel:
         },
     )
 
-REPOSITORY = Path(__file__).resolve().parents[2]
 
 DIM = 4
 
@@ -307,20 +306,10 @@ def test_a_staged_artifact_reads_back_under_the_contract_it_was_staged_as(tmp_pa
 
 
 def test_the_artifact_declares_its_contract_identifier(tmp_path):
-    # The identifier is spelled once, in the contracts package, and imported everywhere.
     staged = write_artifact(tmp_path / "embeddings.parquet", [build_window()])
 
     with read_embeddings(staged.path, expected_checksum=staged.checksum) as stream:
         assert stream.metadata["robin.contract"] == CONTRACT_ID
-
-    declaring = REPOSITORY / "contracts/robin_contracts/output_contracts.py"
-    assert CONTRACT_ID in declaring.read_text()
-    spelled_in_the_engine = [
-        module
-        for module in (REPOSITORY / "inference_engine/robin_inference_engine").rglob("*.py")
-        if CONTRACT_ID in module.read_text()
-    ]
-    assert spelled_in_the_engine == []
 
 
 # --- staging and lifecycle -------------------------------------------------

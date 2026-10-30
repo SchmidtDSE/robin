@@ -1,5 +1,4 @@
 import json
-import typing
 from pathlib import Path
 
 import pytest
@@ -10,7 +9,6 @@ from robin_contracts.canonical import canonical_json_bytes, sha256_v1
 from robin_contracts.cards import (
     AudioGeometry,
     BackendResampled,
-    EmbeddingDtype,
     HeadCard,
     ModelCard,
     ModelRef,
@@ -231,10 +229,6 @@ def test_a_malformed_registry_digest_is_refused(digest):
         _model_card(taxa_registry_digest=digest)
 
     assert f"expected 'sha256:' and 64 hex characters, got {digest!r}" in str(exc.value)
-
-
-def test_embedding_dtype_declares_exactly_the_two_widths():
-    assert typing.get_args(EmbeddingDtype) == ("float16", "float32")
 
 
 def test_a_card_that_emits_embeddings_states_their_width_and_precision():

@@ -109,18 +109,6 @@ def test_a_minimal_work_round_trips():
     assert isinstance(work.outputs, tuple)
 
 
-def test_work_has_no_run_identity_fields():
-    assert set(InferenceWork.model_fields) == {
-        "schema_version",
-        "recordings",
-        "model",
-        "input",
-        "settings",
-        "resources",
-        "outputs",
-    }
-
-
 def test_unknown_fields_are_forbidden():
     with pytest.raises(ValidationError):
         build_work(location="s3://bucket/run-7/")

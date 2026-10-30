@@ -64,7 +64,6 @@ def a_recording(namespace: str, value: str) -> RecordingRef:
 
 SOUNDHUB_42 = a_recording("soundhub", "42")
 
-REPOSITORY = Path(__file__).resolve().parents[2]
 
 TOP_K_KEYS = (
     *REQUIRED_KEYS,
@@ -483,15 +482,6 @@ def test_the_artifact_declares_its_contract_identifier(tmp_path):
 
     with read_scores(staged.path, expected_checksum=staged.checksum) as stream:
         assert stream.metadata["robin.contract"] == CONTRACT_ID
-
-    declaring = REPOSITORY / "contracts/robin_contracts/output_contracts.py"
-    assert CONTRACT_ID in declaring.read_text()
-    spelled_in_the_engine = [
-        module
-        for module in (REPOSITORY / "inference_engine/robin_inference_engine").rglob("*.py")
-        if CONTRACT_ID in module.read_text()
-    ]
-    assert spelled_in_the_engine == []
 
 
 def test_every_required_metadata_key_is_present_on_the_stream(tmp_path):

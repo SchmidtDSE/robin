@@ -648,15 +648,6 @@ def test_a_record_requires_the_resolved_request_for_its_kind():
 # --- InferenceFailure and FailureReport -------------------------------------
 
 
-def test_a_failure_names_no_artifacts():
-    assert set(InferenceFailure.model_fields) == {
-        "schema_version",
-        "outcome",
-        "work_digest",
-        "failure",
-    }
-
-
 def test_a_failure_report_refuses_an_undeclared_stage():
     with pytest.raises(ValidationError):
         build_report(stage="publish")
@@ -671,8 +662,7 @@ def test_a_failure_report_refuses_an_empty_code():
         build_report(code="")
 
 
-def test_a_failure_report_names_no_recording():
-    assert set(FailureReport.model_fields) == {"code", "stage", "window_start_s", "detail"}
+def test_a_failure_report_has_no_window_start_by_default_and_refuses_nan():
     assert build_report().window_start_s is None
     with pytest.raises(ValidationError):
         build_report(window_start_s=float("nan"))

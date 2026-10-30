@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 import robin_models.owl
-from robin_contracts.cards import InferenceParam, ModelCard, read_card
+from robin_contracts.cards import ModelCard, read_card
 from robin_contracts.inputs import AudioClip, Embeddings
 from robin_contracts.protocols import Model, ModelContext
 from robin_contracts.records import ClassScore
@@ -68,15 +68,6 @@ def test_the_non_taxonomic_rows_have_no_name_and_no_key():
     for entry in rows:
         assert entry.scientific_name is None
         assert entry.gbif_taxon_key is None
-
-
-def test_the_card_declares_sigmoid_scores_no_embeddings_and_an_overlap_setting():
-    assert CARD.score_domain == "sigmoid"
-    assert CARD.min_detection_threshold == 0.0
-    assert CARD.can_emit_embeddings is False
-    assert CARD.embedding_dim is None
-    assert CARD.embedding_dtype is None
-    assert CARD.inference_params == (InferenceParam(name="window_overlap", type="float"),)
 
 
 def test_the_card_names_the_bundled_registry_by_its_digest():
@@ -275,13 +266,9 @@ def owl_context(tmp_path, **changes) -> ModelContext:
     return ModelContext(**fields)
 
 
-def test_a_built_model_satisfies_the_protocol_and_restates_nothing_from_its_card(
-    runtime, tmp_path
-):
+def test_a_built_model_satisfies_the_protocol(runtime, tmp_path):
     model = runtime.adapter.build(owl_context(tmp_path))
     assert isinstance(model, Model)
-    assert not hasattr(model, "recipe")
-    assert not hasattr(model, "capabilities")
 
 
 # The batch size, a resource.

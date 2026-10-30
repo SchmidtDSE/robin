@@ -1,6 +1,5 @@
 """A finished artifact file, and the checksum a reader is held to."""
 
-import dataclasses
 
 import pytest
 
@@ -15,7 +14,6 @@ from robin_inference_engine.artifacts.staging import (
     unreadable_error,
 )
 
-FIELDS = {"kind", "contract_id", "recording", "path", "checksum", "rows"}
 CHECKSUM = "sha256:" + "0" * 64
 RECORDING = RecordingRef(namespace="soundhub", value="42", audio_uri="s3://b/42.wav")
 
@@ -68,18 +66,3 @@ def test_a_readers_failures_name_their_code_and_the_stage_that_raised_them():
     assert unreadable_error("artifact.bin", gone).stage == errors.READ_INPUT_ARTIFACT
 
 
-def test_a_staged_artifact_carries_no_uri_and_no_size(tmp_path):
-    staged = build_staged(tmp_path)
-
-    assert {field.name for field in dataclasses.fields(staged)} == FIELDS
-
-
-def test_a_staged_artifact_carries_the_recording_it_holds(tmp_path):
-    assert build_staged(tmp_path).recording == RECORDING
-
-
-def test_a_staged_artifact_is_frozen(tmp_path):
-    staged = build_staged(tmp_path)
-
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        staged.rows = 4

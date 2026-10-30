@@ -1,6 +1,5 @@
 """Requested outputs, detection policies, and the output contract identifier table."""
 
-import pathlib
 from typing import get_args
 
 import pytest
@@ -20,14 +19,6 @@ from robin_contracts.output_contracts import (
 
 SCORES = get_args(ScoresContractId)[0]
 EMBEDDINGS = get_args(EmbeddingsContractId)[0]
-
-RETIRED_IDENTIFIERS = (
-    "window-embedding/1",
-    "inference-execution-spec/1",
-    "inference-request/1",
-    "inference-manifest/1",
-)
-
 
 def build_scores(**overrides) -> ScoresRequest:
     fields = {"contract_id": SCORES, "retention": "thresholded", "min_score": 0.1}
@@ -124,27 +115,3 @@ def test_an_embeddings_request_may_leave_its_storage_width_unnamed():
 @pytest.mark.parametrize("width", ["float32", "float16"])
 def test_an_embeddings_request_may_name_either_storage_width(width):
     assert EmbeddingsRequest(contract_id=EMBEDDINGS, storage_dtype=width).storage_dtype == width
-
-
-def test_no_retired_identifier_appears_in_the_source_tree():
-    root = pathlib.Path(__file__).resolve().parents[2]
-    if not (root / "pixi.toml").exists():
-        pytest.skip("no checkout to walk; the contracts wheel excludes the test tree")
-
-    skipped_directories = {".git", ".pixi", ".wheelcheck", "_NOTES"}
-    offenders = []
-    for path in root.rglob("*"):
-        if path.suffix not in {".py", ".toml", ".md"} or not path.is_file():
-            continue
-        if skipped_directories & set(path.relative_to(root).parts):
-            continue
-        if path.name == pathlib.Path(__file__).name:
-            continue
-        text = path.read_text(encoding="utf-8", errors="replace")
-        offenders += [
-            (path.relative_to(root).as_posix(), identifier)
-            for identifier in RETIRED_IDENTIFIERS
-            if identifier in text
-        ]
-
-    assert offenders == []

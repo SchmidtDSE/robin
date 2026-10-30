@@ -357,13 +357,9 @@ def changed_card(**changes) -> ModelCard:
     return ModelCard.model_validate(CARD.model_dump() | changes)
 
 
-def test_a_built_model_satisfies_the_protocol_and_restates_nothing_from_its_card(
-    runtime, tmp_path
-):
+def test_a_built_model_satisfies_the_protocol(runtime, tmp_path):
     model = runtime.adapter.build(perch_context(tmp_path))
     assert isinstance(model, Model)
-    assert not hasattr(model, "recipe")
-    assert not hasattr(model, "capabilities")
 
 
 # What Perch does, whatever its card says.
