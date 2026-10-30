@@ -120,30 +120,30 @@ jobs:
           - { os: ubuntu-latest,    python: "3.13", shape: meta-birdnet-perch }
           - { os: ubuntu-latest,    python: "3.13", shape: meta-onnx-head }
           # macOS arm64 — contracts / inference-engine / run-manager / meta-all / models / meta-owl / meta-birdnet-perch / meta-onnx-head.
-          - { os: macos-14,         python: "3.11", shape: contracts }
-          - { os: macos-14,         python: "3.11", shape: inference-engine }
-          - { os: macos-14,         python: "3.11", shape: run-manager }
-          - { os: macos-14,         python: "3.11", shape: meta-all }
-          - { os: macos-14,         python: "3.11", shape: models }
-          - { os: macos-14,         python: "3.11", shape: meta-owl }
-          - { os: macos-14,         python: "3.11", shape: meta-birdnet-perch }
-          - { os: macos-14,         python: "3.11", shape: meta-onnx-head }
-          - { os: macos-14,         python: "3.12", shape: contracts }
-          - { os: macos-14,         python: "3.12", shape: inference-engine }
-          - { os: macos-14,         python: "3.12", shape: run-manager }
-          - { os: macos-14,         python: "3.12", shape: meta-all }
-          - { os: macos-14,         python: "3.12", shape: models }
-          - { os: macos-14,         python: "3.12", shape: meta-owl }
-          - { os: macos-14,         python: "3.12", shape: meta-birdnet-perch }
-          - { os: macos-14,         python: "3.12", shape: meta-onnx-head }
-          - { os: macos-14,         python: "3.13", shape: contracts }
-          - { os: macos-14,         python: "3.13", shape: inference-engine }
-          - { os: macos-14,         python: "3.13", shape: run-manager }
-          - { os: macos-14,         python: "3.13", shape: meta-all }
-          - { os: macos-14,         python: "3.13", shape: models }
-          - { os: macos-14,         python: "3.13", shape: meta-owl }
-          - { os: macos-14,         python: "3.13", shape: meta-birdnet-perch }
-          - { os: macos-14,         python: "3.13", shape: meta-onnx-head }
+          - { os: macos-15,         python: "3.11", shape: contracts }
+          - { os: macos-15,         python: "3.11", shape: inference-engine }
+          - { os: macos-15,         python: "3.11", shape: run-manager }
+          - { os: macos-15,         python: "3.11", shape: meta-all }
+          - { os: macos-15,         python: "3.11", shape: models }
+          - { os: macos-15,         python: "3.11", shape: meta-owl }
+          - { os: macos-15,         python: "3.11", shape: meta-birdnet-perch }
+          - { os: macos-15,         python: "3.11", shape: meta-onnx-head }
+          - { os: macos-15,         python: "3.12", shape: contracts }
+          - { os: macos-15,         python: "3.12", shape: inference-engine }
+          - { os: macos-15,         python: "3.12", shape: run-manager }
+          - { os: macos-15,         python: "3.12", shape: meta-all }
+          - { os: macos-15,         python: "3.12", shape: models }
+          - { os: macos-15,         python: "3.12", shape: meta-owl }
+          - { os: macos-15,         python: "3.12", shape: meta-birdnet-perch }
+          - { os: macos-15,         python: "3.12", shape: meta-onnx-head }
+          - { os: macos-15,         python: "3.13", shape: contracts }
+          - { os: macos-15,         python: "3.13", shape: inference-engine }
+          - { os: macos-15,         python: "3.13", shape: run-manager }
+          - { os: macos-15,         python: "3.13", shape: meta-all }
+          - { os: macos-15,         python: "3.13", shape: models }
+          - { os: macos-15,         python: "3.13", shape: meta-owl }
+          - { os: macos-15,         python: "3.13", shape: meta-birdnet-perch }
+          - { os: macos-15,         python: "3.13", shape: meta-onnx-head }
           # Linux arm64 — contracts / inference-engine only.
           - { os: ubuntu-24.04-arm, python: "3.11", shape: contracts }
           - { os: ubuntu-24.04-arm, python: "3.11", shape: inference-engine }
