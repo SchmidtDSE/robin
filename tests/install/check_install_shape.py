@@ -126,7 +126,7 @@ _register(
     required=("robin_run_manager", "robin_run_manager.reconcile", "robin_contracts",
               "robin_models", "robin_models.output_versions",
               "robin_adapters", "robin_adapters.compute.local.adapter",
-              "robin_adapters.storage.local", "robin_adapters.storage.location"),
+              "robin_adapters.storage.local.adapter", "robin_adapters.storage.location"),
     runtimes=("psycopg", "boto3", "ondio", "soundfile"),
 )
 _register(
@@ -171,7 +171,9 @@ _register(
         "robin_adapters.compute.local.adapter",
         # A setup class must load without the packages of its adapter, such as boto3.
         "robin_adapters.compute.aws_batch.settings",
-        "robin_adapters.storage.local",
+        "robin_adapters.storage.local.adapter",
+        # A storage settings class must load without ondio.
+        "robin_adapters.storage.object_store.settings",
         "robin_contracts",
     ),
 )
@@ -180,8 +182,8 @@ _register(
     install=("robin-adapters[ondio]",),
     required=(
         "robin_adapters",
-        "robin_adapters.storage.local",
-        "robin_adapters.storage.ondio",
+        "robin_adapters.storage.local.adapter",
+        "robin_adapters.storage.object_store.adapter",
         "robin_adapters.storage.location",
         "robin_contracts",
     ),

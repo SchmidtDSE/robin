@@ -22,8 +22,8 @@ import soundfile
 
 import robin_models.perch
 from robin_models import _audio_windows as audio_windows
-from robin_adapters.storage.local import LocalArtifactWriter
-from robin_adapters.storage.local import LocalFileProvider
+from robin_adapters.storage.local.adapter import LocalArtifactWriter
+from robin_adapters.storage.local.adapter import LocalFileProvider
 from robin_contracts.cards import ModelCard, model_ref, read_card
 from robin_contracts.inputs import AudioClip, Embeddings
 from robin_contracts.layout import artifact_path

@@ -10,8 +10,8 @@ location.
 from pathlib import Path
 
 import ondio
-from robin_adapters.storage.local import LocalArtifactWriter, LocalFileProvider
-from robin_adapters.storage.ondio import OndioArtifactWriter, OndioFileProvider
+from robin_adapters.storage.local.adapter import LocalArtifactWriter, LocalFileProvider
+from robin_adapters.storage.object_store.adapter import ObjectStoreArtifactWriter, ObjectStoreFileProvider
 from robin_adapters.storage.location import LOCAL_STORE, split_location
 from robin_contracts.local_files import get_local_path
 from robin_contracts.ports.storage import ArtifactWriter, FileProvider
@@ -52,7 +52,7 @@ def create(uri: str, data: bytes) -> None:
 def artifact_writer(output_root: str) -> ArtifactWriter:
     if _is_local(output_root):
         return LocalArtifactWriter(get_local_path(output_root))
-    return OndioArtifactWriter(_check_supported(output_root))
+    return ObjectStoreArtifactWriter(_check_supported(output_root))
 
 
 class TaskFiles:
@@ -65,7 +65,7 @@ class TaskFiles:
     def __init__(self, scratch: Path) -> None:
         self._scratch = scratch
         self._local = LocalFileProvider()
-        self._remote: OndioFileProvider | None = None
+        self._remote: ObjectStoreFileProvider | None = None
         self._held: dict[Path, tuple[FileProvider, int]] = {}
 
     def fetch(self, uri: str) -> Path:
@@ -88,7 +88,7 @@ class TaskFiles:
             return self._local
         _check_supported(uri)
         if self._remote is None:
-            self._remote = OndioFileProvider(self._scratch)
+            self._remote = ObjectStoreFileProvider(self._scratch)
         return self._remote
 
 

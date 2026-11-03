@@ -28,3 +28,8 @@ COMPOSITION_ROOT_ALLOWED = frozenset({"robin_contracts", "robin_adapters"})
 COMPUTE_SETUPS = "robin_run_manager.compute_setups"
 COMPUTE_SETUPS_ALLOWED = frozenset({"robin_contracts"})
 COMPUTE_SETTINGS_MODULE = r"robin_adapters\.compute\.[a-z0-9_]+\.settings"
+
+# The same for storage: it joins the settings class of each storage backend.
+STORAGE_SETTINGS = "robin_run_manager.storage_settings"
+STORAGE_SETTINGS_ALLOWED = frozenset({"robin_contracts"})
+STORAGE_SETTINGS_MODULE = r"robin_adapters\.storage\.[a-z0-9_]+\.settings"

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from robin_adapters.storage.local import LocalTaskStorage
+from robin_adapters.storage.local.adapter import LocalTaskStorage
 from robin_adapters.storage.location import split_location
 from robin_contracts.canonical import checksum_bytes
 from robin_contracts.local_files import get_local_path

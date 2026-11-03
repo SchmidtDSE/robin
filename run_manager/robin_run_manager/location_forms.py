@@ -10,6 +10,7 @@ from typing import Any
 
 from robin_contracts.local_files import get_local_path
 from robin_contracts.ports.compute import LocationForm
+from robin_contracts.ports.storage import is_s3_uri
 from robin_models.registration import is_bundled_location
 from robin_run_manager.compute_setups import SETUP_CLASSES
 
@@ -37,12 +38,6 @@ def get_unsupported_locations(
             shown = tuple(_FORM_TEXT[form] for form in accepted)
             unsupported.append({"role": role, "location": location, "accepted_forms": shown})
     return unsupported
-
-
-def is_s3_uri(location: str) -> bool:
-    """Whether `location` is an `s3://` URI that names a bucket."""
-    bucket, _, _ = location.removeprefix("s3://").partition("/")
-    return location.startswith("s3://") and bucket != ""
 
 
 def _get_form(location: str) -> LocationForm | None:

@@ -14,7 +14,7 @@ import boto3
 import ondio
 import pytest
 from robin_adapters.compute.local.adapter import LocalCompute
-from robin_adapters.storage.ondio import OndioTaskStorage
+from robin_adapters.storage.object_store.adapter import ObjectStoreTaskStorage
 from robin_contracts.tasks import InferenceTaskResult, ModelOutputVersion
 from robin_contracts.work import REGISTRY_ROLE, PinnedFile, PinnedModel
 from robin_run_manager.compose import compose
@@ -181,4 +181,4 @@ def test_a_run_on_s3_storage_ends_with_its_result_and_outputs(
         assert ondio.exists(artifact.uri, endpoint_url=endpoint)
     assert len(executions) == 1
     with pytest.raises(FileExistsError):
-        OndioTaskStorage(root, endpoint_url=endpoint).create(result_uri, b"another result")
+        ObjectStoreTaskStorage(root, endpoint_url=endpoint).create(result_uri, b"another result")

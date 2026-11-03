@@ -23,6 +23,9 @@ from .allowed_edges import (
     COMPUTE_SETUPS_ALLOWED,
     FIXED_ALLOWED_ROBIN_IMPORTS,
     FORBIDDEN_PREFIXES,
+    STORAGE_SETTINGS,
+    STORAGE_SETTINGS_ALLOWED,
+    STORAGE_SETTINGS_MODULE,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -74,6 +77,8 @@ def _allowed_robin_prefixes_for(module_name: str) -> set[str] | None:
         return COMPOSITION_ROOT_ALLOWED
     if module_name == COMPUTE_SETUPS:
         return COMPUTE_SETUPS_ALLOWED
+    if module_name == STORAGE_SETTINGS:
+        return STORAGE_SETTINGS_ALLOWED
     for owner, allowed in FIXED_ALLOWED_ROBIN_IMPORTS.items():
         if _prefix_matches(module_name, owner):
             return allowed
@@ -104,6 +109,8 @@ def check_module(module_name: str, imported_names: set[str]) -> list[str]:
         if any(_prefix_matches(imported, edge) for edge in allowed):
             continue
         if module_name == COMPUTE_SETUPS and re.fullmatch(COMPUTE_SETTINGS_MODULE, imported):
+            continue
+        if module_name == STORAGE_SETTINGS and re.fullmatch(STORAGE_SETTINGS_MODULE, imported):
             continue
         violations.append(
             f"{module_name} imports {imported}, outside its allowed edges {sorted(allowed)}"
@@ -328,11 +335,41 @@ def test_compute_setups_importing_an_adapter_module_is_rejected(tmp_path, line):
     assert violations, "compute_setups may import only the settings module of each kind"
 
 
-def test_a_settings_module_imports_only_pydantic_contracts_and_the_standard_library():
+def test_storage_settings_importing_a_settings_module_is_accepted(tmp_path):
+    module = _write_module(
+        tmp_path,
+        "robin_run_manager.storage_settings",
+        [
+            "from robin_adapters.storage.object_store.settings import S3StorageSettings",
+            "import robin_adapters.storage.local.settings",
+            "from robin_contracts.ports.storage import StorageSettings",
+        ],
+    )
+    violations = check_file(module, tmp_path)
+    assert not violations, f"storage_settings may import settings modules: {violations}"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "from robin_adapters.storage.object_store.adapter import ObjectStoreTaskStorage",
+        "from robin_adapters.storage.local import settings",
+        "import robin_adapters.storage.location",
+        "import robin_adapters.compute.local.settings",
+    ],
+)
+def test_storage_settings_importing_an_adapter_module_is_rejected(tmp_path, line):
+    module = _write_module(tmp_path, "robin_run_manager.storage_settings", [line])
+    violations = check_file(module, tmp_path)
+    assert violations, "storage_settings may import only the settings module of each backend"
+
+
+@pytest.mark.parametrize("port", ["compute", "storage"])
+def test_a_settings_module_imports_only_pydantic_contracts_and_the_standard_library(port):
     # Profile load imports every settings module, so a heavy import here, such as
     # boto3, would make every command need it.
-    settings_modules = sorted((REPO_ROOT / "adapters").glob("robin_adapters/compute/*/settings.py"))
-    assert settings_modules, "no compute settings module was found"
+    settings_modules = sorted((REPO_ROOT / "adapters").glob(f"robin_adapters/{port}/*/settings.py"))
+    assert settings_modules, f"no {port} settings module was found"
     for path in settings_modules:
         assert not get_settings_import_problems(path), (path, get_settings_import_problems(path))
 

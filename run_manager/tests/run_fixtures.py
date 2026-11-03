@@ -10,7 +10,7 @@ from pathlib import Path
 from uuid import UUID
 
 from psycopg.types.json import Json, Jsonb
-from robin_adapters.storage.local import LocalTaskStorage
+from robin_adapters.storage.local.adapter import LocalTaskStorage
 from robin_adapters.storage.location import split_location
 from robin_contracts.cards import HeadCard, ModelCard
 from robin_contracts.local_files import get_local_path

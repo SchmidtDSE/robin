@@ -8,7 +8,7 @@ Loading, in `load_profile`:
    variable NAME (`_get_variable`). A variable that is not set stops loading. In the
    catalog section, only `kind` and `code` are resolved now.
 3. `Profile.model_validate` checks every section. The setup classes, `ComputeSettings`,
-   and the storage classes check their own fields, and `Profile` checks that each
+   and the storage settings classes check their own fields, and `Profile` checks that each
    setup's kind can use the storage root. A problem is `invalid_profile`.
 
 A submit, in `get_resolved_settings`, for the model of the configuration:
@@ -40,11 +40,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Literal
-from urllib.parse import unquote, urlsplit
 
 from pydantic import (
-    AfterValidator,
-    AnyHttpUrl,
     BaseModel,
     ConfigDict,
     Field,
@@ -57,10 +54,8 @@ from pydantic import (
 )
 
 from robin_contracts.cards import HeadCard, ModelCard, model_ref
-from robin_contracts.local_files import get_local_path
 from robin_contracts.ports.compute import ComputeRequest, ComputeSetupSettings
 from robin_contracts.protocols import JsonScalar
-from robin_contracts.tasks import get_unsafe_segment
 from robin_contracts.text_formats import InvalidText, load_yaml
 from robin_contracts.work import FiniteScalarMap, NonEmptyText
 from robin_models.registration import get_head_runtime_roles
@@ -71,7 +66,8 @@ from robin_run_manager.errors import (
     Refused,
 )
 from robin_run_manager.compute_setups import ComputeSetup
-from robin_run_manager.location_forms import get_unsupported_locations, is_s3_uri
+from robin_run_manager.storage_settings import Storage
+from robin_run_manager.location_forms import get_unsupported_locations
 from robin_run_manager.operator_files import field_problems
 
 SHARED_FILE = "config.yaml"
@@ -291,68 +287,6 @@ def _get_merged_values(base: Mapping[str, Any], change: Mapping[str, Any]) -> di
     return merged
 
 
-class LocalStorageSettings(_PortSettings):
-    """Robin writes its work files, result files, and outputs under a local `root`."""
-
-    kind: Literal["local"]
-    root: str = Field(min_length=1)
-
-    @field_validator("root")
-    @classmethod
-    def _check_root_form(cls, root: str) -> str:
-        try:
-            get_local_path(root)
-        except ValueError:
-            raise ValueError("give an absolute path or a local file:// URI") from None
-        path = root if root.startswith("/") else unquote(urlsplit(root).path)
-        return _check_root_parts(root, path.removeprefix("/"))
-
-
-def _refuse_url_with_login(url: AnyHttpUrl) -> str:
-    # A run keeps the URL, and Robin keeps no credential. It gives the URL as text,
-    # because the field keeps text.
-    if url.username is not None or url.password is not None:
-        raise ValueError(
-            "give a URL without a user name or password; Robin keeps no credential"
-        )
-    return str(url)
-
-
-# An http or https URL with no user name or password, as text in its normal form, such
-# as `http://host:9000/`.
-HttpUrlWithoutLogin = Annotated[AnyHttpUrl, AfterValidator(_refuse_url_with_login)]
-
-
-class S3StorageSettings(_PortSettings):
-    """Robin writes its work files, result files, and outputs under an S3 `root`."""
-
-    kind: Literal["s3"]
-    root: str = Field(min_length=1)
-    # The S3 service's URL, for a service that is not AWS S3.
-    endpoint: HttpUrlWithoutLogin | None = None
-
-    @field_validator("root")
-    @classmethod
-    def _check_root_form(cls, root: str) -> str:
-        if not is_s3_uri(root):
-            raise ValueError("give an s3:// URI with a bucket")
-        return _check_root_parts(root, root.removeprefix("s3://").partition("/")[2])
-
-
-def _check_root_parts(root: str, path: str) -> str:
-    """Refuse a root whose path in its store has an empty, `.`, or `..` part.
-
-    Storage may clean some of these, but a worker refuses a root that keeps one, and a
-    run keeps its root. So the profile refuses them all.
-    """
-    if get_unsafe_segment(path) is not None:
-        raise ValueError("give a root with no empty, '.', or '..' part")
-    return root
-
-
-StorageSettings = Annotated[LocalStorageSettings | S3StorageSettings, Field(discriminator="kind")]
-
-
 class PreparationSettings(BaseModel):
     """How preparation cuts a run's claimed recordings into tasks."""
 
@@ -371,14 +305,14 @@ class Profile(BaseModel):
     catalog: CatalogSettings | None = None
     compute: ComputeSettings | None = None
     # After `compute`, so that its check can read the compute kind.
-    storage: StorageSettings | None = Field(default=None, validate_default=True)
+    storage: Storage | None = Field(default=None, validate_default=True)
     preparation: PreparationSettings = Field(default_factory=PreparationSettings)
 
     @field_validator("storage")
     @classmethod
     def _check_storage_for_compute(
-        cls, storage: StorageSettings | None, info: ValidationInfo
-    ) -> StorageSettings | None:
+        cls, storage: Storage | None, info: ValidationInfo
+    ) -> Storage | None:
         compute = info.data.get("compute")
         if compute is None:
             return storage
@@ -503,7 +437,7 @@ def get_compute_section(profile: Profile) -> ComputeSettings:
 def _get_declared_fields(settings: BaseModel) -> dict[str, Any]:
     """The fields that the section's class names. For a setup, this leaves out its
     capacity and defaults (`max_in_flight`, `request`, and `resources`) and its
-    `SUBMIT_ONLY_FIELDS`. A storage section's undeclared fields are left out."""
+    `SUBMIT_ONLY_FIELDS`."""
     left_out = set()
     if isinstance(settings, ComputeSetupSettings):
         left_out = {"max_in_flight", "request", "resources", *settings.SUBMIT_ONLY_FIELDS}

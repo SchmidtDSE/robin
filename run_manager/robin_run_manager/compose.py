@@ -95,13 +95,12 @@ def _get_task_storage(profile: Profile) -> dict[str, TaskStorage]:
     if storage is None:
         return {}
     if storage.kind == "local":
-        from robin_adapters.storage.local import LocalTaskStorage
+        from robin_adapters.storage.local.adapter import LocalTaskStorage
 
         return {"local": LocalTaskStorage()}
-    from robin_adapters.storage.ondio import OndioTaskStorage
+    from robin_adapters.storage.object_store.adapter import ObjectStoreTaskStorage
 
-    options = {} if storage.endpoint is None else {"endpoint_url": str(storage.endpoint)}
-    return {"s3": OndioTaskStorage(storage.root, **options)}
+    return {"s3": ObjectStoreTaskStorage(storage.root, **storage.get_backend_options())}
 
 
 def _get_storage_env_vars(task_storage: Mapping[str, TaskStorage]) -> dict[str, str]:
@@ -111,9 +110,9 @@ def _get_storage_env_vars(task_storage: Mapping[str, TaskStorage]) -> dict[str, 
     """
     if "s3" not in task_storage:
         return {}
-    from robin_adapters.storage.ondio import OndioTaskStorage
+    from robin_adapters.storage.object_store.adapter import ObjectStoreTaskStorage
 
-    return cast(OndioTaskStorage, task_storage["s3"]).get_worker_env_vars()
+    return cast(ObjectStoreTaskStorage, task_storage["s3"]).get_worker_env_vars()
 
 
 def _split_location(uri: str) -> tuple[str, str] | None:

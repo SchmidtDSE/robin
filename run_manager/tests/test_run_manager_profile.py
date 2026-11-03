@@ -48,12 +48,12 @@ def shown(refusal: Refused) -> str:
 
 def test_the_environment_file_replaces_whole_sections(tmp_path):
     write(tmp_path, "config.yaml", {"database": DATABASE, "storage": {"kind": "local", "root": "/data"}})
-    write(tmp_path, "dev.yaml", {"storage": {"kind": "s3", "root": "s3://robin/", "region": "x"}})
+    write(tmp_path, "dev.yaml", {"storage": {"kind": "s3", "root": "s3://robin/"}})
 
     profile = load_profile(tmp_path, "dev", ENVIRON)
 
+    assert profile.storage.kind == "s3"
     assert profile.storage.root == "s3://robin/"
-    assert profile.storage.model_extra == {"region": "x"}
     assert profile.database.password.get_secret_value() == SECRET
 
 
@@ -177,16 +177,16 @@ def test_the_profile_shows_no_password_or_adapter_value(tmp_path):
             "setups": {"main": {"kind": "local"}},
             "models": {"owl/v4": {}},
         },
-        "storage": {"kind": "s3", "root": "s3://robin/", "secret_access_key": "${ADAPTER_SECRET}"},
+        "storage": {"kind": "s3", "root": "s3://${ADAPTER_SECRET}/"},
     })
 
-    profile = load_profile(tmp_path, "dev", {**ENVIRON, "ADAPTER_SECRET": ADAPTER_SECRET})
+    profile = load_profile(tmp_path, "dev", {**ENVIRON, "ADAPTER_SECRET": "robin-secret-bucket"})
 
     for text in (repr(profile), str(profile)):
         assert SECRET not in text
-        assert ADAPTER_SECRET not in text
-        assert "secret_access_key" in text
-    assert profile.storage.model_extra == {"secret_access_key": ADAPTER_SECRET}
+        assert "robin-secret-bucket" not in text
+        assert "root" in text
+    assert profile.storage.root == "s3://robin-secret-bucket/"
 
 
 @pytest.mark.parametrize("named", [{"kind": "csv-list"}, {"code": "lab.catalog:build_adapter"}])
@@ -493,6 +493,20 @@ def test_an_unknown_storage_kind_is_refused(tmp_path):
     assert get_problem_fields(invalid(tmp_path)) == ["storage"]
 
 
+@pytest.mark.parametrize(
+    ("storage", "field"),
+    [({"kind": "local", "root": "/data"}, "endpoint"), (S3_STORAGE, "region")],
+    ids=["local-endpoint", "s3-region"],
+)
+def test_storage_refuses_a_field_that_its_kind_does_not_have(tmp_path, storage, field):
+    write(tmp_path, "dev.yaml", {"database": DATABASE, "storage": {**storage, field: ADAPTER_SECRET}})
+
+    refusal = invalid(tmp_path)
+
+    assert get_problem_fields(refusal) == [f"storage.{storage['kind']}.{field}"]
+    assert ADAPTER_SECRET not in shown(refusal)
+
+
 def test_storage_needs_a_root(tmp_path):
     write(tmp_path, "dev.yaml", {"database": DATABASE, "storage": {"kind": "local"}})
 
@@ -613,7 +627,7 @@ def test_get_resolved_settings_freezes_compute_and_storage(tmp_path):
     write(tmp_path, "dev.yaml", {
         "database": DATABASE,
         "compute": make_one_setup_compute(KUBERNETES_SETUP),
-        "storage": {**S3_STORAGE, "root": "s3://lab/${LAB}/", "region": "x"},
+        "storage": {**S3_STORAGE, "root": "s3://lab/${LAB}/"},
     })
     profile = load_profile(tmp_path, "dev", {**ENVIRON, "LAB": "owls"})
 

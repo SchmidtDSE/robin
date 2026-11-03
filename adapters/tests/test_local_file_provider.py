@@ -5,7 +5,7 @@ from urllib.parse import quote
 import pytest
 from robin_contracts.ports.storage import FileProvider
 
-from robin_adapters.storage.local import LocalFileProvider
+from robin_adapters.storage.local.adapter import LocalFileProvider
 
 
 def test_it_has_the_signature_its_port_declares():

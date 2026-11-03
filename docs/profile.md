@@ -15,7 +15,8 @@ Besides `database`, a profile has these sections:
 - `storage` says where Robin writes a run's files, with `kind` and `root`: for
   example `{kind: local, root: /data/robin}`, or `{kind: s3, root: s3://lab/robin/}`.
   For an S3 service that is not AWS S3, `endpoint` gives its `http://` or `https://`
-  URL, with no user name or password. A profile with `compute` needs this section,
+  URL, with no user name or password. A storage section refuses a field that its kind
+  does not have. A profile with `compute` needs this section,
   and `kubernetes` and `aws-batch` compute need `s3` storage. Each run keeps the compute and storage
   settings that it was submitted with.
 - `catalog` (optional) names the adapter that `--selection` asks for recordings:

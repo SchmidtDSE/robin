@@ -8,13 +8,13 @@ import pytest
 from robin_contracts.layout import artifact_path
 from robin_contracts.ports.storage import ArtifactWriter
 
-from robin_adapters.storage import ondio as writer_module
-from robin_adapters.storage.ondio import OndioArtifactWriter
+from robin_adapters.storage.object_store import adapter as writer_module
+from robin_adapters.storage.object_store.adapter import ObjectStoreArtifactWriter
 
 
 def test_it_has_the_signature_its_port_declares():
     declared = inspect.signature(ArtifactWriter.create)
-    supplied = inspect.signature(OndioArtifactWriter.create)
+    supplied = inspect.signature(ObjectStoreArtifactWriter.create)
     assert list(supplied.parameters) == list(declared.parameters)
     for name, parameter in declared.parameters.items():
         assert supplied.parameters[name].kind == parameter.kind, name
@@ -101,7 +101,7 @@ def _temporary_folder(tmp_path, monkeypatch) -> Path:
 def test_a_file_is_published_at_its_recordings_key(s3_bucket, tmp_path, root, prefix):
     source = _staged(tmp_path / "staging")
 
-    record = _create(OndioArtifactWriter(root.format(bucket=s3_bucket)), source)
+    record = _create(ObjectStoreArtifactWriter(root.format(bucket=s3_bucket)), source)
 
     key = _key(prefix)
     assert _stored(s3_bucket, key) == DATA
@@ -119,7 +119,7 @@ def test_an_encoded_recording_is_stored_under_its_encoded_key(s3_bucket, tmp_pat
     namespace, value = "a:b/c", "x/y=z %w"
 
     record = _create(
-        OndioArtifactWriter(f"s3://{s3_bucket}"),
+        ObjectStoreArtifactWriter(f"s3://{s3_bucket}"),
         _staged(tmp_path / "staging"),
         namespace=namespace,
         value=value,
@@ -131,7 +131,7 @@ def test_an_encoded_recording_is_stored_under_its_encoded_key(s3_bucket, tmp_pat
 
 
 def test_an_encoded_prefix_in_the_root_is_kept(s3_bucket, tmp_path):
-    _create(OndioArtifactWriter(f"s3://{s3_bucket}/run%2F1"), _staged(tmp_path / "staging"))
+    _create(ObjectStoreArtifactWriter(f"s3://{s3_bucket}/run%2F1"), _staged(tmp_path / "staging"))
 
     keys = _keys(s3_bucket)
     assert keys == [_key("run%2F1/")]
@@ -142,7 +142,7 @@ def test_the_upload_is_given_the_sources_path(s3_bucket, tmp_path, monkeypatch):
     calls = _upload_spy(monkeypatch)
     source = _staged(tmp_path / "staging")
 
-    _create(OndioArtifactWriter(f"s3://{s3_bucket}"), source)
+    _create(ObjectStoreArtifactWriter(f"s3://{s3_bucket}"), source)
 
     assert len(calls) == 1
     given = calls[0][1]
@@ -159,14 +159,14 @@ def test_a_wrong_checksum_is_refused_and_publishes_nothing(s3_bucket, tmp_path):
     source = _staged(tmp_path / "staging")
 
     with pytest.raises(ValueError):
-        _create(OndioArtifactWriter(f"s3://{s3_bucket}"), source, checksum=_checksum(OTHER))
+        _create(ObjectStoreArtifactWriter(f"s3://{s3_bucket}"), source, checksum=_checksum(OTHER))
 
     assert _keys(s3_bucket) == []
 
 
 def test_the_same_bytes_again_succeed_without_a_second_upload(s3_bucket, tmp_path, monkeypatch):
     calls = _upload_spy(monkeypatch)
-    writer = OndioArtifactWriter(f"s3://{s3_bucket}")
+    writer = ObjectStoreArtifactWriter(f"s3://{s3_bucket}")
     first = _create(writer, _staged(tmp_path / "staging"))
 
     second = _create(writer, _staged(tmp_path / "staging"))
@@ -176,7 +176,7 @@ def test_the_same_bytes_again_succeed_without_a_second_upload(s3_bucket, tmp_pat
 
 
 def test_different_bytes_at_the_key_are_refused(s3_bucket, tmp_path):
-    writer = OndioArtifactWriter(f"s3://{s3_bucket}")
+    writer = ObjectStoreArtifactWriter(f"s3://{s3_bucket}")
     first = _create(writer, _staged(tmp_path / "staging"))
 
     with pytest.raises(FileExistsError) as refused:
@@ -212,7 +212,7 @@ def _checksum_failing_under(folder: Path):
 @pytest.mark.parametrize("case", ["same bytes", "different bytes", "download fails", "hash fails"])
 def test_the_downloaded_copy_is_removed(s3_bucket, tmp_path, monkeypatch, case):
     folder = _temporary_folder(tmp_path, monkeypatch)
-    writer = OndioArtifactWriter(f"s3://{s3_bucket}")
+    writer = ObjectStoreArtifactWriter(f"s3://{s3_bucket}")
     _create(writer, _staged(tmp_path / "staging"))
     calls = _upload_spy(monkeypatch)
 
@@ -268,14 +268,14 @@ def test_a_root_it_cannot_publish_under_is_refused(monkeypatch, root):
         monkeypatch.setattr(writer_module.ondio, name, _must_not_be_called)
 
     with pytest.raises(ValueError) as refused:
-        OndioArtifactWriter(root)
+        ObjectStoreArtifactWriter(root)
 
     assert root in str(refused.value)
 
 
 @pytest.mark.parametrize("root", ["s3://b", "s3://b/runs/one", "s3://b/runs/one/", "S3://b"])
 def test_an_s3_root_is_accepted(root):
-    OndioArtifactWriter(root)
+    ObjectStoreArtifactWriter(root)
 
 
 # ---------------------------------------------------------------------------
@@ -301,7 +301,7 @@ def test_backend_options_reach_every_ondio_call(tmp_path, monkeypatch):
 
     for name, double in (("exists", exists), ("download", download), ("upload", upload)):
         monkeypatch.setattr(writer_module.ondio, name, double)
-    writer = OndioArtifactWriter("s3://b", profile_name="x", region_name="y")
+    writer = ObjectStoreArtifactWriter("s3://b", profile_name="x", region_name="y")
 
     _create(writer, _staged(tmp_path / "staging"))
     with pytest.raises(FileExistsError):

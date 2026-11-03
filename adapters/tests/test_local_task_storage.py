@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from robin_adapters.storage.local import LocalTaskStorage
+from robin_adapters.storage.local.adapter import LocalTaskStorage
 
 
 def test_create_makes_the_folders_and_writes_the_bytes(tmp_path):

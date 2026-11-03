@@ -1,7 +1,7 @@
 import ondio
 import pytest
-from robin_adapters.storage.local import LocalArtifactWriter
-from robin_adapters.storage.ondio import OndioArtifactWriter
+from robin_adapters.storage.local.adapter import LocalArtifactWriter
+from robin_adapters.storage.object_store.adapter import ObjectStoreArtifactWriter
 
 from robin_worker import storage
 from robin_models import registration
@@ -86,7 +86,7 @@ def test_a_local_root_gets_the_local_writer(tmp_path):
 
 
 def test_an_s3_root_gets_the_ondio_writer():
-    assert isinstance(storage.artifact_writer("s3://bucket/outputs"), OndioArtifactWriter)
+    assert isinstance(storage.artifact_writer("s3://bucket/outputs"), ObjectStoreArtifactWriter)
 
 
 @pytest.mark.parametrize("root", ["example://bucket/x", "s3://bucket/a?b"])

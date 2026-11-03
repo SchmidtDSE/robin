@@ -4,7 +4,7 @@ import uuid
 
 import pytest
 
-from robin_adapters.storage.local import LocalTaskStorage
+from robin_adapters.storage.local.adapter import LocalTaskStorage
 from robin_adapters.storage.location import split_location
 from robin_contracts.ports.compute import ComputeStatus
 from robin_contracts.results import FailureReport, InferenceFailure

@@ -6,6 +6,8 @@ not import each other, so the protocols are defined here, in the package both im
 Each port has its own module, such as `robin_contracts.ports.storage`.
 
 Robin's own implementations live in `robin_adapters`, in one subpackage for each port
-and one module for each backend, such as `robin_adapters.storage.local`.
+and one folder for each backend, such as `robin_adapters.storage.local`. A backend's
+`settings` module holds the class that checks its section of the profile, and its
+`adapter` module holds the adapter.
 A new port follows the same pattern.
 """

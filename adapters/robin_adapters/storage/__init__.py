@@ -1,1 +1,1 @@
-"""Storage adapters, one module for each backend."""
+"""Storage adapters, one folder for each backend."""

@@ -2,7 +2,7 @@ import pytest
 from robin_contracts.canonical import checksum_file
 from robin_contracts.layout import artifact_path
 
-from robin_adapters.storage.local import LocalArtifactWriter
+from robin_adapters.storage.local.adapter import LocalArtifactWriter
 from robin_adapters.storage.location import split_location
 
 

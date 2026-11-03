@@ -1,5 +1,5 @@
-"""Storage adapters for S3, through ondio: `OndioFileProvider`, `OndioArtifactWriter`,
-and `OndioTaskStorage`."""
+"""Storage adapters for an object store, such as S3: `ObjectStoreFileProvider`,
+`ObjectStoreArtifactWriter`, and `ObjectStoreTaskStorage`. They work through ondio."""
 
 import shutil
 import tempfile
@@ -17,7 +17,7 @@ from robin_contracts.tasks import output_root_problem
 from robin_adapters.storage.location import LOCAL_STORE, split_location
 
 
-class OndioFileProvider:
+class ObjectStoreFileProvider:
     """Downloads the object at a URI into a new folder under `directory`.
 
     `release` deletes the file and its folder. Every ondio call receives
@@ -53,7 +53,7 @@ class OndioFileProvider:
         shutil.rmtree(path.parent)
 
 
-class OndioArtifactWriter:
+class ObjectStoreArtifactWriter:
     """Publishes each file under an `s3://` root, at the path that `artifact_path` gives.
 
     Two writers that store one file at the same time are not refused: the upload that
@@ -105,7 +105,7 @@ class OndioArtifactWriter:
             )
 
 
-class OndioTaskStorage:
+class ObjectStoreTaskStorage:
     """Writes and reads task files under `root`, such as `work.json`, through ondio.
 
     It builds one ondio backend for `root`, with `backend_options`, on the first
@@ -121,7 +121,7 @@ class OndioTaskStorage:
 
     def __repr__(self) -> str:
         # The options can hold an endpoint or a credential, so they are not shown.
-        return f"OndioTaskStorage({self._root!r})"
+        return f"ObjectStoreTaskStorage({self._root!r})"
 
     def create(self, uri: str, data: bytes) -> None:
         try:

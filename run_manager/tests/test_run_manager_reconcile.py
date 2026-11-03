@@ -10,7 +10,7 @@ from pathlib import Path
 import psycopg
 import pytest
 
-from robin_adapters.storage.local import LocalTaskStorage
+from robin_adapters.storage.local.adapter import LocalTaskStorage
 from robin_adapters.storage.location import split_location
 from robin_contracts.local_files import get_local_path
 from robin_contracts.ports.compute import ComputeStatus
@@ -681,7 +681,7 @@ def test_compose_gives_s3_task_storage_and_the_worker_environment_of_its_endpoin
     database_settings,
 ):
     import ondio
-    from robin_adapters.storage.ondio import OndioTaskStorage
+    from robin_adapters.storage.object_store.adapter import ObjectStoreTaskStorage
 
     profile = Profile.model_validate({
         "database": database_settings,
@@ -692,7 +692,7 @@ def test_compose_gives_s3_task_storage_and_the_worker_environment_of_its_endpoin
     services = compose(profile)
     try:
         assert list(services.task_storage) == ["s3"]
-        assert isinstance(services.task_storage["s3"], OndioTaskStorage)
+        assert isinstance(services.task_storage["s3"], ObjectStoreTaskStorage)
         assert services.storage_env_vars == ondio.get_environment(
             S3_ROOT, endpoint_url=str(profile.storage.endpoint)
         )
@@ -780,11 +780,11 @@ def submit_with_profile(database, profile, configuration=OWL_CONFIGURATION, valu
 
 
 def get_aws_batch_services(database, profile, compute) -> Services:
-    from robin_adapters.storage.ondio import OndioTaskStorage
+    from robin_adapters.storage.object_store.adapter import ObjectStoreTaskStorage
 
     return Services(
         profile=profile, database=database, compute={"aws-batch": compute},
-        task_storage={"s3": OndioTaskStorage(S3_ROOT)}, split_location=split_location,
+        task_storage={"s3": ObjectStoreTaskStorage(S3_ROOT)}, split_location=split_location,
     )
 
 
