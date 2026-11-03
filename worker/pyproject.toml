@@ -14,7 +14,7 @@ dependencies = [
   "robin-inference-engine >=0.0,<0.1",
   "robin-adapters[ondio] >=0.0,<0.1",
   "robin-models >=0.0,<0.1",
-  "ondio>=0.2.4,<0.3",
+  "ondio>=0.6,<0.7",
 ]
 
 [project.scripts]

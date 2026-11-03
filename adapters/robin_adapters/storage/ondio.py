@@ -1,4 +1,5 @@
-"""Storage adapters for S3, through ondio: `OndioFileProvider` and `OndioArtifactWriter`."""
+"""Storage adapters for S3, through ondio: `OndioFileProvider`, `OndioArtifactWriter`,
+and `OndioTaskStorage`."""
 
 import shutil
 import tempfile
@@ -7,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import ondio
+from ondio.backends import StorageBackend
 from robin_contracts.canonical import checksum_file
 from robin_contracts.layout import artifact_path
 from robin_contracts.results import ArtifactContractId, ArtifactKind, ArtifactRecord
@@ -101,6 +103,41 @@ class OndioArtifactWriter:
             raise FileExistsError(
                 f"{uri} already holds {existing}; refusing to publish {checksum} there"
             )
+
+
+class OndioTaskStorage:
+    """Writes and reads task files under `root`, such as `work.json`, through ondio.
+
+    It builds one ondio backend for `root`, with `backend_options`, on the first
+    `create` or `read`, and uses it for every call after that. Building it later, not
+    here, means a command that never reads a task file needs no storage credentials.
+    """
+
+    def __init__(self, root: str, **backend_options: Any) -> None:
+        self._root = root
+        self._backend_options = backend_options
+        self._backend: StorageBackend | None = None
+
+    def __repr__(self) -> str:
+        # The options can hold an endpoint or a credential, so they are not shown.
+        return f"OndioTaskStorage({self._root!r})"
+
+    def create(self, uri: str, data: bytes) -> None:
+        try:
+            ondio.create(uri, data, backend=self._get_backend())
+        except ondio.ObjectExistsError as exc:
+            raise FileExistsError(f"{uri} already exists") from exc
+
+    def read(self, uri: str) -> bytes | None:
+        try:
+            return ondio.read(uri, backend=self._get_backend())
+        except ondio.ObjectNotFoundError:
+            return None
+
+    def _get_backend(self) -> StorageBackend:
+        if self._backend is None:
+            self._backend = ondio.get_backend(self._root, **self._backend_options)
+        return self._backend
 
 
 def _check_output_root(root: str) -> str:
