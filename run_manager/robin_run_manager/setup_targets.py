@@ -57,8 +57,8 @@ def refuse_conflicting_setup_target(
     if row is not None:
         raise NotConfigured(
             f"Setup {setup} has runs with work that were submitted with other compute or "
-            "storage settings. Give the new settings a new setup name, or let the earlier "
-            f"runs of {setup} finish first. Setup names are shared by every profile that "
-            "uses this database.",
+            "storage settings. Keep a setup with the earlier settings under the name "
+            f"{setup} until its runs end, and give the new settings a new setup name. "
+            "Setup names are shared by every profile that uses this database.",
             details={"setup": setup},
         )

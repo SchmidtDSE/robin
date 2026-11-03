@@ -390,6 +390,21 @@ def test_submit_to_a_setup_with_a_changed_target_stores_no_run(registered):
     ]
 
 
+def test_the_changed_target_refusal_says_to_keep_the_earlier_setup(registered):
+    # With the changed settings under the same name, no pass acts on the earlier runs,
+    # so they cannot finish. With the old name removed, no pass touches them. The way
+    # out is to keep the earlier settings under the old name until its runs end.
+    submit_configuration(registered, make_recording_manifest(), CPU_TARGET_A)
+
+    with pytest.raises(NotConfigured) as raised:
+        submit_configuration(registered, make_recording_manifest(), CPU_TARGET_B)
+
+    message = raised.value.message
+    assert "Keep a setup with the earlier settings under the name cpu until its runs end" in message
+    assert "new setup name" in message
+    assert "finish first" not in message
+
+
 def wait_for_a_setup_lock_wait(database) -> None:
     """Return when a backend waits for a setup lock. Fail after 5 s."""
     deadline = time.monotonic() + 5

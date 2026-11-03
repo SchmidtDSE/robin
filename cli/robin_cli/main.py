@@ -517,8 +517,8 @@ If the model's merged request breaks the rules of its setup's kind, such as a GP
 Setup names are shared by every profile that uses the database. If a run of the
 model's setup name still has work and was submitted with another compute kind (or
 namespace, or job queue) or another storage section, Robin refuses the submit with
-not_configured, and stores nothing. Give the new settings a new setup name, or
-let the earlier runs finish first.
+not_configured, and stores nothing. Keep a setup with the earlier settings under
+that name until its runs end, and give the new settings a new setup name.
 
 Each audio location, and each file of the configuration's model, must have a form
 that the compute kind of the model's setup can read:
@@ -686,7 +686,8 @@ A setup whose kind this version cannot run, such as kubernetes, is a failure of
 step setup, and the pass goes on with the other setups. So is a setup whose name
 has runs with work that were submitted with another kind (or namespace, or job
 queue) or another storage section, of any user: the pass does none of that setup's
-steps. If the profile has no compute section, or no setup of a kind that this
+steps, so those runs do not go on until the profile has their settings under that
+name again. If the profile has no compute section, or no setup of a kind that this
 version can run (local or aws-batch), the command stops with not_configured (exit
 code 2).
 

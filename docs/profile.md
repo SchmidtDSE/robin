@@ -90,8 +90,14 @@ database. While runs of a setup name have work, that name keeps its compute kind
 `namespace` or `job_queue`) and its
 `storage` section: a submit with other values is refused with `not_configured`, and
 `robin reconcile` reports that setup as a failure of step `setup`. Give names that
-say where the setup runs, such as `aws-cpu` or `nrp-gpu`, and give a new name when any
-of these values change.
+say where the setup runs, such as `aws-cpu` or `nrp-gpu`.
+
+To change any of these values, keep the setup with its earlier values under its name
+until its runs end, and add a setup with a new name for the new values. Do not change
+the values under the same name, and do not remove the name: in both cases no
+`robin reconcile` pass acts on the earlier runs again, so they never end. If that
+happens, put the earlier values back under the name, and the next pass goes on with
+them.
 
 `max_in_flight` counts the tasks of every user whose runs were submitted with the
 same setup name. Local compute does not enforce `request`: a local worker can

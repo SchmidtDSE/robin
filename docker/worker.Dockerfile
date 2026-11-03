@@ -12,11 +12,15 @@ FROM python:3.13-slim
 # other dependency here, for this image's platform and Python.
 COPY .worker-image/dist/ /tmp/robin-wheels/
 
-RUN pip install --no-cache-dir --find-links /tmp/robin-wheels \
-        robin-worker \
-        robin-inference-engine \
-        "robin-adapters[ondio]" \
-        "robin-models[owl]" \
+# Each Robin package is given as its wheel file, never by name. A package given as a
+# file has only that file as its candidate, also where another package requires it, so
+# a package of the same name on PyPI cannot replace it.
+RUN pip install --no-cache-dir \
+        /tmp/robin-wheels/robin_contracts-*.whl \
+        /tmp/robin-wheels/robin_inference_engine-*.whl \
+        /tmp/robin-wheels/robin_worker-*.whl \
+        "$(ls /tmp/robin-wheels/robin_adapters-*.whl)[ondio]" \
+        "$(ls /tmp/robin-wheels/robin_models-*.whl)[owl]" \
     && pip check \
     && rm -rf /tmp/robin-wheels
 
