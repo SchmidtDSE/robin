@@ -17,3 +17,5 @@ dependencies = [
 
 [project.optional-dependencies]
 ondio = ["ondio>=0.6,<0.7"]
+# The aws-batch compute adapter calls AWS Batch through boto3.
+aws-batch = ["boto3>=1.35,<2"]

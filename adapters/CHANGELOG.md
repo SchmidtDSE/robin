@@ -10,6 +10,13 @@
   its section of the profile, names its target fields and the location forms it
   accepts, and checks a new run's request. A `settings` module imports only pydantic and
   `robin_contracts`, so a profile loads without an adapter's packages.
+- `robin_adapters.compute.aws_batch.adapter`, the `aws-batch` compute adapter, with the
+  `aws-batch` extra (boto3). `AwsBatchCompute` runs each task as one AWS Batch job named
+  for the task, with one attempt, the task's request as resource overrides, its
+  deadline as the job timeout, and the tags `robin-run` and `robin-setup`. Before it
+  submits, it looks for a job of the task's name, and returns that job if there is one.
+  `describe` counts every job of the task's name. A refusal by Batch
+  (`ClientException`) is `SubmissionRejected`.
 - `robin_adapters.compute.local.adapter`, the `local` compute adapter. `LocalCompute` runs
   `robin-worker run <work URI>` as a detached process in a new session, with its output
   in `worker.log` in the task folder. It starts at most one worker for each task, and

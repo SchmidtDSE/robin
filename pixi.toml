@@ -22,7 +22,7 @@ robin-bioacoustics = { path = "robin", editable = true }
 robin-models = { path = "models", editable = true }
 scipy = ">=1.17.1,<2"
 soundfile = ">=0.13.1,<0.14"
-moto = { version = ">=5.2.3,<5.3", extras = ["s3"] }
+moto = { version = ">=5.2.3,<5.3", extras = ["s3", "batch"] }
 
 [feature.local.pypi-dependencies]
 robin-contracts = { path = "contracts", editable = true }

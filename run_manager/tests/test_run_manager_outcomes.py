@@ -126,6 +126,33 @@ def test_update_gives_the_compute_adapter_the_storage_environment(registered, ro
     assert (method, task.storage_env_vars) == ("describe", {"EXAMPLE_VARIABLE": "x"})
 
 
+def test_the_compute_task_carries_its_run_and_setup(registered, root):
+    # Release builds its compute task with the same function as describe.
+    task_id, compute = add_submitted_task(registered, root)
+    compute.calls.clear()
+
+    update_task(registered, task_id, compute)
+
+    [task] = compute.get_calls("describe")
+    assert (task.run_id, task.setup) == (get_task(registered, task_id)["run_id"], "local")
+
+
+def test_a_running_task_whose_job_record_is_gone_and_has_a_result_is_recorded(registered, root):
+    # The compute service can forget an ended execution before a pass sees it end.
+    task_id, compute = add_submitted_task(registered, root)
+    assert update_task(registered, task_id, compute) == "running"
+    work_file = get_work_file(registered, task_id)
+    write_task_result(work_file, build_task_result(work_file, build_completed(work_file)))
+    del compute.executions[task_id]
+
+    assert update_task(registered, task_id, compute) == "finalizing"
+    assert store_outcome(registered, task_id) == "recorded"
+
+    assert (get_task(registered, task_id)["state"], get_task(registered, task_id)["failure"]) == (
+        "succeeded", None,
+    )
+
+
 def test_a_started_execution_makes_the_task_running(registered, root):
     task_id, compute = add_submitted_task(registered, root)
 

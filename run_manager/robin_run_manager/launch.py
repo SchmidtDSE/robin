@@ -554,7 +554,8 @@ def _get_submission(
     Raises `WorkFileConflict` if the rebuilt work file is not the one reserved.
     """
     row = connection.execute(
-        "SELECT t.work_file_digest, t.compute_request, t.compute_ref, r.execution_settings "
+        "SELECT t.run_id, t.work_file_digest, t.compute_request, t.compute_ref, "
+        "r.execution_settings "
         "FROM tasks t JOIN runs r USING (run_id) "
         "WHERE t.task_id = %(task_id)s AND t.state = 'submitting' "
         f"AND {MATCHES_SETUP_WITH_SUPPORTED_STORAGE}",
@@ -565,6 +566,8 @@ def _get_submission(
     work_file = build_reserved_work_file(connection, task_id, row["work_file_digest"])
     compute_task = ComputeTask(
         task_id=task_id,
+        run_id=row["run_id"],
+        setup=row["execution_settings"]["setup"],
         work_uri=work_file.work_uri,
         settings=row["execution_settings"]["compute"],
         request=ComputeRequest.model_validate(row["compute_request"]),

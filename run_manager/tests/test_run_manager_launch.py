@@ -385,6 +385,17 @@ def test_submit_gives_the_compute_adapter_the_storage_environment(
     ]
 
 
+def test_the_compute_task_carries_its_run_and_setup(registered, make_profile, root):
+    run_id, [task_id] = add_queued_tasks(registered, ["a"], root=root)
+    reserve(registered, make_profile())
+    compute = ScriptedCompute()
+
+    submit_task(registered, task_id, compute)
+
+    assert [name for name, _ in compute.calls] == ["describe", "submit"]
+    assert {(task.run_id, task.setup) for _, task in compute.calls} == {(run_id, "local")}
+
+
 def test_the_reservation_stores_the_digest_of_the_work_file(registered, make_profile, root):
     _, [task_id] = add_queued_tasks(registered, ["a"], root=root)
     reserve(registered, make_profile())

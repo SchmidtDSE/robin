@@ -98,6 +98,8 @@ def make_task(tmp_path, state_folder):
         folders.append(folder)
         return ComputeTask(
             task_id=task_id,
+            run_id=uuid4(),
+            setup="local",
             work_uri=work_uri,
             settings={"kind": "local"},
             request=ComputeRequest(),

@@ -222,7 +222,8 @@ def _get_task_to_update(
     """The state of a `submitted` or `running` task of this setup, and the task as the
     compute adapter gets it. None for any other task."""
     row = connection.execute(
-        "SELECT t.state, t.compute_ref, t.work_uri, t.compute_request, r.execution_settings "
+        "SELECT t.state, t.run_id, t.compute_ref, t.work_uri, t.compute_request, "
+        "r.execution_settings "
         "FROM tasks t JOIN runs r USING (run_id) "
         "WHERE t.task_id = %(task_id)s AND t.state IN ('submitted', 'running') "
         f"AND {MATCHES_SETUP_WITH_SUPPORTED_STORAGE}",
@@ -262,7 +263,8 @@ def _get_task_to_release(
     """The task as the compute adapter gets it, if it is a task of this setup that ended,
     was reserved, and is not released. None for any other task."""
     row = connection.execute(
-        "SELECT t.compute_ref, t.work_uri, t.compute_request, r.execution_settings "
+        "SELECT t.run_id, t.compute_ref, t.work_uri, t.compute_request, "
+        "r.execution_settings "
         "FROM tasks t JOIN runs r USING (run_id) "
         "WHERE t.task_id = %(task_id)s AND t.state = ANY(%(states)s) "
         "AND t.reserved_at IS NOT NULL AND t.released_at IS NULL "
@@ -286,6 +288,8 @@ def _get_compute_task(
 ) -> ComputeTask:
     return ComputeTask(
         task_id=task_id,
+        run_id=row["run_id"],
+        setup=row["execution_settings"]["setup"],
         work_uri=row["work_uri"],
         settings=row["execution_settings"]["compute"],
         request=ComputeRequest.model_validate(row["compute_request"]),

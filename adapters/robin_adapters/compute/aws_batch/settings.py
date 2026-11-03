@@ -89,3 +89,11 @@ class AwsBatchSetup(ComputeSetupSettings):
                 raise ValueError(f"max_request names {name}, so the request must give {name}")
             if int(value) > int(most):
                 raise ValueError(f"request.requests.{name} is more than max_request.{name}")
+
+
+def get_job_queue_region(job_queue: str) -> str:
+    """Returns the region of a job queue ARN. Raises `ValueError` if it is not one."""
+    match = _JOB_QUEUE_ARN.fullmatch(job_queue)
+    if match is None:
+        raise ValueError("the job queue is not a job queue ARN")
+    return match["region"]

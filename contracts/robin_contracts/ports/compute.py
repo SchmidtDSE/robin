@@ -102,9 +102,15 @@ class ComputeTask(BaseModel, frozen=True):
     `storage_env_vars` holds the environment variables that the worker needs to reach
     the storage, such as an S3 endpoint. The adapter adds them to the worker's
     environment.
+
+    `run_id` and `setup` (the setup name) are for tags and labels, so that a compute
+    service's cost reports can split cost by run and by setup. An adapter finds an
+    execution by `task_id`, never by these.
     """
 
     task_id: UUID
+    run_id: UUID
+    setup: NonEmptyText
     work_uri: NonEmptyText
     settings: Mapping[str, JsonValue]
     request: ComputeRequest
