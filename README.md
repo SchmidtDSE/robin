@@ -32,6 +32,7 @@ robin --help
 - [Local development](docs/local-development.md): the local database, a full local run, and the tests.
 - [The `robin` command](docs/commands.md): each command and what it does.
 - [The profile](docs/profile.md): the database, compute, storage, and catalog sections.
+- [AWS Batch](docs/aws-batch.md): what to make in AWS, the worker image, and job definition revisions.
 
 ## License
 

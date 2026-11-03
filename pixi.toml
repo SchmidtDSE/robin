@@ -61,6 +61,19 @@ test-run-manager = "pytest run_manager/tests -v"
 test-cli = "pytest cli/tests -v"
 test = { cmd = "pytest contracts/tests inference_engine/tests adapters/tests models/tests worker/tests run_manager/tests cli/tests tests/boundary -v", description = "All tests. The run manager and CLI tests start PostgreSQL in Docker, so Docker must be running." }
 
+[tasks.worker-image]
+description = "Build the worker image robin-worker:dev for linux/amd64. Docker must be running."
+cmd = """
+rm -rf .worker-image &&
+mkdir -p .worker-image/dist &&
+python -m build --wheel --outdir .worker-image/dist contracts &&
+python -m build --wheel --outdir .worker-image/dist inference_engine &&
+python -m build --wheel --outdir .worker-image/dist models &&
+python -m build --wheel --outdir .worker-image/dist adapters &&
+python -m build --wheel --outdir .worker-image/dist worker &&
+docker build --platform linux/amd64 -f docker/worker.Dockerfile -t robin-worker:dev .
+"""
+
 [tasks.wheels]
 cmd = """
 rm -rf .wheelcheck &&

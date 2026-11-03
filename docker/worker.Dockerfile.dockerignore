@@ -1,0 +1,4 @@
+# The worker image needs only Robin's wheels. Leaving out the rest keeps the build
+# context small, and keeps local files, such as .env, out of the image.
+*
+!.worker-image/dist/
