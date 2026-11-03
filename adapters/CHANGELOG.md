@@ -4,7 +4,13 @@
 
 ### Added
 
-- `robin_adapters.compute.local`, the `local` compute adapter. `LocalCompute` runs
+- One folder for each compute kind in `robin_adapters.compute`: `local`, `kubernetes`,
+  and `aws_batch`. Each has a `settings` module with the kind's setup class, on the base
+  class `ComputeSetupSettings` of `robin_contracts.ports.compute`. A setup class checks
+  its section of the profile, names its target fields and the location forms it
+  accepts, and checks a new run's request. A `settings` module imports only pydantic and
+  `robin_contracts`, so a profile loads without an adapter's packages.
+- `robin_adapters.compute.local.adapter`, the `local` compute adapter. `LocalCompute` runs
   `robin-worker run <work URI>` as a detached process in a new session, with its output
   in `worker.log` in the task folder. It starts at most one worker for each task, and
   finds a running worker again in the process table, also from a later process. A task

@@ -174,7 +174,7 @@ def test_the_profile_shows_no_password_or_adapter_value(tmp_path):
     write(tmp_path, "dev.yaml", {
         "database": DATABASE,
         "compute": {
-            "setups": {"main": {"kind": "local", "api_key": "${ADAPTER_SECRET}"}},
+            "setups": {"main": {"kind": "local"}},
             "models": {"owl/v4": {}},
         },
         "storage": {"kind": "s3", "root": "s3://robin/", "secret_access_key": "${ADAPTER_SECRET}"},
@@ -186,7 +186,6 @@ def test_the_profile_shows_no_password_or_adapter_value(tmp_path):
         assert SECRET not in text
         assert ADAPTER_SECRET not in text
         assert "secret_access_key" in text
-        assert "api_key" in text
     assert profile.storage.model_extra == {"secret_access_key": ADAPTER_SECRET}
 
 
@@ -461,15 +460,6 @@ def test_kubernetes_needs_its_two_fields(tmp_path, missing):
     assert get_problem_fields(refusal) == [f"compute.setups.main.kubernetes.{missing}"]
 
 
-def test_kubernetes_refuses_s3_endpoint_and_points_to_storage_endpoint(tmp_path):
-    write_compute(tmp_path, make_one_setup_compute({**KUBERNETES_SETUP, "s3_endpoint": "https://s3.example"}))
-
-    refusal = invalid(tmp_path)
-
-    assert get_problem_fields(refusal) == ["compute.setups.main.kubernetes"]
-    assert "storage.endpoint" in refusal.message
-
-
 @pytest.mark.parametrize("storage", [LOCAL_STORAGE, {"kind": "local", "root": "file:///data"}])
 def test_kubernetes_refuses_a_storage_root_that_is_not_s3(tmp_path, storage):
     write_compute(tmp_path, make_one_setup_compute(KUBERNETES_SETUP), storage)
@@ -622,7 +612,7 @@ def test_the_storage_repr_shows_no_endpoint(tmp_path):
 def test_get_resolved_settings_freezes_compute_and_storage(tmp_path):
     write(tmp_path, "dev.yaml", {
         "database": DATABASE,
-        "compute": make_one_setup_compute({**KUBERNETES_SETUP, "image": "robin:1"}),
+        "compute": make_one_setup_compute(KUBERNETES_SETUP),
         "storage": {**S3_STORAGE, "root": "s3://lab/${LAB}/", "region": "x"},
     })
     profile = load_profile(tmp_path, "dev", {**ENVIRON, "LAB": "owls"})
@@ -944,14 +934,24 @@ def refused_at_submit(profile) -> Refused:
     return raised.value
 
 
-@pytest.mark.parametrize("setup", [LOCAL_SETUP, KUBERNETES_SETUP], ids=["local", "kubernetes"])
-def test_local_and_kubernetes_setups_refuse_max_request(tmp_path, setup):
-    write_compute(tmp_path, make_one_setup_compute({**setup, "max_request": {"MEMORY": "1"}}))
+@pytest.mark.parametrize(
+    ("setup", "field"),
+    [
+        (LOCAL_SETUP, "job_queue"),
+        (KUBERNETES_SETUP, "max_request"),
+        (KUBERNETES_SETUP, "s3_endpoint"),
+        (AWS_BATCH_SETUP, "namespace"),
+    ],
+    ids=["local-job_queue", "kubernetes-max_request", "kubernetes-s3_endpoint",
+         "aws-batch-namespace"],
+)
+def test_a_setup_refuses_a_field_that_its_kind_does_not_have(tmp_path, setup, field):
+    write_compute(tmp_path, make_one_setup_compute({**setup, field: ADAPTER_SECRET}))
 
     refusal = invalid(tmp_path)
 
-    assert get_problem_fields(refusal) == [f"compute.setups.main.{setup['kind']}"]
-    assert "aws-batch" in refusal.message
+    assert get_problem_fields(refusal) == [f"compute.setups.main.{setup['kind']}.{field}"]
+    assert ADAPTER_SECRET not in shown(refusal)
 
 
 @pytest.mark.parametrize(

@@ -1,36 +1,24 @@
-"""The location forms that each compute kind can read, for each role of a location.
+"""The check that each location has a form that a compute kind can read, for its role.
 
-The roles are `recording`, `model_file`, `embeddings`, and `storage_root`. The check
-looks at the form of a location only, not at whether the file exists or can be read.
+Each compute kind's setup class gives the forms that it accepts (`ACCEPTED_FORMS`).
+This module finds the form of a location. The check looks at the form only, not at
+whether the file exists or can be read.
 """
 
 from collections.abc import Iterable
 from typing import Any
 
 from robin_contracts.local_files import get_local_path
+from robin_contracts.ports.compute import LocationForm
 from robin_models.registration import is_bundled_location
+from robin_run_manager.compute_setups import SETUP_CLASSES
 
-_LOCAL = "absolute path"
-_FILE = "file://"
-_S3 = "s3://"
-_BUNDLED = "robin-models:"
-
-# A bundled location names only a model's registry, so only `model_file` accepts it.
-_S3_ONLY = {
-    "recording": (_S3,),
-    "model_file": (_S3, _BUNDLED),
-    "embeddings": (_S3,),
-    "storage_root": (_S3,),
-}
-_ACCEPTED_FORMS = {
-    "local": {
-        "recording": (_LOCAL, _FILE, _S3),
-        "model_file": (_LOCAL, _FILE, _S3, _BUNDLED),
-        "embeddings": (_LOCAL, _FILE, _S3),
-        "storage_root": (_LOCAL, _FILE, _S3),
-    },
-    "kubernetes": _S3_ONLY,
-    "aws-batch": _S3_ONLY,
+# The text that a refusal shows for each form.
+_FORM_TEXT = {
+    "path": "absolute path",
+    "file": "file://",
+    "s3": "s3://",
+    "bundled": "robin-models:",
 }
 
 
@@ -42,26 +30,28 @@ def get_unsupported_locations(
     Each entry has `role`, `location`, and `accepted_forms`, in the order of `locations`.
     """
     unsupported = []
+    accepted_forms = SETUP_CLASSES[compute_kind].ACCEPTED_FORMS
     for role, location in locations:
-        accepted = _ACCEPTED_FORMS[compute_kind][role]
+        accepted = accepted_forms[role]
         if _get_form(location) not in accepted:
-            unsupported.append({"role": role, "location": location, "accepted_forms": accepted})
+            shown = tuple(_FORM_TEXT[form] for form in accepted)
+            unsupported.append({"role": role, "location": location, "accepted_forms": shown})
     return unsupported
 
 
 def is_s3_uri(location: str) -> bool:
     """Whether `location` is an `s3://` URI that names a bucket."""
-    bucket, _, _ = location.removeprefix(_S3).partition("/")
-    return location.startswith(_S3) and bucket != ""
+    bucket, _, _ = location.removeprefix("s3://").partition("/")
+    return location.startswith("s3://") and bucket != ""
 
 
-def _get_form(location: str) -> str | None:
+def _get_form(location: str) -> LocationForm | None:
     if is_s3_uri(location):
-        return _S3
+        return "s3"
     if is_bundled_location(location):
-        return _BUNDLED
+        return "bundled"
     try:
         get_local_path(location)
     except ValueError:
         return None
-    return _FILE if location.startswith(_FILE) else _LOCAL
+    return "file" if location.startswith("file://") else "path"

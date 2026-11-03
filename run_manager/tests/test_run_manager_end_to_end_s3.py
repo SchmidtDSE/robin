@@ -13,7 +13,7 @@ from functools import partial
 import boto3
 import ondio
 import pytest
-from robin_adapters.compute.local import LocalCompute
+from robin_adapters.compute.local.adapter import LocalCompute
 from robin_adapters.storage.ondio import OndioTaskStorage
 from robin_contracts.tasks import InferenceTaskResult, ModelOutputVersion
 from robin_contracts.work import REGISTRY_ROLE, PinnedFile, PinnedModel

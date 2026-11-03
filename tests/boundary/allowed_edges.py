@@ -22,3 +22,9 @@ FIXED_ALLOWED_ROBIN_IMPORTS = {
 # The composition root is the one run-manager module that may import adapters.
 COMPOSITION_ROOT = "robin_run_manager.compose"
 COMPOSITION_ROOT_ALLOWED = frozenset({"robin_contracts", "robin_adapters"})
+
+# The one other run-manager module that may import from adapters: it joins the setup
+# class of each compute kind, and may import only each kind's settings module.
+COMPUTE_SETUPS = "robin_run_manager.compute_setups"
+COMPUTE_SETUPS_ALLOWED = frozenset({"robin_contracts"})
+COMPUTE_SETTINGS_MODULE = r"robin_adapters\.compute\.[a-z0-9_]+\.settings"

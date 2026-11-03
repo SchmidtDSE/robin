@@ -3,7 +3,7 @@ the execution kept."""
 
 import pytest
 
-from robin_adapters.compute.local import LocalCompute
+from robin_adapters.compute.local.adapter import LocalCompute
 from robin_adapters.storage.local import LocalTaskStorage
 from robin_adapters.storage.location import split_location
 from robin_contracts.local_files import get_local_path

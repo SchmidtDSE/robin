@@ -9,6 +9,8 @@ each imported name against the allowed-edges table in ``allowed_edges``.
 from __future__ import annotations
 
 import ast
+import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -16,6 +18,9 @@ import pytest
 from .allowed_edges import (
     COMPOSITION_ROOT,
     COMPOSITION_ROOT_ALLOWED,
+    COMPUTE_SETTINGS_MODULE,
+    COMPUTE_SETUPS,
+    COMPUTE_SETUPS_ALLOWED,
     FIXED_ALLOWED_ROBIN_IMPORTS,
     FORBIDDEN_PREFIXES,
 )
@@ -67,6 +72,8 @@ def _allowed_robin_prefixes_for(module_name: str) -> set[str] | None:
     """robin_* prefixes module_name may import, or None if unconstrained."""
     if _prefix_matches(module_name, COMPOSITION_ROOT):
         return COMPOSITION_ROOT_ALLOWED
+    if module_name == COMPUTE_SETUPS:
+        return COMPUTE_SETUPS_ALLOWED
     for owner, allowed in FIXED_ALLOWED_ROBIN_IMPORTS.items():
         if _prefix_matches(module_name, owner):
             return allowed
@@ -95,6 +102,8 @@ def check_module(module_name: str, imported_names: set[str]) -> list[str]:
         if _prefix_matches(imported, own_package):
             continue
         if any(_prefix_matches(imported, edge) for edge in allowed):
+            continue
+        if module_name == COMPUTE_SETUPS and re.fullmatch(COMPUTE_SETTINGS_MODULE, imported):
             continue
         violations.append(
             f"{module_name} imports {imported}, outside its allowed edges {sorted(allowed)}"
@@ -289,3 +298,70 @@ def test_models_importing_contracts_is_accepted(tmp_path):
 def test_real_package_tree_has_no_boundary_violations(package_root):
     violations = check_tree(package_root)
     assert not violations, violations
+
+
+def test_compute_setups_importing_a_settings_module_is_accepted(tmp_path):
+    module = _write_module(
+        tmp_path,
+        "robin_run_manager.compute_setups",
+        [
+            "from robin_adapters.compute.aws_batch.settings import AwsBatchSetup",
+            "import robin_adapters.compute.local.settings",
+            "from robin_contracts.ports.compute import ComputeSetupSettings",
+        ],
+    )
+    violations = check_file(module, tmp_path)
+    assert not violations, f"compute_setups may import settings modules: {violations}"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "from robin_adapters.compute.local.adapter import LocalCompute",
+        "from robin_adapters.compute.local import settings",
+        "import robin_adapters.storage.location",
+    ],
+)
+def test_compute_setups_importing_an_adapter_module_is_rejected(tmp_path, line):
+    module = _write_module(tmp_path, "robin_run_manager.compute_setups", [line])
+    violations = check_file(module, tmp_path)
+    assert violations, "compute_setups may import only the settings module of each kind"
+
+
+def test_a_settings_module_imports_only_pydantic_contracts_and_the_standard_library():
+    # Profile load imports every settings module, so a heavy import here, such as
+    # boto3, would make every command need it.
+    settings_modules = sorted((REPO_ROOT / "adapters").glob("robin_adapters/compute/*/settings.py"))
+    assert settings_modules, "no compute settings module was found"
+    for path in settings_modules:
+        assert not get_settings_import_problems(path), (path, get_settings_import_problems(path))
+
+
+SETTINGS_ALLOWED_TOP_LEVELS = frozenset(sys.stdlib_module_names) | {"pydantic", "robin_contracts"}
+
+
+def get_settings_import_problems(path: Path) -> list[str]:
+    """Each import of the module that is not the standard library, pydantic, or
+    robin_contracts. A relative import is a problem too."""
+    problems = []
+    for node in ast.walk(ast.parse(path.read_text(), filename=str(path))):
+        if isinstance(node, ast.ImportFrom) and node.level:
+            problems.append(f"relative import from {node.module}")
+            continue
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            names = [node.module or ""]
+        else:
+            continue
+        problems.extend(
+            name for name in names if name.split(".")[0] not in SETTINGS_ALLOWED_TOP_LEVELS
+        )
+    return problems
+
+
+def test_the_settings_import_check_finds_a_heavy_import(tmp_path):
+    path = tmp_path / "settings.py"
+    path.write_text("import boto3\nfrom .adapter import X\nimport json\nfrom pydantic import Field\n")
+
+    assert get_settings_import_problems(path) == ["boto3", "relative import from adapter"]

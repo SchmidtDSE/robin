@@ -6,11 +6,12 @@ Besides `database`, a profile has these sections:
 
 - `compute` says where runs execute. It has named `setups` and the `models` that runs
   can use. Each setup has a `kind`: `local`, `kubernetes` with `namespace` and
-  `s3_secret_name`, or `aws-batch` with `job_queue` and `job_definition`. `runs
-  submit` needs this section, and checks that the compute kind of the model's setup
-  can read each recording's location. `robin reconcile` needs a setup of `kind:
-  local`; this version cannot run tasks on Kubernetes or AWS Batch, and a pass reports
-  a `kubernetes` or `aws-batch` setup as a failure of step `setup`.
+  `s3_secret_name`, or `aws-batch` with `job_queue` and `job_definition`. A setup
+  refuses a field that its kind does not have. `runs submit` needs this section, and
+  checks that the compute kind of the model's setup can read each recording's
+  location. `robin reconcile` needs a setup of `kind: local`; this version cannot run
+  tasks on Kubernetes or AWS Batch, and a pass reports a `kubernetes` or `aws-batch`
+  setup as a failure of step `setup`.
 - `storage` says where Robin writes a run's files, with `kind` and `root`: for
   example `{kind: local, root: /data/robin}`, or `{kind: s3, root: s3://lab/robin/}`.
   For an S3 service that is not AWS S3, `endpoint` gives its `http://` or `https://`

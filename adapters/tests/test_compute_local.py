@@ -12,7 +12,7 @@ from uuid import uuid4
 import pytest
 from robin_contracts.ports.compute import ComputeRequest, ComputeTask, SubmissionRejected
 
-from robin_adapters.compute.local import LocalCompute, get_state_folder
+from robin_adapters.compute.local.adapter import LocalCompute, get_state_folder
 
 # Stands in for `robin-worker`. It writes a marker that holds its arguments and a file
 # that holds the variables of its environment whose names start with `ROBIN_TEST_` or
@@ -227,7 +227,7 @@ def _submit_from_another_process(script, task, mode="wait"):
         f"""
         import sys
         from robin_contracts.ports.compute import ComputeTask
-        from robin_adapters.compute.local import LocalCompute, get_state_folder
+        from robin_adapters.compute.local.adapter import LocalCompute, get_state_folder
 
         task = ComputeTask.model_validate_json({task.model_dump_json()!r})
         compute = LocalCompute(

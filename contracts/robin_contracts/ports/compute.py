@@ -17,15 +17,26 @@ The run manager gives each call a `ComputeTask`. An adapter promises this:
 
 Robin reports an exception that is not `SubmissionRejected` by its type only, because its
 text can hold a credential.
+
+Each compute kind also has a setup class, a `ComputeSetupSettings`, which checks its
+section of the profile.
 """
 
 from collections.abc import Mapping
-from typing import Annotated, Literal, Protocol
+from typing import Annotated, ClassVar, Literal, Protocol
 from uuid import UUID
 
-from pydantic import BaseModel, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from robin_contracts.work import NonEmptyText
+from robin_contracts.work import FiniteScalarMap, NonEmptyText
+
+# What a location is for: an audio file, a file of the model, an embeddings file, or the
+# storage root of a run.
+LocationRole = Literal["recording", "model_file", "embeddings", "storage_root"]
+
+# The form of a location: an absolute path, a `file://` URI, an `s3://` URI, or a
+# `robin-models:` location of a built-in model's file.
+LocationForm = Literal["path", "file", "s3", "bundled"]
 
 
 class ComputeRequest(BaseModel, frozen=True, extra="forbid"):
@@ -38,6 +49,47 @@ class ComputeRequest(BaseModel, frozen=True, extra="forbid"):
     requests: Mapping[NonEmptyText, NonEmptyText] = {}
     limits: Mapping[NonEmptyText, NonEmptyText] = {}
     active_deadline_seconds: Annotated[int, Field(strict=True, ge=1)] | None = None
+
+
+class ComputeSetupSettings(BaseModel):
+    """One named compute setup in the profile: where its tasks run, its capacity, and
+    its defaults. Each compute kind has a subclass, which names its own fields.
+
+    `max_in_flight` is the most tasks of this setup name that run at the same time, for
+    every user of the database. `request` is what each task asks of the compute
+    service. `resources` goes into each work file for the worker's code. A model entry
+    can change `request` and `resources` key by key. A field that the kind does not
+    have is refused.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    # The fields that say where the setup's tasks run. The storage section is also part
+    # of the place.
+    TARGET_FIELDS: ClassVar[tuple[str, ...]]
+    # The forms of location that the kind's tasks can read, for each role.
+    ACCEPTED_FORMS: ClassVar[Mapping[LocationRole, tuple[LocationForm, ...]]]
+    # The declared fields that only the checks at submit use. A run does not keep them.
+    SUBMIT_ONLY_FIELDS: ClassVar[tuple[str, ...]] = ()
+
+    kind: str
+    max_in_flight: int = Field(default=10, ge=1)
+    request: ComputeRequest = ComputeRequest()
+    resources: FiniteScalarMap = {}
+
+    def __repr_args__(self):
+        # Any field other than `kind` can hold a value that must not be shown, such as an
+        # account number, so only the field names are shown.
+        yield "kind", self.kind
+        yield "fields", sorted(set(type(self).model_fields) - {"kind"})
+
+    def check_new_run(self, request: ComputeRequest) -> None:
+        """Raises `ValueError` if a new run cannot use this setup with `request`, the
+        merged request of its model.
+
+        Profile load does not make these checks, so that a bad model entry stops only
+        the submits of that model. The message names the field, never its value.
+        """
 
 
 class ComputeTask(BaseModel, frozen=True):

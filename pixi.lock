@@ -1648,6 +1648,7 @@ packages:
   name: robin-adapters
   requires_dist:
   - robin-contracts>=0.0,<0.1
+  - pydantic>=2.12,<3
   - ondio>=0.6,<0.7 ; extra == 'ondio'
   requires_python: '>=3.11'
 - pypi: cli

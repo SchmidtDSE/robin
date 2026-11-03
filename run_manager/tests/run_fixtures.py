@@ -32,7 +32,8 @@ from robin_run_manager.launch import get_setup_query_parameters, reserve_tasks, 
 from robin_run_manager.models import register_model
 from robin_run_manager.outcomes import update_task_from_compute
 from robin_run_manager.preparation import prepare_run
-from robin_run_manager.profile import KubernetesSetup, LocalSetup, Profile, ResolvedSettings
+from robin_run_manager.compute_setups import SETUP_CLASSES
+from robin_run_manager.profile import Profile, ResolvedSettings
 from robin_run_manager.recording_inputs import RecordingManifest
 from robin_run_manager.submit import submit_run
 from robin_run_manager.task_files import WorkFile, build_work_file
@@ -62,7 +63,6 @@ KUBERNETES_SETTINGS = {
     "request": NO_REQUEST,
     "resources": {},
 }
-_TARGET_FIELDS = {"local": LocalSetup.TARGET_FIELDS, "kubernetes": KubernetesSetup.TARGET_FIELDS}
 
 
 def get_fixed_settings(settings) -> Callable[[ModelCard | HeadCard], ResolvedSettings]:
@@ -70,7 +70,9 @@ def get_fixed_settings(settings) -> Callable[[ModelCard | HeadCard], ResolvedSet
     compute = settings["compute"]
     resolved = ResolvedSettings(
         setup=settings["setup"],
-        target_compute={name: compute[name] for name in _TARGET_FIELDS[compute["kind"]]},
+        target_compute={
+            name: compute[name] for name in SETUP_CLASSES[compute["kind"]].TARGET_FIELDS
+        },
         storage=settings["storage"],
         execution_settings=settings,
     )

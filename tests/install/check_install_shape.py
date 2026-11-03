@@ -125,7 +125,7 @@ _register(
     install=("robin-run-manager",),
     required=("robin_run_manager", "robin_run_manager.reconcile", "robin_contracts",
               "robin_models", "robin_models.output_versions",
-              "robin_adapters", "robin_adapters.compute.local",
+              "robin_adapters", "robin_adapters.compute.local.adapter",
               "robin_adapters.storage.local", "robin_adapters.storage.location"),
     runtimes=("psycopg", "boto3", "ondio", "soundfile"),
 )
@@ -167,7 +167,9 @@ _register(
         "robin_adapters",
         "robin_adapters.catalog.csv_list",
         "robin_adapters.catalog.folder_layout",
-        "robin_adapters.compute.local",
+        "robin_adapters.compute.local.adapter",
+        # A setup class must load without the packages of its adapter, such as boto3.
+        "robin_adapters.compute.aws_batch.settings",
         "robin_adapters.storage.local",
         "robin_contracts",
     ),

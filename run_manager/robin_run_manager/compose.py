@@ -55,7 +55,7 @@ def _get_compute(profile: Profile) -> dict[str, ComputeAdapter]:
         return {}
     if "local" not in {setup.kind for setup in profile.compute.setups.values()}:
         return {}
-    from robin_adapters.compute.local import LocalCompute
+    from robin_adapters.compute.local.adapter import LocalCompute
 
     return {"local": LocalCompute()}
 

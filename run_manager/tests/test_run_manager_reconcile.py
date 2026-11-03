@@ -27,9 +27,9 @@ from robin_run_manager.errors import (
 )
 from robin_run_manager.launch import reserve_tasks
 from robin_run_manager.preparation import get_runs_to_prepare, prepare_run
+from robin_adapters.compute.kubernetes.settings import KubernetesSetup
+from robin_adapters.compute.local.settings import LocalSetup
 from robin_run_manager.profile import (
-    KubernetesSetup,
-    LocalSetup,
     Profile,
     get_resolved_settings,
 )
@@ -654,7 +654,7 @@ def test_compose_gives_no_compute_for_kubernetes(database_settings):
 
 
 def test_compose_gives_local_compute_and_task_storage(database_settings, tmp_path):
-    from robin_adapters.compute.local import LocalCompute
+    from robin_adapters.compute.local.adapter import LocalCompute
 
     profile = Profile.model_validate({
         "database": database_settings,
