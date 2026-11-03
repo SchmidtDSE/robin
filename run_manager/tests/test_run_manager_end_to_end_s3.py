@@ -7,10 +7,8 @@ can give the test model's output version to both the run manager and the worker.
 import dataclasses
 import hashlib
 import time
-import uuid
 from functools import partial
 
-import boto3
 import ondio
 import pytest
 from robin_adapters.compute.local.adapter import LocalCompute
@@ -54,27 +52,6 @@ outputs:
 """
 _RUN_TIMEOUT_S = 60
 _TERMINAL_STATES = ("succeeded", "failed")
-
-
-@pytest.fixture
-def bucket(s3_server, monkeypatch, tmp_path):
-    """A new, empty bucket on the S3 server.
-
-    The run manager and the worker get the server's keys from the environment, and no
-    AWS file or endpoint of the developer's own. The endpoint is not in the
-    environment: it must reach the worker through the profile.
-    """
-    monkeypatch.setattr(boto3, "DEFAULT_SESSION", None)
-    monkeypatch.setenv("AWS_ACCESS_KEY_ID", s3_server["access_key"])
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", s3_server["secret_key"])
-    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
-    monkeypatch.setenv("AWS_CONFIG_FILE", str(tmp_path / "absent-aws-config"))
-    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(tmp_path / "absent-aws-credentials"))
-    for name in ("AWS_SESSION_TOKEN", "AWS_PROFILE", "AWS_ENDPOINT_URL", "AWS_ENDPOINT_URL_S3"):
-        monkeypatch.delenv(name, raising=False)
-    name = f"robin-test-{uuid.uuid4().hex[:12]}"
-    boto3.client("s3", endpoint_url=s3_server["endpoint"]).create_bucket(Bucket=name)
-    return name
 
 
 def put_object(endpoint: str, uri: str, data: bytes) -> None:

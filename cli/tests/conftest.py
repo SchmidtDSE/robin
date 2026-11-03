@@ -5,6 +5,7 @@ from robin_run_manager import migrations
 
 from cli_doubles import PASSWORD_VARIABLE, Ran, write_profile
 from postgres_fixtures import *  # noqa: F403
+from s3_fixtures import *  # noqa: F403
 
 
 @pytest.fixture

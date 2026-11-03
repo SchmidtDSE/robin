@@ -87,9 +87,13 @@ def whoami(context: Context, arguments) -> Output:
 def register_model(context: Context, arguments) -> Output:
     if arguments.card is not None:
         card = models.read_card_file(arguments.card)
-        model = models.prepare_model(card, dict(arguments.files))
+        model = models.prepare_model(
+            card, dict(arguments.files), remote_files=context.services.remote_files
+        )
     else:
-        model = models.prepare_built_in_model(arguments.model, dict(arguments.files))
+        model = models.prepare_built_in_model(
+            arguments.model, dict(arguments.files), remote_files=context.services.remote_files
+        )
 
     registered_model = models.register_model(context.services.database, model, actor=context.actor)
     data = {

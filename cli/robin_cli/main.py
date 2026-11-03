@@ -328,13 +328,16 @@ ships, stored as robin-models:MODEL/taxa_registry.csv, unless --file
 taxa_registry=LOCATION gives another copy. A model given with --card takes its
 registry only with --file.
 
-A head is given with --card. A LOCATION is a path or a file:/// URI. A relative
-path is taken from the current folder, and Robin stores the absolute path. Files on
-S3 cannot be registered yet.
+A head is given with --card. A LOCATION is a path, a file:/// URI, or an s3:// URI.
+A relative path is taken from the current folder, and Robin stores the absolute path.
+Robin reads a file on S3 with your AWS login, at the profile's storage endpoint when
+the storage is S3, and stores the URI as given. For a setup that runs on AWS Batch
+or Kubernetes, give each file on S3.
 
-Example:
+Examples:
 
   robin models register owl/v4 --file weights=.model_assets/owl/v4/weights.h5
+  robin models register owl/v4 --file weights=s3://lab-models/owl/v4/weights.h5
 """
 
 

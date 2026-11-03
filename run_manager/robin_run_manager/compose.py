@@ -7,12 +7,14 @@ a command that only reads does not load the storage libraries.
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import cast
 
 from robin_contracts.ports.compute import ComputeAdapter
-from robin_contracts.ports.storage import TaskStorage
+from robin_contracts.ports.storage import FileProvider, TaskStorage
 from robin_contracts.tasks import SplitLocation
 from robin_run_manager.database import Database, open_database
+from robin_run_manager.models import RemoteFiles
 from robin_run_manager.profile import Profile
 
 
@@ -26,7 +28,8 @@ class Services:
     `split_location` is the location rule of the storage that the worker writes with.
     `storage_env_vars` holds the environment variables that the worker needs to reach
     that storage, such as an S3 endpoint. The run manager copies them into each task
-    that it gives a compute adapter.
+    that it gives a compute adapter. `remote_files` reads a model's files on S3 at
+    registration, at the storage endpoint when the profile has S3 storage.
     """
 
     profile: Profile
@@ -35,6 +38,7 @@ class Services:
     task_storage: Mapping[str, TaskStorage] = field(default_factory=dict)
     split_location: SplitLocation | None = None
     storage_env_vars: Mapping[str, str] = field(default_factory=dict)
+    remote_files: RemoteFiles | None = None
 
 
 def compose(profile: Profile) -> Services:
@@ -46,6 +50,7 @@ def compose(profile: Profile) -> Services:
         task_storage=task_storage,
         split_location=_split_location,
         storage_env_vars=_get_storage_env_vars(task_storage),
+        remote_files=_get_remote_files(profile),
     )
 
 
@@ -113,6 +118,22 @@ def _get_storage_env_vars(task_storage: Mapping[str, TaskStorage]) -> dict[str, 
     from robin_adapters.storage.object_store.adapter import ObjectStoreTaskStorage
 
     return cast(ObjectStoreTaskStorage, task_storage["s3"]).get_worker_env_vars()
+
+
+def _get_remote_files(profile: Profile) -> RemoteFiles:
+    """Returns the factory of the file provider that reads a model's files on S3.
+
+    It uses the storage section's endpoint, if any. It loads ondio only when it is
+    first called.
+    """
+    options = {} if profile.storage is None else profile.storage.get_backend_options()
+
+    def get_remote_files(directory: Path) -> FileProvider:
+        from robin_adapters.storage.object_store.adapter import ObjectStoreFileProvider
+
+        return ObjectStoreFileProvider(directory, **options)
+
+    return get_remote_files
 
 
 def _split_location(uri: str) -> tuple[str, str] | None:

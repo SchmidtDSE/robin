@@ -1,19 +1,20 @@
-"""A fixture for the tests that need a real S3 server: RustFS in Docker.
+"""Fixtures for the tests that need a real S3 server: RustFS in Docker.
 
 `conftest.py` imports this module. The server starts only for a test that uses
-`s3_server`, and one server serves every such test in the session. Without Docker
+`s3_server` or `bucket`, and one server serves every such test in the session. Without Docker
 these tests fail with a message; they are never skipped.
 """
 
 import shutil
 import subprocess
 import time
+import uuid
 
 import boto3
 import botocore.exceptions
 import pytest
 
-__all__ = ["s3_server"]
+__all__ = ["bucket", "s3_server"]
 
 RUSTFS_IMAGE = "rustfs/rustfs:1.0.4"
 # The user that the image runs as. Its data and log folders must be writable by it.
@@ -90,3 +91,24 @@ def _wait_until_ready(docker: str, container: str, server: dict) -> None:
                 )
                 pytest.fail(f"RustFS did not start.\n{logs.stdout}{logs.stderr}")
             time.sleep(0.5)
+
+
+@pytest.fixture
+def bucket(s3_server, monkeypatch, tmp_path):
+    """A new, empty bucket on the S3 server.
+
+    The run manager and the worker get the server's keys from the environment, and no
+    AWS file or endpoint of the developer's own. The endpoint is not in the
+    environment: it must reach the worker through the profile.
+    """
+    monkeypatch.setattr(boto3, "DEFAULT_SESSION", None)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", s3_server["access_key"])
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", s3_server["secret_key"])
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(tmp_path / "absent-aws-config"))
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(tmp_path / "absent-aws-credentials"))
+    for name in ("AWS_SESSION_TOKEN", "AWS_PROFILE", "AWS_ENDPOINT_URL", "AWS_ENDPOINT_URL_S3"):
+        monkeypatch.delenv(name, raising=False)
+    name = f"robin-test-{uuid.uuid4().hex[:12]}"
+    boto3.client("s3", endpoint_url=s3_server["endpoint"]).create_bucket(Bucket=name)
+    return name

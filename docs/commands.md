@@ -4,7 +4,7 @@
 |---|---|
 | `robin whoami` | Show your database login and the selected profile. |
 | `robin db migrate` | Apply the migrations that the database does not have. |
-| `robin models register MODEL --file ROLE=LOCATION ...` | Register a built-in model, such as `owl/v4`, and the local files it reads. Robin pins each file by its digest and size. Use `--card FILE` in place of `MODEL` for a head or another model. |
+| `robin models register MODEL --file ROLE=LOCATION ...` | Register a built-in model, such as `owl/v4`, and the files it reads: local files, or `s3://` files that Robin reads with your AWS login (at the storage endpoint when the profile's storage is S3). Robin pins each file by its digest and size. Use `--card FILE` in place of `MODEL` for a head or another model. |
 | `robin models list` | List the registered models. |
 | `robin models show ID` | Show one model, for example `owl/v4`. |
 | `robin presets create NAME --configuration FILE` | Give a configuration a name. |

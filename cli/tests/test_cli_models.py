@@ -2,8 +2,11 @@
 
 import json
 from importlib.resources import files
+from pathlib import Path
 
+import ondio
 import pytest
+import yaml
 
 from robin_run_manager import models
 from robin_run_manager.errors import Unavailable
@@ -38,6 +41,24 @@ def test_register_prints_the_model_as_json(robin, migrated, owl):
     body = json.loads(ran.stdout)
     assert (body["model_id"], body["created"]) == ("owl/v4", True)
     assert body["card_digest"].startswith("sha256:v1:")
+
+
+def test_register_reads_an_s3_file_at_the_storage_endpoint(
+    robin, migrated, environ, s3_server, bucket
+):
+    endpoint = s3_server["endpoint"]
+    uri = f"s3://{bucket}/models/owl/v4/sha256:v1:9cc1f1b0/PNW-Cnet_v4_TF.h5"
+    ondio.create(uri, b"bytes that stand for the weights", endpoint_url=endpoint)
+    # The endpoint reaches registration only through the profile's storage section.
+    storage = {"kind": "s3", "root": f"s3://{bucket}/robin/", "endpoint": endpoint}
+    Path(environ["ROBIN_PROFILE"], "test.yaml").write_text(yaml.safe_dump({"storage": storage}))
+
+    ran = robin("--json", "models", "register", "owl/v4", "--file", f"weights={uri}")
+
+    assert ran.code == 0, ran.stderr
+    assert json.loads(ran.stdout)["created"] is True
+    shown = json.loads(robin("--json", "models", "show", "owl/v4").stdout)
+    assert shown["files"]["weights"]["uri"] == uri
 
 
 def test_register_says_what_happened(robin, migrated, owl):

@@ -2,7 +2,8 @@
 
 import hashlib
 import os
-from collections.abc import Mapping
+import tempfile
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -12,6 +13,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from robin_contracts.cards import HeadCard, ModelCard, card_digest, model_ref
 from robin_contracts.local_files import get_local_path
+from robin_contracts.ports.storage import FileProvider, is_s3_uri
 from robin_contracts.tasks import output_version_id
 from robin_contracts.work import REGISTRY_ROLE, PinnedFile, PinnedModel
 from robin_models import registration
@@ -26,6 +28,10 @@ from robin_run_manager.errors import (
 from robin_run_manager.operator_files import field_problems, read_yaml_or_refuse
 from robin_run_manager.pages import DEFAULT_LIMIT, Page, start_page
 
+
+# Returns a file provider that keeps the files it fetches in the given folder. It reads
+# a model's files on S3 at registration.
+RemoteFiles = Callable[[Path], FileProvider]
 
 _COLUMNS = "model_id, card, card_digest, files, registered_by, registered_at"
 _CARD_ADAPTER = TypeAdapter(ModelCard | HeadCard)
@@ -89,17 +95,24 @@ def read_card_file(path: Path) -> ModelCard | HeadCard:
         ) from None
 
 
-def prepare_model(card: ModelCard | HeadCard, locations: Mapping[str, str]) -> PinnedModel:
+def prepare_model(
+    card: ModelCard | HeadCard,
+    locations: Mapping[str, str],
+    *,
+    remote_files: RemoteFiles | None = None,
+) -> PinnedModel:
     """Pin each file by its bytes, and check the files against the card, before registration.
 
-    `locations` maps each role to an absolute local path or a `file:///` URI. Each file is
-    read once for its sha256 and size. The registry file must be the one the card names.
-    Does no database work. Raises `Refused` with `invalid_request`.
+    `locations` maps each role to an absolute local path, a `file:///` URI, or an `s3://`
+    URI. Each file is read once for its sha256 and size. A file on S3 is read through
+    `remote_files`, into a temporary folder that is deleted after. The registry file must
+    be the one the card names. Does no database work. Raises `Refused` with
+    `invalid_request`.
     """
     model_id = model_ref(card).id
     roles = _get_file_roles_or_refuse(card, model_id)
     _refuse_wrong_roles(model_id, roles, set(locations))
-    pinned = {role: _pin(role, location) for role, location in locations.items()}
+    pinned = _pin_all(locations, remote_files)
     registry = pinned.get(REGISTRY_ROLE)
     if registry is not None and card.taxa_registry_digest not in (None, registry.digest):
         raise Refused(
@@ -111,7 +124,12 @@ def prepare_model(card: ModelCard | HeadCard, locations: Mapping[str, str]) -> P
     return PinnedModel(card=card, files=pinned)
 
 
-def prepare_built_in_model(model_id: str, locations: Mapping[str, str]) -> PinnedModel:
+def prepare_built_in_model(
+    model_id: str,
+    locations: Mapping[str, str],
+    *,
+    remote_files: RemoteFiles | None = None,
+) -> PinnedModel:
     """Prepare a built-in model, such as `owl/v4`, with the card that robin-models ships.
 
     As `prepare_model`, except for the registry. If `locations` has no `taxa_registry`, this
@@ -119,7 +137,7 @@ def prepare_built_in_model(model_id: str, locations: Mapping[str, str]) -> Pinne
     URI, which the worker reads from its own installed robin-models.
     Raises `Refused` with `invalid_request`.
     """
-    model = prepare_model(get_built_in_card(model_id), locations)
+    model = prepare_model(get_built_in_card(model_id), locations, remote_files=remote_files)
     if REGISTRY_ROLE in model.files:
         return model
     location = registration.get_bundled_registry_location(model_id)
@@ -254,9 +272,50 @@ def _refuse_wrong_roles(model_id: str, roles: frozenset[str], given: set[str]) -
     )
 
 
+def _pin_all(
+    locations: Mapping[str, str], remote_files: RemoteFiles | None
+) -> dict[str, PinnedFile]:
+    """Pin each role's file. Files on S3 share one temporary folder."""
+    remote = [role for role, location in locations.items() if is_s3_uri(location)]
+    if not remote:
+        return {role: _pin(role, location) for role, location in locations.items()}
+    if remote_files is None:
+        role = remote[0]
+        raise Refused(
+            INVALID_REQUEST,
+            f"The {role} file {locations[role]} is on S3, and this registration cannot "
+            "read files on S3.",
+            details={"role": role, "location": locations[role]},
+        )
+    with tempfile.TemporaryDirectory(prefix="robin-register-") as scratch:
+        files = remote_files(Path(scratch))
+        return {
+            role: _pin_remote(files, role, location) if role in remote else _pin(role, location)
+            for role, location in locations.items()
+        }
+
+
 def _pin(role: str, location: str) -> PinnedFile:
     uri, path = _get_local_file(role, location)
     return _pin_path(role, location, uri, path)
+
+
+def _pin_remote(files: FileProvider, role: str, location: str) -> PinnedFile:
+    """Pin the file on S3 at `location`, and store `location` as written."""
+    try:
+        path = files.fetch(location)
+    # Any failure to read, such as a missing object or no access. Only the error's type
+    # is shown: its text can hold a credential.
+    except Exception as error:
+        raise Refused(
+            INVALID_REQUEST,
+            f"The {role} file {location} cannot be read ({type(error).__name__}).",
+            details={"role": role, "location": location},
+        ) from None
+    try:
+        return _pin_path(role, location, location, path)
+    finally:
+        files.release(path)
 
 
 def _pin_path(role: str, location: str, uri: str, path: Path) -> PinnedFile:
@@ -284,16 +343,15 @@ def _pin_path(role: str, location: str, uri: str, path: Path) -> PinnedFile:
 def _get_local_file(role: str, location: str) -> tuple[str, Path]:
     """The URI Robin stores for `location`, and the path to read.
 
-    Registration reads local files only. A bare path is stored as its `file:///` URI, and
-    a `file:` URI is stored as written.
+    A bare path is stored as its `file:///` URI, and a `file:` URI is stored as written.
     """
     try:
         path = get_local_path(location)
     except ValueError:
         raise Refused(
             INVALID_REQUEST,
-            f"The {role} location {location} is not a local file. Give an absolute path or a "
-            "file:/// URI. Registering files on S3 is not supported.",
+            f"The {role} location {location} is not a file that Robin can read. Give an "
+            "absolute path, a file:/// URI, or an s3:// URI.",
             details={"role": role, "location": location},
         ) from None
     if os.path.isabs(location):

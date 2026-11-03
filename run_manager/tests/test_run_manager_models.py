@@ -3,12 +3,17 @@
 import hashlib
 import threading
 from importlib.resources import files
+from pathlib import Path
+
+import boto3
+import ondio
 
 import psycopg
 import pytest
 from psycopg.types.json import Json
 
 from robin_contracts.cards import card_digest
+from robin_adapters.storage.object_store.adapter import ObjectStoreFileProvider
 from robin_run_manager.database import transaction
 from robin_run_manager.errors import INVALID_REQUEST, MODEL_CONFLICT, NOT_FOUND, Refused
 from robin_run_manager.models import (
@@ -376,3 +381,151 @@ def test_a_field_problem_names_the_field_and_not_its_value(tmp_path):
     fields = [problem["field"] for problem in refused.value.details["problems"]]
     assert any(field.endswith("sample_rate") for field in fields)
     assert "-12345" not in str(refused.value.details)
+
+
+# Model files on S3. OWL's real weights key holds a digest with colons, as this one does.
+S3_KEY = "models/owl/v4/sha256:v1:9cc1f1b0/PNW-Cnet_v4_TF.h5"
+
+
+@pytest.fixture
+def s3_weights(s3_server, bucket):
+    """The URI of OWL weights on the S3 server, and the factory that reads them."""
+    uri = f"s3://{bucket}/{S3_KEY}"
+    ondio.create(uri, WEIGHTS, endpoint_url=s3_server["endpoint"])
+
+    def get_remote_files(directory: Path) -> ObjectStoreFileProvider:
+        return ObjectStoreFileProvider(directory, endpoint_url=s3_server["endpoint"])
+
+    return uri, get_remote_files
+
+
+class RecordingFiles:
+    """A file provider that writes each file it fetches, and records what it is asked."""
+
+    def __init__(self, directory: Path, data: bytes = WEIGHTS, error: Exception | None = None):
+        self.directory = directory
+        self.data = data
+        self.error = error
+        self.fetched: list[Path] = []
+        self.released: list[Path] = []
+
+    def fetch(self, uri: str) -> Path:
+        if self.error is not None:
+            raise self.error
+        path = self.directory / uri.rsplit("/", 1)[-1]
+        path.write_bytes(self.data)
+        self.fetched.append(path)
+        return path
+
+    def release(self, path: Path) -> None:
+        path.unlink()
+        self.released.append(path)
+
+
+def test_register_pins_an_s3_file_and_stores_its_uri(s3_weights):
+    uri, get_remote_files = s3_weights
+
+    model = prepare_built_in_model("owl/v4", {"weights": uri}, remote_files=get_remote_files)
+
+    weights = model.files["weights"]
+    assert weights.uri == uri
+    assert weights.digest == "sha256:" + hashlib.sha256(WEIGHTS).hexdigest()
+    assert weights.size_bytes == len(WEIGHTS)
+
+
+def test_registering_the_same_s3_file_again_changes_nothing(migrated_database, s3_weights):
+    uri, get_remote_files = s3_weights
+
+    def register():
+        model = prepare_built_in_model("owl/v4", {"weights": uri}, remote_files=get_remote_files)
+        return register_model(migrated_database, model, actor="ana")
+
+    assert register().created is True
+    assert register().created is False
+
+
+def test_other_bytes_at_the_same_s3_uri_are_a_model_conflict(
+    migrated_database, s3_server, bucket, s3_weights
+):
+    uri, get_remote_files = s3_weights
+    model = prepare_built_in_model("owl/v4", {"weights": uri}, remote_files=get_remote_files)
+    register_model(migrated_database, model, actor="ana")
+    # The same URI with other bytes: only the digest and size can tell them apart.
+    # ondio writes only new objects, so boto3 replaces this one.
+    s3 = boto3.client("s3", endpoint_url=s3_server["endpoint"])
+    s3.put_object(Bucket=bucket, Key=S3_KEY, Body=b"other weights")
+    changed = prepare_built_in_model("owl/v4", {"weights": uri}, remote_files=get_remote_files)
+    assert changed.files["weights"].uri == model.files["weights"].uri
+
+    with pytest.raises(Refused) as refused:
+        register_model(migrated_database, changed, actor="ana")
+
+    assert refused.value.reason == MODEL_CONFLICT
+
+
+def test_a_missing_s3_file_is_refused_with_its_role(s3_weights, bucket):
+    _, get_remote_files = s3_weights
+    missing = f"s3://{bucket}/models/owl/v4/absent.h5"
+
+    with pytest.raises(Refused) as refused:
+        prepare_built_in_model("owl/v4", {"weights": missing}, remote_files=get_remote_files)
+
+    assert refused.value.reason == INVALID_REQUEST
+    assert refused.value.details == {"role": "weights", "location": missing}
+
+
+def test_a_failed_s3_read_shows_the_error_type_and_not_its_text(tmp_path):
+    error = PermissionError("token=adapter-secret")
+    location = "s3://lab/models/weights.h5"
+
+    with pytest.raises(Refused) as refused:
+        prepare_built_in_model(
+            "owl/v4", {"weights": location},
+            remote_files=lambda directory: RecordingFiles(directory, error=error),
+        )
+
+    shown = f"{refused.value.message} {refused.value.details} {refused.value!r}"
+    assert "PermissionError" in refused.value.message
+    assert "adapter-secret" not in shown
+    assert refused.value.__cause__ is None
+
+
+def test_an_s3_location_without_remote_files_is_refused():
+    location = "s3://lab/models/weights.h5"
+
+    with pytest.raises(Refused) as refused:
+        prepare_built_in_model("owl/v4", {"weights": location})
+
+    assert refused.value.reason == INVALID_REQUEST
+    assert refused.value.details == {"role": "weights", "location": location}
+
+
+def test_another_scheme_is_still_refused():
+    location = "example://lab/weights.h5"
+
+    with pytest.raises(Refused) as refused:
+        prepare_built_in_model(
+            "owl/v4", {"weights": location},
+            remote_files=lambda directory: RecordingFiles(directory),
+        )
+
+    assert refused.value.reason == INVALID_REQUEST
+    assert refused.value.details == {"role": "weights", "location": location}
+    assert "s3://" in refused.value.message
+
+
+def test_the_fetched_copy_is_released_and_its_folder_removed():
+    made: list[RecordingFiles] = []
+
+    def get_remote_files(directory: Path) -> RecordingFiles:
+        made.append(RecordingFiles(directory))
+        return made[-1]
+
+    prepare_built_in_model(
+        "owl/v4", {"weights": "s3://lab/models/weights.h5"}, remote_files=get_remote_files
+    )
+
+    [files_used] = made
+    assert files_used.released == files_used.fetched
+    assert len(files_used.fetched) == 1
+    assert not files_used.directory.exists()
