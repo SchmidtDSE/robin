@@ -24,6 +24,26 @@ The AWS login of whoever runs `robin reconcile` must be able to call
 `batch:TerminateJob`, and read and write under the storage root. Robin stores no
 credential.
 
+## GPU
+
+For a GPU, make a second compute environment with GPU instances, such as
+`g4dn.xlarge` (one NVIDIA T4), and its own queue. Batch picks a GPU machine image for
+GPU instance types. Its job definition names the GPU image (`robin-worker:<tag>-gpu`,
+see [the worker image](../docker/README.md)), and the setup's request asks for a GPU:
+
+```yaml
+compute:
+  setups:
+    aws-gpu:
+      kind: aws-batch
+      job_queue: arn:aws:batch:us-west-2:<account>:job-queue/robin-gpu
+      job_definition: arn:aws:batch:us-west-2:<account>:job-definition/robin-worker-gpu:1
+      request:
+        requests: {VCPU: "4", MEMORY: "14336", GPU: "1"}
+```
+
+The CPU image on a GPU instance runs on the CPU.
+
 ## The setup
 
 A setup names the queue and the job definition revision. The fields and their rules

@@ -74,6 +74,11 @@ python -m build --wheel --outdir .worker-image/dist worker &&
 docker build --platform linux/amd64 -f docker/worker.Dockerfile -t robin-worker:dev .
 """
 
+[tasks.worker-image-gpu]
+description = "Build the GPU worker image robin-worker:dev-gpu on top of robin-worker:dev. Docker must be running."
+depends-on = ["worker-image"]
+cmd = "docker build --platform linux/amd64 -f docker/worker-gpu.Dockerfile -t robin-worker:dev-gpu docker"
+
 [tasks.wheels]
 cmd = """
 rm -rf .wheelcheck &&
