@@ -5,7 +5,7 @@ only the adapters that the profile names, and only in the function that needs th
 a command that only reads does not load the storage libraries.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import cast
 
@@ -49,15 +49,45 @@ def compose(profile: Profile) -> Services:
     )
 
 
+# ---------------------------------------------------------------------------
+# Compute: an adapter for each compute kind that a setup uses.
+# ---------------------------------------------------------------------------
+
+
 def _get_compute(profile: Profile) -> dict[str, ComputeAdapter]:
-    # Only local compute has an adapter in this version.
+    """A compute adapter for each kind that a setup uses and that has an adapter. The
+    kubernetes kind has none in this version."""
     if profile.compute is None:
         return {}
-    if "local" not in {setup.kind for setup in profile.compute.setups.values()}:
-        return {}
+    kinds = {setup.kind for setup in profile.compute.setups.values()}
+    return {
+        kind: get_adapter() for kind, get_adapter in _COMPUTE_ADAPTERS.items() if kind in kinds
+    }
+
+
+# Each function imports its adapter only when it is called, so a profile that does not
+# use a kind does not load that adapter's packages, such as boto3.
+def _get_local_compute() -> ComputeAdapter:
     from robin_adapters.compute.local.adapter import LocalCompute
 
-    return {"local": LocalCompute()}
+    return LocalCompute()
+
+
+def _get_aws_batch_compute() -> ComputeAdapter:
+    from robin_adapters.compute.aws_batch.adapter import AwsBatchCompute
+
+    return AwsBatchCompute()
+
+
+_COMPUTE_ADAPTERS: dict[str, Callable[[], ComputeAdapter]] = {
+    "local": _get_local_compute,
+    "aws-batch": _get_aws_batch_compute,
+}
+
+
+# ---------------------------------------------------------------------------
+# Storage: the task storage, what the worker needs to reach it, and its location rule.
+# ---------------------------------------------------------------------------
 
 
 def _get_task_storage(profile: Profile) -> dict[str, TaskStorage]:

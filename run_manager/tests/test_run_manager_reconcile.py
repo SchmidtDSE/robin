@@ -749,55 +749,111 @@ def test_s3_storage_has_a_task_storage_and_is_not_counted_elsewhere(
     assert ondio.exists(call.work_uri)
 
 
-def test_a_bad_new_model_entry_refuses_its_submit_and_not_the_pass(
-    registered, database_settings, s3_bucket
-):
-    from robin_adapters.storage.ondio import OndioTaskStorage
+AWS_BATCH_SETUP = {
+    "kind": "aws-batch",
+    "job_queue": "arn:aws:batch:us-west-2:123456789012:job-queue/robin-cpu",
+    "job_definition": "arn:aws:batch:us-west-2:123456789012:job-definition/robin-worker:12",
+}
 
-    setup = {
-        "kind": "aws-batch",
-        "job_queue": "arn:aws:batch:us-west-2:123456789012:job-queue/robin-cpu",
-        "job_definition": "arn:aws:batch:us-west-2:123456789012:job-definition/robin-worker:12",
-    }
-    sections = {
+
+def get_aws_batch_profile(database_settings, models=None, **setup) -> Profile:
+    """A profile with one aws-batch setup, `cpu`, changed by `setup`, and S3 storage."""
+    return Profile.model_validate({
         "database": database_settings,
+        "compute": {
+            "setups": {"cpu": {**AWS_BATCH_SETUP, **setup}},
+            "models": models or {"owl/v4": {}},
+        },
         "storage": {"kind": "s3", "root": S3_ROOT},
         "preparation": {"recordings_per_task": 1},
-    }
-    profile = Profile.model_validate({
-        **sections, "compute": {"setups": {"cpu": setup}, "models": {"owl/v4": {}}},
     })
-    run_id = submit_run(
-        registered, preset=None, configuration=OWL_CONFIGURATION,
-        recordings=make_recording_manifest(["a"]),
+
+
+def submit_with_profile(database, profile, configuration=OWL_CONFIGURATION, values=("a",)):
+    """A run that freezes the settings that the profile gives its model."""
+    return submit_run(
+        database, preset=None, configuration=configuration,
+        recordings=make_recording_manifest(list(values)),
         get_resolved_settings=partial(get_resolved_settings, profile), actor="ana",
         release_versions=RELEASE_OUTPUT_VERSIONS,
     ).run_id
-    # The new entry for perch/v8 breaks the request rules of aws-batch. Profile load does
-    # not check them.
-    profile = Profile.model_validate({**sections, "compute": {
-        "setups": {"cpu": setup},
-        "models": {"owl/v4": {}, "perch/v8": {"request": {"requests": {"GPU": "0"}}}},
-    }})
 
-    with pytest.raises(Refused) as raised:
-        submit_run(
-            registered, preset=None, configuration=PERCH_CONFIGURATION,
-            recordings=make_recording_manifest(["b"]),
-            get_resolved_settings=partial(get_resolved_settings, profile), actor="ana",
-            release_versions=RELEASE_OUTPUT_VERSIONS,
-        )
-    assert raised.value.reason == "invalid_profile"
-    assert "perch/v8" in raised.value.message
-    compute = ScriptedCompute()
-    services = Services(
-        profile=profile, database=registered, compute={"aws-batch": compute},
+
+def get_aws_batch_services(database, profile, compute) -> Services:
+    from robin_adapters.storage.ondio import OndioTaskStorage
+
+    return Services(
+        profile=profile, database=database, compute={"aws-batch": compute},
         task_storage={"s3": OndioTaskStorage(S3_ROOT)}, split_location=split_location,
     )
 
-    report = reconcile_once(services, actor="ana")
+
+def test_a_bad_new_model_entry_refuses_its_submit_and_not_the_pass(
+    registered, database_settings, s3_bucket
+):
+    run_id = submit_with_profile(registered, get_aws_batch_profile(database_settings))
+    # The new entry for perch/v8 breaks the request rules of aws-batch. Profile load does
+    # not check them.
+    profile = get_aws_batch_profile(database_settings, models={
+        "owl/v4": {}, "perch/v8": {"request": {"requests": {"GPU": "0"}}},
+    })
+
+    with pytest.raises(Refused) as raised:
+        submit_with_profile(registered, profile, PERCH_CONFIGURATION, ["b"])
+    assert raised.value.reason == "invalid_profile"
+    assert "perch/v8" in raised.value.message
+    compute = ScriptedCompute()
+
+    report = reconcile_once(get_aws_batch_services(registered, profile, compute), actor="ana")
 
     assert (report.prepared, report.launched, report.failures) == (1, 1, [])
     assert show_run(registered, str(run_id))["status"] == "running"
     with transaction(registered, read_only=True) as connection:
         assert connection.execute("SELECT count(*) AS n FROM runs").fetchone()["n"] == 1
+
+
+def test_an_aws_batch_setup_gets_its_adapter(database_settings):
+    from robin_adapters.compute.aws_batch.adapter import AwsBatchCompute
+
+    services = compose(get_aws_batch_profile(database_settings))
+    try:
+        assert list(services.compute) == ["aws-batch"]
+        assert isinstance(services.compute["aws-batch"], AwsBatchCompute)
+    finally:
+        services.database.close()
+
+
+def test_a_new_job_definition_revision_keeps_earlier_runs_managed_and_in_one_capacity(
+    registered, database_settings, s3_bucket
+):
+    # A routine image update: the setup keeps its name and queue, and names a new job
+    # definition revision. Runs in progress keep the revision that they froze.
+    old = get_aws_batch_profile(database_settings, max_in_flight=1)
+    new_revision = AWS_BATCH_SETUP["job_definition"].replace(
+        "robin-worker:12", "robin-worker:13"
+    )
+    new = get_aws_batch_profile(database_settings, max_in_flight=1, job_definition=new_revision)
+    compute = ScriptedCompute()
+    run_1 = submit_with_profile(registered, old)
+    first = reconcile_once(get_aws_batch_services(registered, old, compute), actor="ana")
+    assert first.launched == 1
+    run_2 = submit_with_profile(registered, new, values=["b"])
+
+    second = reconcile_once(get_aws_batch_services(registered, new, compute), actor="ana")
+
+    assert (second.prepared, second.launched, second.failures) == (1, 0, [])
+    assert [task["state"] for task in get_tasks(registered, run_2)] == ["queued"]
+    compute.script("describe", ComputeStatus(state="ended"))
+
+    third = reconcile_once(get_aws_batch_services(registered, new, compute), actor="ana")
+
+    assert (third.outcomes_recorded, third.released, third.launched) == (1, 1, 1)
+    [task_1] = get_tasks(registered, run_1)
+    [task_2] = get_tasks(registered, run_2)
+    assert get_task(registered, task_1["task_id"])["released_at"] is not None
+    revisions = {
+        task.task_id: task.settings["job_definition"] for task in compute.get_calls("submit")
+    }
+    assert revisions == {
+        task_1["task_id"]: AWS_BATCH_SETUP["job_definition"], task_2["task_id"]: new_revision,
+    }

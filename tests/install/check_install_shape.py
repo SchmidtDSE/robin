@@ -144,6 +144,7 @@ _register(
         "robin_cli", "robin_cli.catalog", "robin_run_manager", "robin_contracts",
         "robin_models", "robin_models.output_versions",
         "robin_adapters", "robin_adapters.catalog.folder_layout",
+        "robin_adapters.compute.aws_batch.adapter",
     ),
     runtimes=("psycopg", "boto3", "ondio", "soundfile"),
 )

@@ -1660,7 +1660,7 @@ packages:
   requires_dist:
   - robin-run-manager>=0.0,<0.1
   - robin-contracts>=0.0,<0.1
-  - robin-adapters[ondio]>=0.0,<0.1
+  - robin-adapters[ondio,aws-batch]>=0.0,<0.1
   requires_python: '>=3.11'
 - pypi: contracts
   name: robin-contracts

@@ -15,8 +15,9 @@
   for the task, with one attempt, the task's request as resource overrides, its
   deadline as the job timeout, and the tags `robin-run` and `robin-setup`. Before it
   submits, it looks for a job of the task's name, and returns that job if there is one.
-  `describe` counts every job of the task's name. A refusal by Batch
-  (`ClientException`) is `SubmissionRejected`.
+  `describe` counts every job of the task's name, and `stop` ends each of them that has
+  not ended. `release` does nothing. A refusal by Batch (`ClientException`) is
+  `SubmissionRejected`.
 - `robin_adapters.compute.local.adapter`, the `local` compute adapter. `LocalCompute` runs
   `robin-worker run <work URI>` as a detached process in a new session, with its output
   in `worker.log` in the task folder. It starts at most one worker for each task, and

@@ -24,6 +24,7 @@ from robin_contracts.ports.compute import ComputeStatus, ComputeTask, Submission
 
 _WAITING_STATES = frozenset({"SUBMITTED", "PENDING", "RUNNABLE", "STARTING"})
 _RUNNING_STATE = "RUNNING"
+_ENDED_STATES = frozenset({"SUCCEEDED", "FAILED"})
 
 
 class AwsBatchCompute:
@@ -93,6 +94,16 @@ class AwsBatchCompute:
         else:
             state = "ended"
         return ComputeStatus(state=state, compute_ref=_get_newest(jobs)["jobId"])
+
+    def stop(self, task: ComputeTask) -> None:
+        """Ends every job of the task that has not ended, also a second job of the task."""
+        client = self._get_client(task)
+        for job in self._list_task_jobs(task):
+            if job["status"] not in _ENDED_STATES:
+                client.terminate_job(jobId=job["jobId"], reason="Stopped by Robin")
+
+    def release(self, task: ComputeTask) -> None:
+        """Does nothing: Batch keeps a job's record for a time, and then removes it."""
 
     def _list_task_jobs(self, task: ComputeTask) -> list[dict[str, Any]]:
         """Every job of the task's name in the task's queue, and the job of its

@@ -303,3 +303,47 @@ def test_a_client_exception_from_submit_job_is_submission_rejected(stubbed):
     assert str(TASK_ID) in text
     assert "robin-cpu" not in text
     assert "robin-worker" not in text
+
+
+def add_terminate(stubber, job_id: str) -> None:
+    stubber.add_response("terminate_job", {}, {"jobId": job_id, "reason": "Stopped by Robin"})
+
+
+def test_stop_terminates_the_job(stubbed):
+    compute, stubber = stubbed
+    add_list(stubber, summary("job-a", "RUNNING"))
+    add_terminate(stubber, "job-a")
+
+    compute.stop(make_task())
+
+
+def test_stop_terminates_a_double_as_well_as_the_stored_job(stubbed):
+    compute, stubber = stubbed
+    add_list(
+        stubber, summary("job-a", "RUNNING", created_at=1),
+        summary("job-b", "RUNNABLE", created_at=2),
+    )
+    stubber.add_response(
+        "describe_jobs", {"jobs": [detail("job-b", "RUNNABLE", created_at=2)]},
+        {"jobs": ["job-b"]},
+    )
+    add_terminate(stubber, "job-a")
+    add_terminate(stubber, "job-b")
+
+    compute.stop(make_task(compute_ref="job-b"))
+
+
+def test_stop_of_an_ended_job_is_safe_to_repeat(stubbed):
+    compute, stubber = stubbed
+    add_list(stubber, summary("job-a", "SUCCEEDED"), summary("job-b", "FAILED"))
+    add_list(stubber, summary("job-a", "SUCCEEDED"), summary("job-b", "FAILED"))
+
+    compute.stop(make_task())
+    compute.stop(make_task())
+
+
+def test_release_calls_nothing(stubbed):
+    # The Stubber has no response, so any call to Batch fails the test.
+    compute, _ = stubbed
+
+    compute.release(make_task(compute_ref="job-a"))
