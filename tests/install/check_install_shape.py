@@ -127,7 +127,7 @@ _register(
               "robin_models", "robin_models.output_versions",
               "robin_adapters", "robin_adapters.compute.local",
               "robin_adapters.storage.local", "robin_adapters.storage.location"),
-    runtimes=("psycopg", "boto3", "ondio"),
+    runtimes=("psycopg", "boto3", "ondio", "soundfile"),
 )
 _register(
     "run-manager-rds",
@@ -135,7 +135,7 @@ _register(
     required=("robin_run_manager", "robin_contracts",
               "robin_models", "robin_models.output_versions",
               "robin_adapters", "robin_adapters.storage.location"),
-    runtimes=("psycopg", "boto3", "ondio"),
+    runtimes=("psycopg", "boto3", "ondio", "soundfile"),
 )
 _register(
     "cli",
@@ -145,7 +145,7 @@ _register(
         "robin_models", "robin_models.output_versions",
         "robin_adapters", "robin_adapters.catalog.folder_layout",
     ),
-    runtimes=("psycopg", "boto3", "ondio"),
+    runtimes=("psycopg", "boto3", "ondio", "soundfile"),
 )
 _register(
     "worker",
@@ -158,7 +158,7 @@ _register(
         "robin_adapters.storage.location",
         "robin_models",
     ),
-    runtimes=("pyarrow", "duckdb", "boto3", "ondio"),
+    runtimes=("pyarrow", "duckdb", "boto3", "ondio", "soundfile"),
 )
 _register(
     "adapters",
@@ -182,7 +182,7 @@ _register(
         "robin_adapters.storage.location",
         "robin_contracts",
     ),
-    runtimes=("boto3", "ondio"),
+    runtimes=("boto3", "ondio", "soundfile"),
 )
 _register(
     "meta-all",
@@ -197,7 +197,7 @@ _register(
         "robin_adapters.storage.location",
         "robin_models",
     ),
-    runtimes=("pyarrow", "duckdb", "boto3", "ondio", "psycopg"),
+    runtimes=("pyarrow", "duckdb", "boto3", "ondio", "soundfile", "psycopg"),
 )
 _register(
     "models",
