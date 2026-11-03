@@ -5,16 +5,17 @@ A profile is a folder with `config.yaml` and one file for each environment, such
 Besides `database`, a profile has these sections:
 
 - `compute` says where runs execute. It has named `setups` and the `models` that runs
-  can use. Each setup has a `kind`: `local`, or `kubernetes` with `namespace` and
-  `s3_secret_name`. `runs submit` needs this section, and checks that the compute kind
-  of the model's setup can read each recording's location. `robin reconcile` needs a
-  setup of `kind: local`; this version cannot run tasks on Kubernetes, and a pass
-  reports a `kubernetes` setup as a failure of step `setup`.
+  can use. Each setup has a `kind`: `local`, `kubernetes` with `namespace` and
+  `s3_secret_name`, or `aws-batch` with `job_queue` and `job_definition`. `runs
+  submit` needs this section, and checks that the compute kind of the model's setup
+  can read each recording's location. `robin reconcile` needs a setup of `kind:
+  local`; this version cannot run tasks on Kubernetes or AWS Batch, and a pass reports
+  a `kubernetes` or `aws-batch` setup as a failure of step `setup`.
 - `storage` says where Robin writes a run's files, with `kind` and `root`: for
   example `{kind: local, root: /data/robin}`, or `{kind: s3, root: s3://lab/robin/}`.
   For an S3 service that is not AWS S3, `endpoint` gives its `http://` or `https://`
   URL, with no user name or password. A profile with `compute` needs this section,
-  and `kubernetes` compute needs `s3` storage. Each run keeps the compute and storage
+  and `kubernetes` and `aws-batch` compute need `s3` storage. Each run keeps the compute and storage
   settings that it was submitted with.
 - `catalog` (optional) names the adapter that `--selection` asks for recordings:
   `kind` for a built-in adapter, or `code: module:function` for an installed one.
@@ -81,8 +82,10 @@ fields except `max_in_flight`, the merged `request` and `resources`, and the
 `storage` section. A later change to the profile applies only to runs submitted after
 it. The one exception is `max_in_flight`, which each pass reads from the profile.
 
-Setup names are shared by every profile and user of one database. While runs of a
-setup name have work, that name keeps its compute kind (and `namespace`) and its
+A setup name has 1 to 63 lowercase letters, digits, `_`, or `-`, and begins and ends
+with a letter or a digit. Setup names are shared by every profile and user of one
+database. While runs of a setup name have work, that name keeps its compute kind (and
+`namespace` or `job_queue`) and its
 `storage` section: a submit with other values is refused with `not_configured`, and
 `robin reconcile` reports that setup as a failure of step `setup`. Give names that
 say where the setup runs, such as `aws-cpu` or `nrp-gpu`, and give a new name when any
@@ -93,3 +96,49 @@ same setup name. Local compute does not enforce `request`: a local worker can
 use more CPU or memory than it gives, and it is not stopped at
 `active_deadline_seconds`. Robin cannot tell apart two computers that use `local`
 compute with the same database, so give each computer its own database.
+
+## AWS Batch setups
+
+```yaml
+compute:
+  setups:
+    aws-cpu:
+      kind: aws-batch
+      job_queue: arn:aws:batch:us-west-2:<account>:job-queue/robin-cpu
+      job_definition: arn:aws:batch:us-west-2:<account>:job-definition/robin-worker:12
+      max_in_flight: 50
+      max_request: {VCPU: "16", MEMORY: "65536"}
+      request:
+        requests: {VCPU: "4", MEMORY: "16384"}
+        active_deadline_seconds: 21600
+  models:
+    owl/v4:
+      request: {requests: {MEMORY: "32768"}}
+```
+
+`job_queue` and `job_definition` are ARNs in the same partition, region, and account.
+The job definition ARN ends with its revision. The revision gives the image and the
+job role, and a run keeps the revision that it was submitted with.
+
+`request.requests` takes only `VCPU`, `MEMORY` (in MiB), and `GPU`, each a whole
+number of at least 1, written as text. `limits` must be empty.
+`active_deadline_seconds` must be at least 60. A value that the request leaves out
+comes from the job definition. To ask for no GPU, leave `GPU` out; `GPU: "0"` is
+refused.
+
+`max_request` (optional, only for `aws-batch`) is the most that a model's request
+can ask for. Each model's request must give every resource that `max_request` names,
+at most its value. A resource that `max_request` does not name is not checked. Without
+this limit, a job that asks for more than any machine of the queue has waits in
+Batch with no end.
+
+`null` in a model entry removes the value that the model's setup gives in the
+profile. It cannot remove a value that the job definition gives: Robin then sends no
+value for that key, so the job definition's value applies. `GPU: null` with a job
+definition that requests a GPU still gets a GPU, and `active_deadline_seconds: null`
+with a job definition timeout still gets that timeout. To run with no GPU or no
+timeout, the setup uses a job definition without them.
+
+Profile load checks `job_queue`. The other rules apply at submit, to the submitted
+model only: a submit that breaks one is refused with `invalid_profile`, and other
+commands still work with the profile.

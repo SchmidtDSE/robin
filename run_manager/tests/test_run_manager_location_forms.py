@@ -30,6 +30,12 @@ ACCEPTED = {
         "embeddings": {"s3"},
         "storage_root": {"s3"},
     },
+    "aws-batch": {
+        "recording": {"s3"},
+        "model_file": {"s3", "robin-models"},
+        "embeddings": {"s3"},
+        "storage_root": {"s3"},
+    },
 }
 
 CELLS = [

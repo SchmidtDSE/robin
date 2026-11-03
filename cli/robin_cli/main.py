@@ -508,10 +508,12 @@ The profile's compute.models must list the configuration's model, by its model I
 or for a head, by head_runtime:RUNTIME. Robin refuses a model that is not listed with
 model_not_in_profile, and stores nothing. The run keeps the settings of the model's
 setup, its request and resources, and the storage section, as they are at submit.
+If the model's merged request breaks the rules of its setup's kind, such as a GPU of
+0 for aws-batch, Robin refuses the submit with invalid_profile, and stores nothing.
 
 Setup names are shared by every profile that uses the database. If a run of the
 model's setup name still has work and was submitted with another compute kind (or
-namespace) or another storage section, Robin refuses the submit with
+namespace, or job queue) or another storage section, Robin refuses the submit with
 not_configured, and stores nothing. Give the new settings a new setup name, or
 let the earlier runs finish first.
 
@@ -519,7 +521,7 @@ Each audio location, and each file of the configuration's model, must have a for
 that the compute kind of the model's setup can read:
 
   local                   an absolute path, a file:/// URI, or an s3:// URI
-  kubernetes              an s3:// URI
+  kubernetes, aws-batch   an s3:// URI
 
 A model file can also be a robin-models: location, for a built-in model's taxa
 registry. Robin refuses any other form, such as http://, with unsupported_location,
@@ -670,19 +672,19 @@ and the pass goes on.
 Steps 1 to 4 run for each setup of the profile, in name order, then step 5 runs
 once, then step 6 runs for each setup. Steps 1 to 4 and 6 act only on your runs
 that were submitted with the setup's name, whose kept compute settings have the
-setup's kind (and namespace, for kubernetes), whose kept storage section is the
+setup's kind (and namespace or job queue), whose kept storage section is the
 profile's, and whose storage kind this version can use. A run keeps its other
 settings from the submit, such as its request and resources. Only max_in_flight
 is read from the profile at each pass. The pass counts your tasks whose setup name
 the profile does not have, or whose storage kind this version cannot use, as
 tasks_queued_elsewhere and tasks_active_elsewhere. They are not failures.
 
-A setup whose kind this version cannot run, such as kubernetes, is a failure of
-step setup, and the pass goes on with the other setups. So is a setup whose name
-has runs with work that were submitted with another kind (or namespace) or another
-storage section, of any user: the pass does none of that setup's steps. If the
-profile has no compute section, or no setup of a kind that this version can run
-(local), the command stops with not_configured (exit code 2).
+A setup whose kind this version cannot run, such as kubernetes or aws-batch, is a
+failure of step setup, and the pass goes on with the other setups. So is a setup
+whose name has runs with work that were submitted with another kind (or namespace,
+or job queue) or another storage section, of any user: the pass does none of that
+setup's steps. If the profile has no compute section, or no setup of a kind that
+this version can run (local), the command stops with not_configured (exit code 2).
 
 The report gives the counts prepared, launched, outcomes_recorded, released,
 stops_requested, tasks_queued_elsewhere, and tasks_active_elsewhere, and one entry

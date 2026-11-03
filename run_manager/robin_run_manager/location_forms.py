@@ -16,6 +16,12 @@ _S3 = "s3://"
 _BUNDLED = "robin-models:"
 
 # A bundled location names only a model's registry, so only `model_file` accepts it.
+_S3_ONLY = {
+    "recording": (_S3,),
+    "model_file": (_S3, _BUNDLED),
+    "embeddings": (_S3,),
+    "storage_root": (_S3,),
+}
 _ACCEPTED_FORMS = {
     "local": {
         "recording": (_LOCAL, _FILE, _S3),
@@ -23,12 +29,8 @@ _ACCEPTED_FORMS = {
         "embeddings": (_LOCAL, _FILE, _S3),
         "storage_root": (_LOCAL, _FILE, _S3),
     },
-    "kubernetes": {
-        "recording": (_S3,),
-        "model_file": (_S3, _BUNDLED),
-        "embeddings": (_S3,),
-        "storage_root": (_S3,),
-    },
+    "kubernetes": _S3_ONLY,
+    "aws-batch": _S3_ONLY,
 }
 
 

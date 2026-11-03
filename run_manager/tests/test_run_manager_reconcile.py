@@ -1,6 +1,7 @@
 """One reconcile pass: each step in order, its report, and the notice that a submit sends."""
 
 import json
+from functools import partial
 from datetime import UTC, datetime
 import threading
 from collections import Counter
@@ -14,12 +15,13 @@ from robin_adapters.storage.location import split_location
 from robin_contracts.local_files import get_local_path
 from robin_contracts.ports.compute import ComputeStatus
 from robin_run_manager.compose import Services, compose
-from robin_run_manager.database import NOTIFY_CHANNEL
+from robin_run_manager.database import NOTIFY_CHANNEL, transaction
 from robin_run_manager.errors import (
     ComputeUnavailable,
     InternalError,
     NotConfigured,
     OutcomeUncertain,
+    Refused,
     Unavailable,
     WorkFileConflict,
 )
@@ -33,10 +35,15 @@ from robin_run_manager.profile import (
 )
 from robin_run_manager import launch, reconcile
 from robin_run_manager.reconcile import reconcile_once
+from robin_run_manager.runs import show_run
+from robin_run_manager.submit import submit_run
+from robin_run_manager.versions import RELEASE_OUTPUT_VERSIONS
 from robin_run_manager.task_files import WORK_FILE_NAME, get_task_folder
 from run_fixtures import (
     FIXTURE_MODELS,
     KUBERNETES_SETTINGS,
+    OWL_CONFIGURATION,
+    PERCH_CONFIGURATION,
     add_task,
     build_completed,
     build_task_result,
@@ -46,6 +53,7 @@ from run_fixtures import (
     get_tasks,
     get_work_file,
     make_compute_section,
+    make_recording_manifest,
     register_fixture_models,
     submit,
     write_task_result,
@@ -739,3 +747,57 @@ def test_s3_storage_has_a_task_storage_and_is_not_counted_elsewhere(
     [call] = compute.get_calls("submit")
     assert call.work_uri.startswith(f"{S3_ROOT}/")
     assert ondio.exists(call.work_uri)
+
+
+def test_a_bad_new_model_entry_refuses_its_submit_and_not_the_pass(
+    registered, database_settings, s3_bucket
+):
+    from robin_adapters.storage.ondio import OndioTaskStorage
+
+    setup = {
+        "kind": "aws-batch",
+        "job_queue": "arn:aws:batch:us-west-2:123456789012:job-queue/robin-cpu",
+        "job_definition": "arn:aws:batch:us-west-2:123456789012:job-definition/robin-worker:12",
+    }
+    sections = {
+        "database": database_settings,
+        "storage": {"kind": "s3", "root": S3_ROOT},
+        "preparation": {"recordings_per_task": 1},
+    }
+    profile = Profile.model_validate({
+        **sections, "compute": {"setups": {"cpu": setup}, "models": {"owl/v4": {}}},
+    })
+    run_id = submit_run(
+        registered, preset=None, configuration=OWL_CONFIGURATION,
+        recordings=make_recording_manifest(["a"]),
+        get_resolved_settings=partial(get_resolved_settings, profile), actor="ana",
+        release_versions=RELEASE_OUTPUT_VERSIONS,
+    ).run_id
+    # The new entry for perch/v8 breaks the request rules of aws-batch. Profile load does
+    # not check them.
+    profile = Profile.model_validate({**sections, "compute": {
+        "setups": {"cpu": setup},
+        "models": {"owl/v4": {}, "perch/v8": {"request": {"requests": {"GPU": "0"}}}},
+    }})
+
+    with pytest.raises(Refused) as raised:
+        submit_run(
+            registered, preset=None, configuration=PERCH_CONFIGURATION,
+            recordings=make_recording_manifest(["b"]),
+            get_resolved_settings=partial(get_resolved_settings, profile), actor="ana",
+            release_versions=RELEASE_OUTPUT_VERSIONS,
+        )
+    assert raised.value.reason == "invalid_profile"
+    assert "perch/v8" in raised.value.message
+    compute = ScriptedCompute()
+    services = Services(
+        profile=profile, database=registered, compute={"aws-batch": compute},
+        task_storage={"s3": OndioTaskStorage(S3_ROOT)}, split_location=split_location,
+    )
+
+    report = reconcile_once(services, actor="ana")
+
+    assert (report.prepared, report.launched, report.failures) == (1, 1, [])
+    assert show_run(registered, str(run_id))["status"] == "running"
+    with transaction(registered, read_only=True) as connection:
+        assert connection.execute("SELECT count(*) AS n FROM runs").fetchone()["n"] == 1

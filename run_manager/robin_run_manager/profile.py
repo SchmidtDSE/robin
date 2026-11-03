@@ -18,9 +18,11 @@ A submit, in `get_resolved_settings`, for the model of the configuration:
    head, `head_runtime:<runtime>`. No entry is `model_not_in_profile`.
 3. `get_merged_model_settings` merges the entry over its setup: the setup name, and
    the request and resources key by key (`_get_merged_values`).
-4. `get_setup_target` gives the setup's target: its compute's `TARGET_FIELDS`, and
+4. The setup's `check_new_run` checks the merged request against the rules of its
+   kind. A problem is `invalid_profile`.
+5. `get_setup_target` gives the setup's target: its compute's `TARGET_FIELDS`, and
    the storage section (`_get_declared_fields`).
-5. The result, `ResolvedSettings`, holds the run's `execution_settings` (the setup
+6. The result, `ResolvedSettings`, holds the run's `execution_settings` (the setup
    name, the setup's declared fields, the storage section, and the merged request and
    resources) and the target that the submit's target check compares.
 
@@ -73,7 +75,9 @@ from robin_run_manager.operator_files import field_problems
 
 SHARED_FILE = "config.yaml"
 _ENVIRONMENT = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
-SetupName = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")]
+# A setup name is also a valid Kubernetes label value, so that an adapter can label its
+# jobs with it.
+SetupName = Annotated[str, Field(pattern=r"^[a-z0-9]([a-z0-9_-]{0,61}[a-z0-9])?$")]
 # A `compute.models` key with this prefix covers every head on the runtime that it names.
 HEAD_RUNTIME_PREFIX = "head_runtime:"
 _REFERENCE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
@@ -186,6 +190,24 @@ class _BaseComputeSetup(_PortSettings):
     request: ComputeRequest = ComputeRequest()
     resources: FiniteScalarMap = {}
 
+    @model_validator(mode="before")
+    @classmethod
+    def _refuse_max_request(cls, data: Any) -> Any:
+        # Without this check, a kind with no size limit would keep the field for its
+        # adapter, and nothing would use it.
+        has_limit = "max_request" in cls.model_fields
+        if isinstance(data, Mapping) and "max_request" in data and not has_limit:
+            raise ValueError("max_request is used only with kind: aws-batch")
+        return data
+
+    def check_new_run(self, request: ComputeRequest) -> None:
+        """Raises `ValueError` if a new run cannot use this setup with `request`, the
+        merged request of its model.
+
+        Profile load does not make these checks, so that a bad model entry stops only
+        the submits of that model. The message names the field, never its value.
+        """
+
 
 class LocalSetup(_BaseComputeSetup):
     """Tasks run on this computer. The worker is not held to the compute request."""
@@ -215,8 +237,85 @@ class KubernetesSetup(_BaseComputeSetup):
         return data
 
 
+_BATCH_ARN = r"arn:(?P<partition>aws[a-z-]*):batch:(?P<region>[a-z0-9-]+):(?P<account>[0-9]{12}):"
+_JOB_QUEUE_ARN = re.compile(_BATCH_ARN + r"job-queue/[A-Za-z0-9_-]{1,128}")
+_JOB_DEFINITION_ARN = re.compile(_BATCH_ARN + r"job-definition/[A-Za-z0-9_-]{1,128}:[1-9][0-9]*")
+_BATCH_RESOURCES = ("VCPU", "MEMORY", "GPU")
+_BATCH_AMOUNT = r"[1-9][0-9]*"
+# A whole number of at least 1, written in decimal, as text.
+BatchAmount = Annotated[str, Field(pattern=f"^{_BATCH_AMOUNT}$")]
+
+
+class AwsBatchSetup(_BaseComputeSetup):
+    """Tasks run as AWS Batch jobs, which read and write S3.
+
+    `job_queue` and `job_definition` are ARNs. The job definition ARN ends with its
+    revision, and the revision gives the image and the job role. `request.requests`
+    takes `VCPU`, `MEMORY` (MiB), and `GPU`. A value that the request leaves out comes
+    from the job definition.
+
+    `max_request` is the most that a model's request can ask for. Each request must
+    give each resource that it names, so that no named value comes from the job
+    definition.
+    """
+
+    TARGET_FIELDS = ("kind", "job_queue")
+
+    kind: Literal["aws-batch"]
+    job_queue: str
+    # Checked at submit, by `check_new_run`.
+    job_definition: str = Field(min_length=1)
+    max_request: Mapping[Literal["VCPU", "MEMORY", "GPU"], BatchAmount] | None = None
+
+    @field_validator("job_queue")
+    @classmethod
+    def _check_job_queue(cls, job_queue: str) -> str:
+        if _JOB_QUEUE_ARN.fullmatch(job_queue) is None:
+            raise ValueError(
+                "give a job queue ARN, such as arn:aws:batch:<region>:<account>:job-queue/<name>"
+            )
+        return job_queue
+
+    def check_new_run(self, request: ComputeRequest) -> None:
+        queue = _JOB_QUEUE_ARN.fullmatch(self.job_queue)
+        definition = _JOB_DEFINITION_ARN.fullmatch(self.job_definition)
+        # Load checks the queue.
+        assert queue is not None
+        if definition is None:
+            raise ValueError(
+                "job_definition must be a job definition ARN that ends with its revision, "
+                "such as arn:aws:batch:<region>:<account>:job-definition/<name>:<revision>"
+            )
+        place = ("partition", "region", "account")
+        if definition.group(*place) != queue.group(*place):
+            raise ValueError(
+                "job_definition must have the partition, region, and account of job_queue"
+            )
+        for name, value in request.requests.items():
+            if name not in _BATCH_RESOURCES:
+                raise ValueError("request.requests can give only VCPU, MEMORY (MiB), and GPU")
+            if re.fullmatch(_BATCH_AMOUNT, value) is None:
+                no_gpu = "; to ask for no GPU, leave GPU out" if name == "GPU" else ""
+                raise ValueError(
+                    f"request.requests.{name} must be a whole number of at least 1{no_gpu}"
+                )
+        if request.limits:
+            raise ValueError("request.limits must be empty; AWS Batch takes only requests")
+        deadline = request.active_deadline_seconds
+        if deadline is not None and deadline < 60:
+            raise ValueError("request.active_deadline_seconds must be at least 60")
+        for name, most in (self.max_request or {}).items():
+            value = request.requests.get(name)
+            if value is None:
+                raise ValueError(f"max_request names {name}, so the request must give {name}")
+            if int(value) > int(most):
+                raise ValueError(f"request.requests.{name} is more than max_request.{name}")
+
+
 # A compute setup of any kind, chosen by its `kind`.
-ComputeSetup = Annotated[LocalSetup | KubernetesSetup, Field(discriminator="kind")]
+ComputeSetup = Annotated[
+    LocalSetup | KubernetesSetup | AwsBatchSetup, Field(discriminator="kind")
+]
 
 
 class RequestChange(BaseModel):
@@ -463,10 +562,13 @@ def get_resolved_settings(profile: Profile, card: ModelCard | HeadCard) -> Resol
 
     The entry is the model ID, or for a head with no entry of its own,
     `head_runtime:<runtime>`. Raises `NotConfigured` if the profile has no `compute`
-    section, and `Refused` with `model_not_in_profile` if it has no entry for the model.
+    section, `Refused` with `model_not_in_profile` if it has no entry for the model,
+    and `Refused` with `invalid_profile` if the setup's kind cannot use the merged
+    request.
     """
     compute = get_compute_section(profile)
     merged = get_merged_model_settings(compute, _get_model_key(compute, card))
+    _check_new_run(compute.setups[merged.setup], merged, model_ref(card).id)
     target_compute, storage = get_setup_target(profile, merged.setup)
     execution_settings = {
         "setup": merged.setup,
@@ -480,6 +582,22 @@ def get_resolved_settings(profile: Profile, card: ModelCard | HeadCard) -> Resol
         target_compute=target_compute,
         storage=storage,
         execution_settings=execution_settings,
+    )
+
+
+def _check_new_run(setup: ComputeSetup, merged: MergedModelSettings, model_id: str) -> None:
+    """Raise `Refused` with `invalid_profile` if the setup's `check_new_run` refuses the
+    model's merged request. The message names the model and the setup."""
+    try:
+        setup.check_new_run(merged.request)
+    except ValueError as error:
+        problem = str(error)
+    else:
+        return
+    raise Refused(
+        INVALID_PROFILE,
+        f"The profile cannot run model {model_id} on setup {merged.setup}: {problem}.",
+        details={"model": model_id, "setup": merged.setup},
     )
 
 
@@ -527,12 +645,13 @@ def get_compute_section(profile: Profile) -> ComputeSettings:
 
 
 def _get_declared_fields(settings: BaseModel) -> dict[str, Any]:
-    """The fields that the section's class names, except a setup's capacity and defaults
-    (`max_in_flight`, `request`, and `resources`). The adapter's other fields are left out."""
+    """The fields that the section's class names, except a setup's capacity, defaults,
+    and size limit (`max_in_flight`, `request`, `resources`, and `max_request`). The
+    adapter's other fields are left out."""
     return {
         name: getattr(settings, name)
         for name in type(settings).model_fields
-        if name not in _BaseComputeSetup.model_fields
+        if name not in _BaseComputeSetup.model_fields and name != "max_request"
     }
 
 

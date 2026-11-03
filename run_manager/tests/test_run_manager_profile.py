@@ -364,7 +364,7 @@ def make_one_setup_compute(setup, models=None):
 def write_compute(tmp_path, compute, storage=None):
     if storage is None:
         kinds = {setup.get("kind") for setup in compute.get("setups", {}).values()}
-        storage = S3_STORAGE if "kubernetes" in kinds else LOCAL_STORAGE
+        storage = S3_STORAGE if kinds & {"kubernetes", "aws-batch"} else LOCAL_STORAGE
     write(tmp_path, "dev.yaml", {"database": DATABASE, "compute": compute, "storage": storage})
 
 
@@ -873,13 +873,20 @@ def test_compute_needs_at_least_make_one_setup_compute(tmp_path):
     assert get_problem_fields(invalid(tmp_path)) == ["compute.setups"]
 
 
-@pytest.mark.parametrize("name", ["CPU", "-cpu", "a.b", "x" * 65])
-def test_a_setup_name_must_match_the_name_pattern(tmp_path, name):
+@pytest.mark.parametrize("name", ["CPU", "-cpu", "cpu-", "cpu_", "a.b", "x" * 64])
+def test_a_setup_name_must_be_a_kubernetes_label_value(tmp_path, name):
     write_compute(tmp_path, {"setups": {name: LOCAL_SETUP}, "models": {"owl/v4": {}}})
 
     [field] = get_problem_fields(invalid(tmp_path))
 
     assert field.startswith("compute.setups.")
+
+
+@pytest.mark.parametrize("name", ["a", "aws_cpu-2", "x" * 63])
+def test_a_setup_name_that_is_a_kubernetes_label_value_loads(tmp_path, name):
+    profile = load_with_compute(tmp_path, {"setups": {name: LOCAL_SETUP}, "models": {"owl/v4": {}}})
+
+    assert list(profile.compute.setups) == [name]
 
 
 def test_max_in_flight_defaults_to_10_and_must_be_at_least_one(tmp_path):
@@ -914,6 +921,177 @@ def test_execution_settings_leave_out_the_launch_fields(tmp_path, setup):
         get_resolved_settings(with_fields, OWL_CARD).execution_settings["compute"]
         == get_resolved_settings(without, OWL_CARD).execution_settings["compute"]
     )
+
+
+QUEUE = "arn:aws:batch:us-west-2:123456789012:job-queue/robin-cpu"
+JOB_DEFINITION = "arn:aws:batch:us-west-2:123456789012:job-definition/robin-worker:12"
+AWS_BATCH_SETUP = {"kind": "aws-batch", "job_queue": QUEUE, "job_definition": JOB_DEFINITION}
+
+
+def load_aws_batch(tmp_path, model=None, **setup):
+    """A profile with one `aws-batch` setup, `main`, changed by `setup`, and `owl/v4`."""
+    compute = make_one_setup_compute({**AWS_BATCH_SETUP, **setup}, {"owl/v4": model or {}})
+    return load_with_compute(tmp_path, compute)
+
+
+def refused_at_submit(profile) -> Refused:
+    """The `invalid_profile` refusal of a new run of `owl/v4`."""
+    with pytest.raises(Refused) as raised:
+        get_resolved_settings(profile, OWL_CARD)
+    assert raised.value.reason == "invalid_profile"
+    assert "owl/v4" in raised.value.message
+    assert "main" in raised.value.message
+    return raised.value
+
+
+@pytest.mark.parametrize("setup", [LOCAL_SETUP, KUBERNETES_SETUP], ids=["local", "kubernetes"])
+def test_local_and_kubernetes_setups_refuse_max_request(tmp_path, setup):
+    write_compute(tmp_path, make_one_setup_compute({**setup, "max_request": {"MEMORY": "1"}}))
+
+    refusal = invalid(tmp_path)
+
+    assert get_problem_fields(refusal) == [f"compute.setups.main.{setup['kind']}"]
+    assert "aws-batch" in refusal.message
+
+
+@pytest.mark.parametrize(
+    "queue",
+    [
+        "robin-cpu",
+        "arn:aws:batch:us-west-2:123456789012:job-definition/robin-cpu",
+        "arn:aws:batch:us-west-2:1234:job-queue/robin-cpu",
+        "arn:aws:s3:us-west-2:123456789012:job-queue/robin-cpu",
+    ],
+    ids=["short-name", "other-type", "short-account", "other-service"],
+)
+def test_an_aws_batch_queue_must_be_a_queue_arn(tmp_path, queue):
+    write_compute(tmp_path, make_one_setup_compute({**AWS_BATCH_SETUP, "job_queue": queue}))
+
+    refusal = invalid(tmp_path)
+
+    assert get_problem_fields(refusal) == ["compute.setups.main.aws-batch.job_queue"]
+    assert "robin-cpu" not in shown(refusal)
+
+
+@pytest.mark.parametrize(
+    "job_definition",
+    [
+        "arn:aws:batch:us-west-2:123456789012:job-definition/robin-worker",
+        "arn:aws:batch:us-west-2:123456789012:job-definition/robin-worker:latest",
+        "arn:aws:batch:us-west-2:123456789012:job-queue/robin-worker:12",
+        "robin-worker:12",
+    ],
+    ids=["no-revision", "text-revision", "other-type", "short-name"],
+)
+def test_a_job_definition_needs_an_arn_with_a_revision(tmp_path, job_definition):
+    # Profile load does not check the job definition. A new run of a model on the setup
+    # is refused.
+    profile = load_aws_batch(tmp_path, job_definition=job_definition)
+
+    refusal = refused_at_submit(profile)
+
+    assert "robin-worker" not in shown(refusal)
+
+
+@pytest.mark.parametrize(
+    "job_definition",
+    [
+        "arn:aws:batch:us-east-1:123456789012:job-definition/robin-worker:12",
+        "arn:aws:batch:us-west-2:210987654321:job-definition/robin-worker:12",
+        "arn:aws-us-gov:batch:us-west-2:123456789012:job-definition/robin-worker:12",
+    ],
+    ids=["region", "account", "partition"],
+)
+def test_queue_and_job_definition_must_share_region_and_account(tmp_path, job_definition):
+    profile = load_aws_batch(tmp_path, job_definition=job_definition)
+
+    refused_at_submit(profile)
+
+
+@pytest.mark.parametrize(
+    "requests",
+    [{"cpu": "2"}, {"VCPU": "2", "memory": "8192"}, {"MEMORY": "8Gi"}, {"VCPU": "1.5"},
+     {"VCPU": "0"}, {"MEMORY": "-1"}],
+    ids=["kubernetes-name", "lower-case", "unit", "fraction", "zero", "negative"],
+)
+def test_aws_batch_request_takes_only_vcpu_memory_and_gpu(tmp_path, requests):
+    refused_at_submit(load_aws_batch(tmp_path, request={"requests": requests}))
+
+
+def test_an_aws_batch_request_of_vcpu_memory_and_gpu_is_frozen(tmp_path):
+    request = {"requests": {"VCPU": "4", "MEMORY": "16384", "GPU": "1"},
+               "active_deadline_seconds": 60}
+
+    resolved = get_resolved_settings(load_aws_batch(tmp_path, request=request), OWL_CARD)
+
+    assert resolved.execution_settings["request"] == {**request, "limits": {}}
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        {"request": {"requests": {"GPU": "0"}}},
+        {"request": {"limits": {"MEMORY": "16384"}}},
+        {"request": {"active_deadline_seconds": 59}},
+    ],
+    ids=["gpu-zero", "limits", "short-deadline"],
+)
+def test_aws_batch_refuses_gpu_zero_limits_and_a_short_deadline(tmp_path, model):
+    refused_at_submit(load_aws_batch(tmp_path, model))
+
+
+def test_a_model_can_remove_gpu_with_null(tmp_path):
+    profile = load_aws_batch(
+        tmp_path,
+        {"request": {"requests": {"GPU": None}}},
+        request={"requests": {"VCPU": "4", "GPU": "1"}},
+    )
+
+    resolved = get_resolved_settings(profile, OWL_CARD)
+
+    assert resolved.execution_settings["request"]["requests"] == {"VCPU": "4"}
+
+
+@pytest.mark.parametrize(
+    ("requests", "allowed"),
+    [({}, False), ({"MEMORY": "131072"}, False), ({"MEMORY": "65536"}, True),
+     ({"MEMORY": "32768"}, True)],
+    ids=["missing", "too-large", "equal", "smaller-and-no-vcpu"],
+)
+def test_max_request_needs_each_named_resource_in_the_request(tmp_path, requests, allowed):
+    profile = load_aws_batch(
+        tmp_path, {"request": {"requests": requests}}, max_request={"MEMORY": "65536"}
+    )
+
+    if not allowed:
+        refused_at_submit(profile)
+        return
+    resolved = get_resolved_settings(profile, OWL_CARD)
+    assert resolved.execution_settings["request"]["requests"] == requests
+    # max_request is a check at submit, and the run does not freeze it.
+    assert resolved.execution_settings["compute"] == AWS_BATCH_SETUP
+    assert resolved.target_compute == {"kind": "aws-batch", "job_queue": QUEUE}
+
+
+@pytest.mark.parametrize(
+    "max_request", [{"MEMORY": "0"}, {"MEMORY": "64Gi"}, {"memory": "65536"}, {"VCPU": 4}],
+    ids=["zero", "unit", "lower-case", "number"],
+)
+def test_max_request_values_are_whole_numbers_of_vcpu_memory_and_gpu(tmp_path, max_request):
+    write_compute(tmp_path, make_one_setup_compute({**AWS_BATCH_SETUP, "max_request": max_request}))
+
+    [field] = get_problem_fields(invalid(tmp_path))
+
+    assert field.startswith("compute.setups.main.aws-batch.max_request")
+
+
+def test_aws_batch_needs_s3_storage(tmp_path):
+    write_compute(tmp_path, make_one_setup_compute(AWS_BATCH_SETUP), LOCAL_STORAGE)
+
+    refusal = invalid(tmp_path)
+
+    assert get_problem_fields(refusal) == ["storage"]
+    assert "s3://" in refusal.message
 
 
 def test_a_repeated_key_is_refused_with_its_position(tmp_path):
