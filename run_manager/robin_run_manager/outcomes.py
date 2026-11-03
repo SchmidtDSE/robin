@@ -91,12 +91,18 @@ _Outcome = _Succeeded | _Failed
 
 
 def update_task_from_compute(
-    database: Database, task_id: UUID, *, setup: Mapping[str, Any], compute: ComputeAdapter
+    database: Database,
+    task_id: UUID,
+    *,
+    setup: Mapping[str, Any],
+    compute: ComputeAdapter,
+    storage_env_vars: Mapping[str, str],
 ) -> TaskStateAfterUpdate | Literal["skipped"]:
     """Ask the compute adapter about a `submitted` or `running` task, and give its new state.
 
-    `setup` comes from `get_setup_query_parameters`. A started execution makes the task
-    `running`. An ended execution, or none, makes it `finalizing`, which frees its slot.
+    `setup` comes from `get_setup_query_parameters`. The compute adapter gets
+    `storage_env_vars` with the task. A started execution makes the task `running`.
+    An ended execution, or none, makes it `finalizing`, which frees its slot.
     Gives `skipped` if another pass holds the task, or if it is not a `submitted` or
     `running` task of this setup, also when it changed during the update. Raises
     `ComputeUnavailable` if the adapter fails; the task keeps its state.
@@ -105,7 +111,7 @@ def update_task_from_compute(
         if connection is None:
             return "skipped"
         with transaction_on(connection, read_only=True):
-            task = _get_task_to_update(connection, task_id, setup)
+            task = _get_task_to_update(connection, task_id, setup, storage_env_vars)
         if task is None:
             return "skipped"
         status = get_compute_status(compute, task.compute_task)
@@ -172,12 +178,18 @@ def get_tasks_to_release(
 
 
 def release_task(
-    database: Database, task_id: UUID, *, setup: Mapping[str, Any], compute: ComputeAdapter
+    database: Database,
+    task_id: UUID,
+    *,
+    setup: Mapping[str, Any],
+    compute: ComputeAdapter,
+    storage_env_vars: Mapping[str, str],
 ) -> Literal["released", "skipped"]:
     """Release a task that ended, and record the time of the release.
 
-    `setup` comes from `get_setup_query_parameters`. Gives `skipped` if another pass holds the
-    task, or if it is not a task of this setup that ended, was reserved, and is not
+    `setup` comes from `get_setup_query_parameters`. The compute adapter gets
+    `storage_env_vars` with the task. Gives `skipped` if another pass holds the task,
+    or if it is not a task of this setup that ended, was reserved, and is not
     released. Raises `ComputeUnavailable` if the adapter fails; the task does not
     change, and a later pass releases it again.
     """
@@ -185,7 +197,7 @@ def release_task(
         if connection is None:
             return "skipped"
         with transaction_on(connection, read_only=True):
-            compute_task = _get_task_to_release(connection, task_id, setup)
+            compute_task = _get_task_to_release(connection, task_id, setup, storage_env_vars)
         if compute_task is None:
             return "skipped"
         invoke_adapter(
@@ -202,7 +214,10 @@ def release_task(
 
 
 def _get_task_to_update(
-    connection: psycopg.Connection, task_id: UUID, setup: Mapping[str, Any]
+    connection: psycopg.Connection,
+    task_id: UUID,
+    setup: Mapping[str, Any],
+    storage_env_vars: Mapping[str, str],
 ) -> _TaskToUpdate | None:
     """The state of a `submitted` or `running` task of this setup, and the task as the
     compute adapter gets it. None for any other task."""
@@ -215,7 +230,10 @@ def _get_task_to_update(
     ).fetchone()
     if row is None:
         return None
-    return _TaskToUpdate(state=row["state"], compute_task=_get_compute_task(task_id, row))
+    return _TaskToUpdate(
+        state=row["state"],
+        compute_task=_get_compute_task(task_id, row, storage_env_vars),
+    )
 
 
 def _set_next_task_state(
@@ -236,7 +254,10 @@ def _set_next_task_state(
 
 
 def _get_task_to_release(
-    connection: psycopg.Connection, task_id: UUID, setup: Mapping[str, Any]
+    connection: psycopg.Connection,
+    task_id: UUID,
+    setup: Mapping[str, Any],
+    storage_env_vars: Mapping[str, str],
 ) -> ComputeTask | None:
     """The task as the compute adapter gets it, if it is a task of this setup that ended,
     was reserved, and is not released. None for any other task."""
@@ -248,7 +269,7 @@ def _get_task_to_release(
         f"AND {MATCHES_SETUP_WITH_SUPPORTED_STORAGE}",
         {**setup, "task_id": task_id, "states": list(_TERMINAL_STATES)},
     ).fetchone()
-    return None if row is None else _get_compute_task(task_id, row)
+    return None if row is None else _get_compute_task(task_id, row, storage_env_vars)
 
 
 def _get_release_failure(task_id: UUID, error_type: str) -> ComputeUnavailable:
@@ -260,13 +281,16 @@ def _get_release_failure(task_id: UUID, error_type: str) -> ComputeUnavailable:
     )
 
 
-def _get_compute_task(task_id: UUID, row: Mapping[str, Any]) -> ComputeTask:
+def _get_compute_task(
+    task_id: UUID, row: Mapping[str, Any], storage_env_vars: Mapping[str, str]
+) -> ComputeTask:
     return ComputeTask(
         task_id=task_id,
         work_uri=row["work_uri"],
         settings=row["execution_settings"]["compute"],
         request=ComputeRequest.model_validate(row["compute_request"]),
         compute_ref=row["compute_ref"],
+        storage_env_vars=storage_env_vars,
     )
 
 

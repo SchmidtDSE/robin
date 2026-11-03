@@ -98,10 +98,11 @@ def get_queued_elsewhere(database, actor="ana"):
     )
 
 
-def submit_task(database, task_id, compute, storage=None):
+def submit_task(database, task_id, compute, storage=None, storage_env_vars=None):
     return submit_reserved_task(
         database, task_id, setup=get_task_setup(database, task_id), compute=compute,
         storage=storage or LocalTaskStorage(), split_location=split_location,
+        storage_env_vars=storage_env_vars or {},
     )
 
 
@@ -365,6 +366,23 @@ def test_submit_writes_the_work_file_and_records_the_reference(registered, make_
         task_id, expected.work_uri, {"kind": "local"},
     )
     assert call.compute_ref is None
+    assert call.storage_env_vars == {}
+
+
+def test_submit_gives_the_compute_adapter_the_storage_environment(
+    registered, make_profile, root
+):
+    _, [task_id] = add_queued_tasks(registered, ["a"], root=root)
+    reserve(registered, make_profile())
+    compute = ScriptedCompute()
+
+    submit_task(
+        registered, task_id, compute, storage_env_vars={"EXAMPLE_VARIABLE": "x"}
+    )
+
+    assert [task.storage_env_vars for _, task in compute.calls] == [
+        {"EXAMPLE_VARIABLE": "x"}, {"EXAMPLE_VARIABLE": "x"},
+    ]
 
 
 def test_the_reservation_stores_the_digest_of_the_work_file(registered, make_profile, root):
@@ -620,10 +638,13 @@ def test_a_task_that_changed_during_the_submit_is_not_recorded(
     assert (task["state"], task["compute_ref"], task["submitted_at"]) == ("cancelled", None, None)
 
 
-def recover(database, task_id, compute, storage=None, setup=None):
+def recover(
+    database, task_id, compute, storage=None, setup=None, storage_env_vars=None
+):
     return recover_submission(
         database, task_id, setup=setup or get_task_setup(database, task_id), compute=compute,
         storage=storage or LocalTaskStorage(), split_location=split_location,
+        storage_env_vars=storage_env_vars or {},
     )
 
 

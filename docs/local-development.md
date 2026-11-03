@@ -50,6 +50,12 @@ worker's `result.json` and `worker.log`, and the output files in
 `outputs/EXECUTION/`. Each execution of the worker writes its own folder, and the
 result names only the files of the execution that wrote it.
 
+Local compute can also use `storage.kind: s3`. Then the task files are in S3, and the
+worker reads and writes them with your AWS login. Robin gives the worker the storage
+`endpoint`, if the profile has one. Each task's `worker.log` is on the computer that
+runs `robin reconcile`, in `$XDG_STATE_HOME/robin/local-compute/tasks/TASK/`, or in
+`~/.local/state/robin/local-compute/tasks/TASK/` when `XDG_STATE_HOME` is not set.
+
 ## Run the tests
 
 ```sh

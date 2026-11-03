@@ -7,6 +7,7 @@ a command that only reads does not load the storage libraries.
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import cast
 
 from robin_contracts.ports.compute import ComputeAdapter
 from robin_contracts.ports.storage import TaskStorage
@@ -23,6 +24,9 @@ class Services:
     uses and that this version has an adapter for. `task_storage` holds a task storage
     for each storage kind that this version can read and write task files in.
     `split_location` is the location rule of the storage that the worker writes with.
+    `storage_env_vars` holds the environment variables that the worker needs to reach
+    that storage, such as an S3 endpoint. The run manager copies them into each task
+    that it gives a compute adapter.
     """
 
     profile: Profile
@@ -30,15 +34,18 @@ class Services:
     compute: Mapping[str, ComputeAdapter] = field(default_factory=dict)
     task_storage: Mapping[str, TaskStorage] = field(default_factory=dict)
     split_location: SplitLocation | None = None
+    storage_env_vars: Mapping[str, str] = field(default_factory=dict)
 
 
 def compose(profile: Profile) -> Services:
+    task_storage = _get_task_storage(profile)
     return Services(
         profile=profile,
         database=open_database(profile.database),
         compute=_get_compute(profile),
-        task_storage=_get_task_storage(profile),
+        task_storage=task_storage,
         split_location=_split_location,
+        storage_env_vars=_get_storage_env_vars(task_storage),
     )
 
 
@@ -54,12 +61,29 @@ def _get_compute(profile: Profile) -> dict[str, ComputeAdapter]:
 
 
 def _get_task_storage(profile: Profile) -> dict[str, TaskStorage]:
-    # Only local storage has a task storage in this version.
-    if profile.storage is None or profile.storage.kind != "local":
+    storage = profile.storage
+    if storage is None:
         return {}
-    from robin_adapters.storage.local import LocalTaskStorage
+    if storage.kind == "local":
+        from robin_adapters.storage.local import LocalTaskStorage
 
-    return {"local": LocalTaskStorage()}
+        return {"local": LocalTaskStorage()}
+    from robin_adapters.storage.ondio import OndioTaskStorage
+
+    options = {} if storage.endpoint is None else {"endpoint_url": str(storage.endpoint)}
+    return {"s3": OndioTaskStorage(storage.root, **options)}
+
+
+def _get_storage_env_vars(task_storage: Mapping[str, TaskStorage]) -> dict[str, str]:
+    """Returns the environment variables that the worker needs to reach the task storage.
+
+    Only S3 storage has any.
+    """
+    if "s3" not in task_storage:
+        return {}
+    from robin_adapters.storage.ondio import OndioTaskStorage
+
+    return cast(OndioTaskStorage, task_storage["s3"]).get_worker_env_vars()
 
 
 def _split_location(uri: str) -> tuple[str, str] | None:

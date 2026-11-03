@@ -52,9 +52,10 @@ def list_to_release(database, root, actor="ana"):
     return get_tasks_to_release(database, actor=actor, setup=get_local_setup(root))
 
 
-def release(database, task_id, compute):
+def release(database, task_id, compute, storage_env_vars=None):
     return release_task(
-        database, task_id, setup=get_task_setup(database, task_id), compute=compute
+        database, task_id, setup=get_task_setup(database, task_id), compute=compute,
+        storage_env_vars=storage_env_vars or {},
     )
 
 
@@ -107,6 +108,15 @@ def test_a_repeated_release_succeeds_when_the_job_is_already_absent(registered, 
     assert list_to_release(registered, root) == []
     assert release(registered, task_id, compute) == "skipped"
     assert len(compute.get_calls("release")) == 1
+
+
+def test_release_gives_the_compute_adapter_the_storage_environment(registered, root):
+    task_id, compute = add_succeeded_task(registered, root)
+
+    release(registered, task_id, compute, storage_env_vars={"EXAMPLE_VARIABLE": "x"})
+
+    [call] = compute.get_calls("release")
+    assert call.storage_env_vars == {"EXAMPLE_VARIABLE": "x"}
 
 
 def test_a_failed_release_stays_pending_and_keeps_the_outcome(registered, root):

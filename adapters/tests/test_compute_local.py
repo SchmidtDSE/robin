@@ -12,11 +12,15 @@ from uuid import uuid4
 import pytest
 from robin_contracts.ports.compute import ComputeRequest, ComputeTask, SubmissionRejected
 
-from robin_adapters.compute.local import LocalCompute
+from robin_adapters.compute.local import LocalCompute, get_state_folder
 
-# Stands in for `robin-worker`. It writes a marker that holds its arguments, prints a line
+# Stands in for `robin-worker`. It writes a marker that holds its arguments and a file
+# that holds the variables of its environment whose names start with `ROBIN_TEST_` or
+# `FAKE_WORKER_`, and no others, so no credential is written to disk. It prints a line
 # to stdout and to stderr, and then acts by its mode. A child that it starts ends its
 # arguments with `child <uri>`, so only the process group links the child to the task.
+# For a work URI that is not a `file:` URI, it writes in the folder that
+# `FAKE_WORKER_FOLDER` names.
 WORKER_SCRIPT = textwrap.dedent(
     """
     import json, os, subprocess, sys, time
@@ -24,7 +28,10 @@ WORKER_SCRIPT = textwrap.dedent(
     from urllib.parse import urlsplit
     from urllib.request import url2pathname
 
-    folder = Path(url2pathname(urlsplit(sys.argv[-1]).path)).parent
+    if sys.argv[-1].startswith("file:"):
+        folder = Path(url2pathname(urlsplit(sys.argv[-1]).path)).parent
+    else:
+        folder = Path(os.environ["FAKE_WORKER_FOLDER"])
 
     def write_marker(name, text):
         temporary = folder / f".{name}.tmp"
@@ -41,6 +48,11 @@ WORKER_SCRIPT = textwrap.dedent(
         wait_for_release()
         sys.exit()
 
+    reported = {
+        name: value for name, value in os.environ.items()
+        if name.startswith(("ROBIN_TEST_", "FAKE_WORKER_"))
+    }
+    write_marker(f"environment-{os.getpid()}", json.dumps(reported))
     write_marker(f"marker-{os.getpid()}", json.dumps(sys.argv[1:]))
     print("to stdout", flush=True)
     print("to stderr", file=sys.stderr, flush=True)
@@ -61,24 +73,42 @@ def script(tmp_path):
 
 
 @pytest.fixture
-def make_task(tmp_path):
-    """Makes a task with its own folder. At teardown, every process in it is ended."""
+def state_folder(tmp_path):
+    return tmp_path / "state"
+
+
+@pytest.fixture
+def make_task(tmp_path, state_folder):
+    """Makes a task with its own folder. At teardown, it ends every process in the folder.
+
+    With `work_on_s3=True`, the task's work URI is an `s3://` URI, and its folder is in
+    `state_folder`, where the adapter makes it.
+    """
     folders = []
 
-    def make(compute_ref=None):
-        folder = tmp_path / f"task-{len(folders)}"
-        folder.mkdir()
+    def make(compute_ref=None, *, work_on_s3=False, storage_env_vars=None):
+        task_id = uuid4()
+        if work_on_s3:
+            folder = state_folder / "tasks" / str(task_id)
+            work_uri = f"s3://bucket/robin/runs/R/tasks/{task_id}/work.json"
+        else:
+            folder = tmp_path / f"task-{len(folders)}"
+            folder.mkdir()
+            work_uri = (folder / "work.json").as_uri()
         folders.append(folder)
         return ComputeTask(
-            task_id=uuid4(),
-            work_uri=(folder / "work.json").as_uri(),
+            task_id=task_id,
+            work_uri=work_uri,
             settings={"kind": "local"},
             request=ComputeRequest(),
             compute_ref=compute_ref,
+            storage_env_vars=storage_env_vars or {},
         )
 
     yield make
     for folder in folders:
+        if not folder.exists():
+            continue
         (folder / "release").touch()
         for marker in [*folder.glob("marker-*"), *folder.glob("child-*")]:
             try:
@@ -93,8 +123,23 @@ def _compute(script, mode="wait", *, prefix=()):
     )
 
 
+def _s3_compute(script, state_folder, task, mode="wait"):
+    return LocalCompute(
+        command=(sys.executable, str(script)),
+        env={
+            "FAKE_WORKER_MODE": mode,
+            "FAKE_WORKER_FOLDER": str(_state_task_folder(state_folder, task)),
+        },
+        state_folder=state_folder,
+    )
+
+
 def _folder(task):
     return Path(task.work_uri.removeprefix("file://")).parent
+
+
+def _state_task_folder(state_folder, task):
+    return state_folder / "tasks" / str(task.task_id)
 
 
 def _with_ref(task, compute_ref):
@@ -110,7 +155,16 @@ def _wait_for(condition, timeout=10.0):
 
 
 def _markers(task, kind="marker"):
-    return sorted(_folder(task).glob(f"{kind}-*"))
+    return _markers_in(_folder(task), kind)
+
+
+def _markers_in(folder, kind="marker"):
+    return sorted(folder.glob(f"{kind}-*"))
+
+
+def _read_worker_environment(folder):
+    [environment] = _markers_in(folder, "environment")
+    return json.loads(environment.read_text())
 
 
 def _is_alive(pid):
@@ -173,7 +227,7 @@ def _submit_from_another_process(script, task, mode="wait"):
         f"""
         import sys
         from robin_contracts.ports.compute import ComputeTask
-        from robin_adapters.compute.local import LocalCompute
+        from robin_adapters.compute.local import LocalCompute, get_state_folder
 
         task = ComputeTask.model_validate_json({task.model_dump_json()!r})
         compute = LocalCompute(
@@ -356,9 +410,138 @@ def test_release_changes_nothing(script, make_task):
     assert (folder / "outputs" / "scores.parquet").read_bytes() == b"scores"
 
 
+def test_submit_gives_the_worker_the_storage_environment(script, make_task):
+    task = make_task(storage_env_vars={"ROBIN_TEST_STORAGE_VARIABLE": "set"})
+
+    _compute(script).submit(task)
+
+    _wait_for(lambda: _markers(task))
+    environment = _read_worker_environment(_folder(task))
+    assert environment["ROBIN_TEST_STORAGE_VARIABLE"] == "set"
+    assert environment["FAKE_WORKER_MODE"] == "wait"
+
+
+def test_an_empty_storage_environment_changes_no_variable(script, make_task, monkeypatch):
+    monkeypatch.setenv("FAKE_WORKER_MODE", "wait")
+    monkeypatch.setenv("ROBIN_TEST_KEPT_VARIABLE", "kept")
+    task = make_task()
+
+    LocalCompute(command=(sys.executable, str(script))).submit(task)
+
+    _wait_for(lambda: _markers(task))
+    environment = _read_worker_environment(_folder(task))
+    assert environment == {"FAKE_WORKER_MODE": "wait", "ROBIN_TEST_KEPT_VARIABLE": "kept"}
+
+
+def test_submit_of_an_s3_work_uri_starts_the_worker_with_that_uri(script, make_task, state_folder):
+    task = make_task(work_on_s3=True)
+    folder = _state_task_folder(state_folder, task)
+
+    compute_ref = _s3_compute(script, state_folder, task).submit(task)
+
+    _wait_for(lambda: _markers_in(folder))
+    [marker] = _markers_in(folder)
+    assert json.loads(marker.read_text()) == ["run", task.work_uri]
+    assert compute_ref == marker.name.split("-")[1]
+    log = folder / "worker.log"
+    _wait_for(lambda: "to stderr" in log.read_text())
+    assert "to stdout" in log.read_text()
+
+
+def test_a_repeated_submit_of_an_s3_work_uri_returns_the_running_worker(
+    script, make_task, state_folder
+):
+    task = make_task(work_on_s3=True)
+    folder = _state_task_folder(state_folder, task)
+    compute = _s3_compute(script, state_folder, task)
+    first = compute.submit(task)
+    _wait_for(lambda: _markers_in(folder))
+
+    assert compute.submit(task) == first
+    time.sleep(0.5)
+    assert len(_markers_in(folder)) == 1
+
+
+def test_two_submits_at_once_of_an_s3_work_uri_start_one_worker(script, make_task, state_folder):
+    task = make_task(work_on_s3=True)
+    folder = _state_task_folder(state_folder, task)
+    barrier = threading.Barrier(2)
+    refs = []
+
+    def submit():
+        compute = _s3_compute(script, state_folder, task)
+        barrier.wait()
+        refs.append(compute.submit(task))
+
+    threads = [threading.Thread(target=submit) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    _wait_for(lambda: _markers_in(folder))
+    time.sleep(0.5)
+    assert len(_markers_in(folder)) == 1
+    assert refs[0] == refs[1]
+
+
+def test_describe_and_stop_find_an_s3_worker_without_a_compute_ref(
+    script, make_task, state_folder
+):
+    task = make_task(work_on_s3=True)
+    folder = _state_task_folder(state_folder, task)
+    starting = _s3_compute(script, state_folder, task)
+    compute_ref = starting.submit(task)
+    _wait_for(lambda: _markers_in(folder))
+    recovering = _s3_compute(script, state_folder, task)
+
+    status = recovering.describe(task)
+    recovering.stop(task)
+
+    assert (status.state, status.compute_ref) == ("running", compute_ref)
+    # Only the adapter that started the worker collects it after it ends.
+    _wait_for(lambda: starting.describe(task).state == "not_found")
+    assert recovering.describe(task).state == "not_found"
+
+
+def test_release_of_an_s3_task_is_safe(script, make_task, state_folder):
+    task = make_task(work_on_s3=True, compute_ref="12345")
+    compute = _s3_compute(script, state_folder, task)
+
+    compute.release(task)
+    compute.release(task)
+
+
+@pytest.mark.parametrize("is_set", [True, False], ids=["set", "not set"])
+def test_the_state_folder_comes_from_xdg_state_home(tmp_path, monkeypatch, is_set):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    if is_set:
+        monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+        expected = tmp_path / "state" / "robin" / "local-compute"
+    else:
+        monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+        expected = tmp_path / "home" / ".local" / "state" / "robin" / "local-compute"
+
+    assert get_state_folder() == expected
+
+
 @pytest.mark.parametrize("method", ["submit", "describe", "stop", "release"])
-def test_a_work_uri_that_is_not_local_is_refused(script, make_task, method):
-    task = make_task().model_copy(update={"work_uri": "s3://bucket/work.json"})
+@pytest.mark.parametrize(
+    "work_uri",
+    [
+        "runs/R/tasks/T/work.json",
+        "s3://bucket/my work.json",
+        "/data/my work.json",
+        "file://otherhost/work.json",
+    ],
+    ids=["relative path", "whitespace", "whitespace in a path", "file URI on another host"],
+)
+def test_a_work_uri_without_a_scheme_or_with_whitespace_is_refused(
+    script, make_task, state_folder, method, work_uri
+):
+    task = make_task().model_copy(update={"work_uri": work_uri})
+    compute = LocalCompute(command=(sys.executable, str(script)), state_folder=state_folder)
 
     with pytest.raises(ValueError):
-        getattr(_compute(script), method)(task)
+        getattr(compute, method)(task)
+    assert not state_folder.exists()

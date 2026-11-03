@@ -263,6 +263,7 @@ def _recover_submissions(one_pass: _Pass) -> None:
                 outcome = recover_submission(
                     database, task_id, setup=query_parameters, compute=one_pass.compute,
                     storage=storage, split_location=one_pass.services.split_location,
+                    storage_env_vars=one_pass.services.storage_env_vars,
                 )
                 if outcome == "resubmitted":
                     one_pass.report.launched += 1
@@ -279,7 +280,8 @@ def _update_tasks(one_pass: _Pass) -> None:
         for task_id in _until_stopped(one_pass, task_ids):
             with _add_failures(one_pass, "update", task_id=task_id):
                 update_task_from_compute(
-                    database, task_id, setup=one_pass.query_parameters, compute=one_pass.compute
+                    database, task_id, setup=one_pass.query_parameters, compute=one_pass.compute,
+                    storage_env_vars=one_pass.services.storage_env_vars,
                 )
 
 
@@ -311,7 +313,8 @@ def _release_tasks(one_pass: _Pass) -> None:
     for task_id in _until_stopped(one_pass, task_ids):
         with _add_failures(one_pass, "release", task_id=task_id):
             if release_task(
-                database, task_id, setup=one_pass.query_parameters, compute=one_pass.compute
+                database, task_id, setup=one_pass.query_parameters, compute=one_pass.compute,
+                storage_env_vars=one_pass.services.storage_env_vars,
             ) == "released":
                 one_pass.report.released += 1
 
@@ -391,6 +394,7 @@ def _submit_with_its_storage(one_pass: _Pass, task_id: UUID) -> SubmissionOutcom
         outcome = submit_reserved_task(
             one_pass.services.database, task_id, setup=query_parameters, compute=one_pass.compute,
             storage=storage, split_location=one_pass.services.split_location,
+            storage_env_vars=one_pass.services.storage_env_vars,
         )
         if outcome != "skipped":
             break

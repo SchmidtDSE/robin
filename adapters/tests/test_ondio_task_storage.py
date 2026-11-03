@@ -57,3 +57,16 @@ def test_repr_shows_no_endpoint():
 
     assert ROOT in shown
     assert "9000" not in shown
+
+
+def test_the_worker_environment_carries_the_options_and_builds_no_backend(monkeypatch):
+    calls = _get_backend_spy(monkeypatch)
+    storage = OndioTaskStorage(ROOT, endpoint_url="http://127.0.0.1:9000")
+
+    environment = storage.get_worker_env_vars()
+
+    assert environment == storage_module.ondio.get_environment(
+        ROOT, endpoint_url="http://127.0.0.1:9000"
+    )
+    assert environment != {}
+    assert calls == []

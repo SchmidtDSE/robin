@@ -453,8 +453,7 @@ def add_submitted_task(database, root, values=("a", "b"), *, actor="ana"):
     compute = ScriptedCompute()
     assert submit_reserved_task(
         database, task_id, setup=get_task_setup(database, task_id), compute=compute,
-        storage=LocalTaskStorage(),
-        split_location=split_location,
+        storage=LocalTaskStorage(), split_location=split_location, storage_env_vars={},
     ) == "submitted"
     return task_id, compute
 
@@ -467,7 +466,8 @@ def add_finalizing_task(database, root, values=("a", "b")):
     return task_id, get_work_file(database, task_id)
 
 
-def update_task(database, task_id, compute):
+def update_task(database, task_id, compute, storage_env_vars=None):
     return update_task_from_compute(
-        database, task_id, setup=get_task_setup(database, task_id), compute=compute
+        database, task_id, setup=get_task_setup(database, task_id), compute=compute,
+        storage_env_vars=storage_env_vars or {},
     )

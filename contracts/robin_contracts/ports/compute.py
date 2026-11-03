@@ -46,6 +46,10 @@ class ComputeTask(BaseModel, frozen=True):
     `settings` are the run's frozen compute settings. `request` is the request stored on
     the task when its slot was reserved. `compute_ref` is None until a submit is
     confirmed.
+
+    `storage_env_vars` holds the environment variables that the worker needs to reach
+    the storage, such as an S3 endpoint. The adapter adds them to the worker's
+    environment.
     """
 
     task_id: UUID
@@ -53,6 +57,7 @@ class ComputeTask(BaseModel, frozen=True):
     settings: Mapping[str, JsonValue]
     request: ComputeRequest
     compute_ref: str | None = None
+    storage_env_vars: Mapping[str, str] = {}
 
 
 class ComputeStatus(BaseModel, frozen=True):

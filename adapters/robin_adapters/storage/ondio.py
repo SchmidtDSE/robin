@@ -109,8 +109,9 @@ class OndioTaskStorage:
     """Writes and reads task files under `root`, such as `work.json`, through ondio.
 
     It builds one ondio backend for `root`, with `backend_options`, on the first
-    `create` or `read`, and uses it for every call after that. Building it later, not
-    here, means a command that never reads a task file needs no storage credentials.
+    `create` or `read`, and uses it for every call after that. It does not build the
+    backend in `__init__`, so a command that never reads or writes a task file needs no
+    storage credentials.
     """
 
     def __init__(self, root: str, **backend_options: Any) -> None:
@@ -133,6 +134,14 @@ class OndioTaskStorage:
             return ondio.read(uri, backend=self._get_backend())
         except ondio.ObjectNotFoundError:
             return None
+
+    def get_worker_env_vars(self) -> dict[str, str]:
+        """Returns the environment variables that make a worker's ondio calls use this
+        storage's options, such as its endpoint.
+
+        It builds no backend, so it needs no storage credentials.
+        """
+        return ondio.get_environment(self._root, **self._backend_options)
 
     def _get_backend(self) -> StorageBackend:
         if self._backend is None:

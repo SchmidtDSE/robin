@@ -113,6 +113,19 @@ def test_ended_frees_the_slot_and_keeps_the_claims(registered, root):
     assert {state for state, _ in get_recordings(registered, task_id).values()} == {"pending"}
 
 
+def test_update_gives_the_compute_adapter_the_storage_environment(registered, root):
+    task_id, compute = add_submitted_task(registered, root)
+
+    calls_before = len(compute.calls)
+
+    update_task(
+        registered, task_id, compute, storage_env_vars={"EXAMPLE_VARIABLE": "x"}
+    )
+
+    [(method, task)] = compute.calls[calls_before:]
+    assert (method, task.storage_env_vars) == ("describe", {"EXAMPLE_VARIABLE": "x"})
+
+
 def test_a_started_execution_makes_the_task_running(registered, root):
     task_id, compute = add_submitted_task(registered, root)
 

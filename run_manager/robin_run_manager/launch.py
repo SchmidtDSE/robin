@@ -219,11 +219,13 @@ def submit_reserved_task(
     compute: ComputeAdapter,
     storage: TaskStorage,
     split_location: SplitLocation,
+    storage_env_vars: Mapping[str, str],
 ) -> SubmissionOutcome:
     """Write the work file of a `submitting` task, submit it, and record the submit.
 
-    `setup` comes from `get_setup_query_parameters`. Gives `skipped` if another pass holds the
-    task, or if it is not a `submitting` task of this setup, also when it changed during
+    `setup` comes from `get_setup_query_parameters`. The compute adapter gets
+    `storage_env_vars` with the task. Gives `skipped` if another pass holds the task,
+    or if it is not a `submitting` task of this setup, also when it changed during
     the submit. Gives `rejected`, and fails the task, if the compute service refused it.
 
     Another pass can recover the task before this submit, so this submit first checks as
@@ -236,7 +238,8 @@ def submit_reserved_task(
     """
     return _settle_submission(
         database, task_id, setup=setup, compute=compute, storage=storage,
-        split_location=split_location, submitted_as="submitted",
+        split_location=split_location, storage_env_vars=storage_env_vars,
+        submitted_as="submitted",
     )
 
 
@@ -305,6 +308,7 @@ def recover_submission(
     compute: ComputeAdapter,
     storage: TaskStorage,
     split_location: SplitLocation,
+    storage_env_vars: Mapping[str, str],
 ) -> SubmissionOutcome:
     """Settle a `submitting` task whose submit may have started an execution.
 
@@ -315,7 +319,8 @@ def recover_submission(
     """
     return _settle_submission(
         database, task_id, setup=setup, compute=compute, storage=storage,
-        split_location=split_location, submitted_as="resubmitted",
+        split_location=split_location, storage_env_vars=storage_env_vars,
+        submitted_as="resubmitted",
     )
 
 
@@ -327,6 +332,7 @@ def _settle_submission(
     compute: ComputeAdapter,
     storage: TaskStorage,
     split_location: SplitLocation,
+    storage_env_vars: Mapping[str, str],
     submitted_as: Literal["submitted", "resubmitted"],
 ) -> SubmissionOutcome:
     """Submit a `submitting` task if it has no execution and no result.
@@ -338,7 +344,7 @@ def _settle_submission(
         if connection is None:
             return "skipped"
         with transaction_on(connection, read_only=True):
-            submission = _get_submission(connection, task_id, setup)
+            submission = _get_submission(connection, task_id, setup, storage_env_vars)
         if submission is None:
             return "skipped"
         # Describe first. An execution that writes its result and ends after the result
@@ -537,7 +543,10 @@ def _reserve_task(connection: psycopg.Connection, task_id: UUID) -> bool:
 
 
 def _get_submission(
-    connection: psycopg.Connection, task_id: UUID, setup: Mapping[str, Any]
+    connection: psycopg.Connection,
+    task_id: UUID,
+    setup: Mapping[str, Any],
+    storage_env_vars: Mapping[str, str],
 ) -> Submission | None:
     """What the submit of a `submitting` task of this setup needs. None if the task is
     not `submitting`, or its run is not of this setup.
@@ -560,6 +569,7 @@ def _get_submission(
         settings=row["execution_settings"]["compute"],
         request=ComputeRequest.model_validate(row["compute_request"]),
         compute_ref=row["compute_ref"],
+        storage_env_vars=storage_env_vars,
     )
     return Submission(work_file=work_file, compute_task=compute_task)
 

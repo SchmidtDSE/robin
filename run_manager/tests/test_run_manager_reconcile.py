@@ -660,6 +660,82 @@ def test_compose_gives_local_compute_and_task_storage(database_settings, tmp_pat
         assert isinstance(services.compute["local"], LocalCompute)
         assert list(services.task_storage) == ["local"]
         assert isinstance(services.task_storage["local"], LocalTaskStorage)
+        assert services.storage_env_vars == {}
         assert services.split_location("file:///data/a.parquet") == ("file://", "data/a.parquet")
     finally:
         services.database.close()
+
+
+S3_ROOT = "s3://robin-test/robin"
+
+
+def test_compose_gives_s3_task_storage_and_the_worker_environment_of_its_endpoint(
+    database_settings,
+):
+    import ondio
+    from robin_adapters.storage.ondio import OndioTaskStorage
+
+    profile = Profile.model_validate({
+        "database": database_settings,
+        "compute": make_compute_section(),
+        "storage": {"kind": "s3", "root": S3_ROOT, "endpoint": "http://127.0.0.1:9000"},
+    })
+
+    services = compose(profile)
+    try:
+        assert list(services.task_storage) == ["s3"]
+        assert isinstance(services.task_storage["s3"], OndioTaskStorage)
+        assert services.storage_env_vars == ondio.get_environment(
+            S3_ROOT, endpoint_url=str(profile.storage.endpoint)
+        )
+    finally:
+        services.database.close()
+
+
+@pytest.fixture
+def s3_bucket(tmp_path, monkeypatch):
+    """An empty bucket, `robin-test`, in moto's in-process S3, reached with fake
+    credentials and no endpoint or AWS files of the developer's own."""
+    import boto3
+    import moto
+
+    for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"):
+        monkeypatch.setenv(name, "testing")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(tmp_path / "absent-aws-config"))
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(tmp_path / "absent-aws-credentials"))
+    for name in ("AWS_PROFILE", "AWS_ENDPOINT_URL", "AWS_ENDPOINT_URL_S3"):
+        monkeypatch.delenv(name, raising=False)
+    with moto.mock_aws():
+        boto3.client("s3").create_bucket(Bucket="robin-test")
+        yield "robin-test"
+
+
+def test_s3_storage_has_a_task_storage_and_is_not_counted_elsewhere(
+    registered, database_settings, s3_bucket
+):
+    import ondio
+
+    profile = Profile.model_validate({
+        "database": database_settings,
+        "compute": make_compute_section(),
+        "storage": {"kind": "s3", "root": S3_ROOT},
+        "preparation": {"recordings_per_task": 1},
+    })
+    submit_here(registered, profile, ["a"])
+    compute = ScriptedCompute()
+    composed = compose(profile)
+    composed.database.close()
+    services = Services(
+        profile=profile, database=registered, compute={"local": compute},
+        task_storage=composed.task_storage, split_location=composed.split_location,
+        storage_env_vars=composed.storage_env_vars,
+    )
+
+    report = reconcile_once(services, actor="ana")
+
+    assert (report.prepared, report.launched, report.failures) == (1, 1, [])
+    assert (report.tasks_queued_elsewhere, report.tasks_active_elsewhere) == (0, 0)
+    [call] = compute.get_calls("submit")
+    assert call.work_uri.startswith(f"{S3_ROOT}/")
+    assert ondio.exists(call.work_uri)
