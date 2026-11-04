@@ -8,8 +8,8 @@ from robin_contracts.protocols import JsonScalar, Log, ModelContext
 from robin_contracts.records import WindowOutput
 from robin_contracts.specs import recipe
 from robin_models._adapter_checks import (
-    check_device,
     get_batch_size,
+    get_tf_device,
     refuse_a_card_the_model_does_not_follow,
 )
 
@@ -46,7 +46,6 @@ from robin_models._saved_model import (
 
 OWNER = "model birdnet/v2p4"
 DEFAULT_BATCH_SIZE = 32
-TF_DEVICE = "/CPU:0"
 SIGNATURE = "embeddings"
 
 # The SavedModel's last layer, which turns an embedding into logits.
@@ -79,10 +78,10 @@ def build(context: ModelContext) -> "BirdnetModel":
     card = context.card
     refuse_a_card_the_model_does_not_follow(card, BEHAVIOUR, OWNER)
     batch_size = get_batch_size(context.resources, DEFAULT_BATCH_SIZE)
-    check_device(context.resources, OWNER)
+    device = get_tf_device(context.resources, OWNER, tf)
     require_roles(context.files, OWNER)
     folder = create_saved_model_folder(context.files, context.scratch_dir, "birdnet-savedmodel-")
-    with tf.device(TF_DEVICE):
+    with tf.device(device):
         loaded = tf.saved_model.load(str(folder))
     embeddings = get_signature(loaded, SIGNATURE, OWNER)
     require_input(embeddings, SIGNATURE, round(card.window_duration * card.sample_rate), OWNER)
@@ -99,6 +98,7 @@ def build(context: ModelContext) -> "BirdnetModel":
         batch_size=batch_size,
         labels=labels,
         loaded=loaded,
+        device=device,
         embeddings=embeddings,
         kernel=kernel,
         bias=bias,
@@ -146,6 +146,7 @@ class BirdnetModel:
         batch_size: int,
         labels: tuple[str, ...] | None,
         loaded: object,
+        device: str,
         embeddings: object,
         kernel: object | None,
         bias: object | None,
@@ -159,6 +160,7 @@ class BirdnetModel:
         self._labels = labels
         # Kept so the signature's variables stay loaded.
         self._loaded = loaded
+        self._device = device
         self._embeddings = embeddings
         self._kernel = kernel
         self._bias = bias
@@ -195,7 +197,7 @@ class BirdnetModel:
     def _infer(self, batch: "np.ndarray") -> tuple["np.ndarray | None", "np.ndarray | None"]:
         """The batch's logits when there are labels, and its embeddings when asked for."""
         logits = None
-        with tf.device(TF_DEVICE):
+        with tf.device(self._device):
             tensor = tf.convert_to_tensor(batch, dtype=tf.float32)
             embeddings = self._embeddings(inputs=tensor)["embeddings"]
             if self._labels is not None:

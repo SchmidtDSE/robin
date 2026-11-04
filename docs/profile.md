@@ -79,6 +79,11 @@ it. In the example, `perch/v8` asks for `memory: 20Gi` and the limits and deadli
 the setup, with no `cpu` request. `active_deadline_seconds: null` removes the setup's
 deadline.
 
+The models read two `resources` keys: `batch_size`, the windows in each call of the
+model, and `device`, `cpu` (the default) or `gpu`. OWL, BirdNET, and Perch run on the
+GPU only with `device: gpu`; ONNX heads run on the CPU only. See
+[AWS Batch](aws-batch.md#gpu).
+
 A run freezes its settings at submit: the model's setup name, the setup's other
 fields except `max_in_flight`, the merged `request` and `resources`, and the
 `storage` section. A later change to the profile applies only to runs submitted after

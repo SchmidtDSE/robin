@@ -10,8 +10,8 @@ from robin_contracts.protocols import JsonScalar, Log, ModelContext
 from robin_contracts.records import WindowOutput
 from robin_contracts.specs import recipe
 from robin_models._adapter_checks import (
-    check_device,
     get_batch_size,
+    get_tf_device,
     refuse_a_card_the_model_does_not_follow,
 )
 
@@ -48,7 +48,6 @@ from robin_models._saved_model import (
 
 OWNER = "model perch/v8"
 DEFAULT_BATCH_SIZE = 32
-TF_DEVICE = "/CPU:0"
 SIGNATURE = "serving_default"
 
 # What Perch does whatever its card says. The SavedModel takes 5 seconds of mono audio at
@@ -78,10 +77,10 @@ def build(context: ModelContext) -> "PerchModel":
     card = context.card
     refuse_a_card_the_model_does_not_follow(card, BEHAVIOUR, OWNER)
     batch_size = get_batch_size(context.resources, DEFAULT_BATCH_SIZE)
-    check_device(context.resources, OWNER)
+    device = get_tf_device(context.resources, OWNER, tf)
     require_roles(context.files, OWNER)
     folder = create_saved_model_folder(context.files, context.scratch_dir, "perch-savedmodel-")
-    with tf.device(TF_DEVICE):
+    with tf.device(device):
         loaded = tf.saved_model.load(str(folder))
     serving = get_signature(loaded, SIGNATURE, OWNER)
     require_input(serving, SIGNATURE, round(card.window_duration * card.sample_rate), OWNER)
@@ -96,6 +95,7 @@ def build(context: ModelContext) -> "PerchModel":
         batch_size=batch_size,
         labels=labels,
         loaded=loaded,
+        device=device,
         serving=serving,
         emit_embeddings=context.emit_embeddings,
         log=context.log,
@@ -113,6 +113,7 @@ class PerchModel:
         batch_size: int,
         labels: tuple[str, ...] | None,
         loaded: object,
+        device: str,
         serving: object,
         emit_embeddings: bool,
         log: Log,
@@ -124,6 +125,7 @@ class PerchModel:
         self._labels = labels
         # Kept so the signature's variables stay loaded.
         self._loaded = loaded
+        self._device = device
         self._serving = serving
         self._emit_embeddings = emit_embeddings
         self._log = log
@@ -148,7 +150,7 @@ class PerchModel:
 
     def _infer(self, batch: "np.ndarray") -> tuple["np.ndarray | None", "np.ndarray | None"]:
         """The batch's logits when there are labels, and its embeddings when asked for."""
-        with tf.device(TF_DEVICE):
+        with tf.device(self._device):
             tensor = tf.convert_to_tensor(batch, dtype=tf.float32)
             outputs = self._serving(inputs=tensor)
         # Read by name: the outputs' order differs between TensorFlow versions.

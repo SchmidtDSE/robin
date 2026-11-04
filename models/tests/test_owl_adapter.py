@@ -176,6 +176,8 @@ class FakeRuntime:
         self.score_count = 51
         self.device: str | None = None
         self.load_devices: list[str | None] = []
+        self.predict_devices: list[str] = []
+        self.gpus: list[str] = []
 
     def load_model(self, path):
         self.load_devices.append(self.device)
@@ -203,7 +205,11 @@ class FakeRuntime:
         Path(dest).write_bytes(b"png")
         return dest
 
-    def predict(self, network, paths, batch_size):
+    def list_physical_devices(self, kind: str) -> list[str]:
+        return list(self.gpus) if kind == "GPU" else ["CPU:0"]
+
+    def predict(self, network, paths, batch_size, device):
+        self.predict_devices.append(device)
         self.predicted.append(list(paths))
         self.batch_sizes.append(batch_size)
         for index, path in enumerate(paths):
@@ -228,6 +234,7 @@ def runtime(monkeypatch):
         models=types.SimpleNamespace(load_model=fake.load_model)
     )
     tensorflow.device = fake.on_device
+    tensorflow.config = types.SimpleNamespace(list_physical_devices=fake.list_physical_devices)
     soundfile = types.ModuleType("soundfile")
     soundfile.info = fake.info
     processor = types.ModuleType("sox_tensorflow.processor")
@@ -317,7 +324,21 @@ def test_the_weights_load_on_the_cpu(runtime, tmp_path, resources):
     assert runtime.load_devices == ["/CPU:0"]
 
 
-@pytest.mark.parametrize("value", ["gpu", "/GPU:0", "/CPU:0", "CPU", "", None], ids=repr)
+def test_with_device_gpu_the_weights_load_on_the_gpu(runtime, tmp_path):
+    runtime.gpus = ["GPU:0"]
+    runtime.adapter.build(owl_context(tmp_path, resources={"device": "gpu"}))
+    assert runtime.load_devices == ["/GPU:0"]
+
+
+def test_device_gpu_is_refused_before_the_weights_load_when_tensorflow_sees_no_gpu(
+    runtime, tmp_path
+):
+    with pytest.raises(ValueError, match="no GPU"):
+        runtime.adapter.build(owl_context(tmp_path, resources={"device": "gpu"}))
+    assert runtime.loaded == []
+
+
+@pytest.mark.parametrize("value", ["GPU", "/GPU:0", "/CPU:0", "CPU", "", None], ids=repr)
 def test_any_other_device_is_refused_before_the_weights_load(runtime, tmp_path, value):
     with pytest.raises(ValueError, match="device") as caught:
         runtime.adapter.build(owl_context(tmp_path, resources={"device": value}))
@@ -325,16 +346,29 @@ def test_any_other_device_is_refused_before_the_weights_load(runtime, tmp_path, 
     assert runtime.loaded == []
 
 
-def test_each_batch_is_scored_on_the_cpu_and_the_scope_ends_with_it(runtime):
+@pytest.mark.parametrize("device", ["/CPU:0", "/GPU:0"])
+def test_each_batch_is_scored_on_its_device_and_the_scope_ends_with_it(runtime, device):
     seen = []
 
     def network(images):
         seen.append(runtime.device)
         return types.SimpleNamespace(numpy=lambda: images)
 
-    assert runtime.adapter._score_batch(network, "images") == "images"
-    assert seen == ["/CPU:0"]
+    assert runtime.adapter._score_batch(network, "images", device) == "images"
+    assert seen == [device]
     assert runtime.device is None
+
+
+@pytest.mark.parametrize(
+    ("resources", "gpus", "device"),
+    [({}, [], "/CPU:0"), ({"device": "gpu"}, ["GPU:0"], "/GPU:0")],
+    ids=["cpu", "gpu"],
+)
+def test_a_recording_is_scored_on_the_built_device(runtime, tmp_path, resources, gpus, device):
+    runtime.gpus = gpus
+    model = runtime.adapter.build(owl_context(tmp_path, resources=resources))
+    list(model.run(AudioClip(path=tmp_path / "a.flac")))
+    assert runtime.predict_devices == [device]
 
 
 # What OWL does, whatever its card says.

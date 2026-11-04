@@ -209,6 +209,7 @@ class FakeTensorFlow:
 
     def __init__(self) -> None:
         self.device = None
+        self.gpus: list[str] = []
         self.converted: list = []
         self.loads: list = []
         self.load_error: Exception | None = None
@@ -236,10 +237,14 @@ class FakeTensorFlow:
         tf = types.ModuleType("tensorflow")
         tf.float32 = "float32"
         tf.device = self.on_device
+        tf.config = types.SimpleNamespace(list_physical_devices=self.list_physical_devices)
         tf.convert_to_tensor = self.convert_to_tensor
         tf.matmul = self.matmul
         tf.saved_model = types.SimpleNamespace(load=self.load)
         return tf
+
+    def list_physical_devices(self, kind: str) -> list[str]:
+        return list(self.gpus) if kind == "GPU" else ["CPU:0"]
 
     @contextlib.contextmanager
     def on_device(self, name: str):
@@ -454,7 +459,15 @@ def test_the_cpu_is_the_device_that_builds(runtime, tmp_path, resources):
     runtime.adapter.build(birdnet_context(tmp_path, resources=resources))
 
 
-@pytest.mark.parametrize("value", ["gpu", "gpu:0", "CPU", "/CPU:0", 0, None], ids=repr)
+def test_device_gpu_is_refused_before_the_model_loads_when_tensorflow_sees_no_gpu(
+    runtime, tmp_path
+):
+    with pytest.raises(ValueError, match="no GPU"):
+        runtime.adapter.build(birdnet_context(tmp_path, resources={"device": "gpu"}))
+    assert runtime.loads == []
+
+
+@pytest.mark.parametrize("value", ["GPU", "gpu:0", "CPU", "/CPU:0", 0, None], ids=repr)
 def test_any_other_device_is_refused(runtime, tmp_path, value):
     with pytest.raises(ValueError, match="device") as caught:
         runtime.adapter.build(birdnet_context(tmp_path, resources={"device": value}))
@@ -462,7 +475,7 @@ def test_any_other_device_is_refused(runtime, tmp_path, value):
 
 
 @pytest.mark.parametrize(
-    "resources", [{"batch_size": 0}, {"device": "gpu"}], ids=["batch_size", "device"]
+    "resources", [{"batch_size": 0}, {"device": "tpu"}], ids=["batch_size", "device"]
 )
 def test_a_bad_resource_is_refused_before_the_model_loads(runtime, tmp_path, resources):
     with pytest.raises(ValueError):
@@ -967,14 +980,22 @@ def test_windows_are_batched_within_one_recording_only(runtime, tmp_path):
         assert batch.flags["C_CONTIGUOUS"]
 
 
-def test_every_call_runs_on_the_cpu(runtime, tmp_path):
-    model, _, path = model_and_noise(runtime, tmp_path, 3 * WINDOW, emit_embeddings=True)
+@pytest.mark.parametrize(
+    ("resources", "gpus", "device"),
+    [({}, [], CPU), ({"device": "gpu"}, ["GPU:0"], "/GPU:0")],
+    ids=["cpu", "gpu"],
+)
+def test_every_call_runs_on_the_built_device(runtime, tmp_path, resources, gpus, device):
+    runtime.gpus = gpus
+    model, _, path = model_and_noise(
+        runtime, tmp_path, 3 * WINDOW, emit_embeddings=True, resources=resources
+    )
     run(model, path)
-    assert [load.device for load in runtime.loads] == [CPU]
-    assert {call.device for call in runtime.calls} == {CPU}
-    assert {converted.device for converted in runtime.converted} == {CPU}
-    assert {matmul.device for matmul in runtime.matmuls} == {CPU}
-    assert {addition.device for addition in runtime.additions} == {CPU}
+    assert [load.device for load in runtime.loads] == [device]
+    assert {call.device for call in runtime.calls} == {device}
+    assert {converted.device for converted in runtime.converted} == {device}
+    assert {matmul.device for matmul in runtime.matmuls} == {device}
+    assert {addition.device for addition in runtime.additions} == {device}
     assert len(runtime.matmuls) == len(runtime.additions) == 1
     assert len(runtime.calls) == 1
 

@@ -29,7 +29,8 @@ credential.
 For a GPU, make a second compute environment with GPU instances, such as
 `g4dn.xlarge` (one NVIDIA T4), and its own queue. Batch picks a GPU machine image for
 GPU instance types. Its job definition names the GPU image (`robin-worker:<tag>-gpu`,
-see [the worker image](../docker/README.md)), and the setup's request asks for a GPU:
+see [the worker image](../docker/README.md)). The setup's request asks for a GPU, and
+its resources tell the model's code to run on it:
 
 ```yaml
 compute:
@@ -40,9 +41,13 @@ compute:
       job_definition: arn:aws:batch:us-west-2:<account>:job-definition/robin-worker-gpu:1
       request:
         requests: {VCPU: "4", MEMORY: "14336", GPU: "1"}
+      resources: {device: gpu}
 ```
 
-The CPU image on a GPU instance runs on the CPU.
+Without `device: gpu`, OWL, BirdNET, and Perch run on the CPU, even on a GPU instance.
+With it, a task whose TensorFlow sees no GPU (such as the CPU image) is refused before
+the model loads, so a GPU setup cannot run on the CPU without an error. ONNX heads run
+on the CPU only and refuse `device: gpu`: give `head_runtime:onnx` a CPU setup.
 
 ## The setup
 

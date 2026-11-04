@@ -34,8 +34,8 @@ This builds the CPU image first, and then `robin-worker:dev-gpu`: the CPU image 
 the CUDA and cuDNN libraries that TensorFlow needs (`tensorflow[and-cuda]`, at the
 same TensorFlow version). `LD_LIBRARY_PATH` names their folders: without it,
 TensorFlow runs on the CPU and gives no error. `PATH` and `XLA_FLAGS` name `ptxas` and
-`libdevice`, which XLA needs to compile a model for the GPU. Perch runs through XLA:
-without them, it runs on the CPU, also with no error. The GPU image is about three
+`libdevice`, which XLA needs to compile for the GPU. Perch has functions that XLA must
+compile. The GPU image is about three
 times the size of the CPU image, so CPU jobs use the CPU image.
 
 The GPU image's entrypoint logs the GPU's use with `nvidia-smi` once a minute, as lines
@@ -46,8 +46,10 @@ On a Mac with Apple Silicon, these images run under emulation, which cannot run
 TensorFlow. To check that TensorFlow sees the GPU, run a task on a GPU queue (see
 [AWS Batch](../docs/aws-batch.md)), and look in the job's log for TensorFlow's
 `Created device ... GPU:0` line. A "Cannot dlopen some GPU libraries" line means that
-TensorFlow runs on the CPU. For Perch, also look for an `XLA service ... initialized for
-platform CUDA` line: `platform Host` alone means that XLA compiled it for the CPU. A Batch job cannot override the image's entrypoint, so the
+TensorFlow runs on the CPU. A model runs on the GPU only when the setup's resources give
+`device: gpu` (see [AWS Batch](../docs/aws-batch.md#gpu)); the `gpu:` lines then show
+its use above 0 %. For Perch, also look for an `XLA service ... initialized for platform
+CUDA` line. A Batch job cannot override the image's entrypoint, so the
 check is a real task, not a separate `python` command.
 
 ## Push it to a registry

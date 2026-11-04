@@ -12,8 +12,8 @@ from robin_contracts.protocols import JsonScalar, Log, ModelContext
 from robin_contracts.records import ClassScore, WindowOutput
 from robin_contracts.specs import recipe, window_bounds
 from robin_models._adapter_checks import (
-    check_device,
     get_batch_size,
+    get_tf_device,
     refuse_a_card_the_model_does_not_follow,
 )
 from robin_models.registration import WEIGHTS_ROLE
@@ -40,7 +40,6 @@ except ModuleNotFoundError as error:
 OWNER = "model owl/v4"
 # Batch size changes the scores at float32 rounding level, and nothing else.
 DEFAULT_BATCH_SIZE = 64
-TF_DEVICE = "/CPU:0"
 
 # What OWL does whatever its card says. sox_tensorflow renders at 8 kHz from the first
 # channel, resampled by soxr at its high-quality setting, and renders only full windows.
@@ -62,7 +61,7 @@ def build(context: ModelContext) -> "OwlModel":
     card = context.card
     refuse_a_card_the_model_does_not_follow(card, BEHAVIOUR, OWNER)
     batch_size = get_batch_size(context.resources, DEFAULT_BATCH_SIZE)
-    check_device(context.resources, OWNER)
+    device = get_tf_device(context.resources, OWNER, tf)
     if context.registry is None:
         raise ValueError(f"{OWNER} needs a registry to name its outputs, and got none")
     weights = context.files.get(WEIGHTS_ROLE)
@@ -71,7 +70,7 @@ def build(context: ModelContext) -> "OwlModel":
             f"{OWNER} needs a file under the role {WEIGHTS_ROLE!r}, "
             f"and got the roles {sorted(context.files)}"
         )
-    with tf.device(TF_DEVICE):
+    with tf.device(device):
         network = tf.keras.models.load_model(str(weights))
     _refuse_a_spectrogram_shape_the_network_does_not_take(card, network)
     return OwlModel(
@@ -80,6 +79,7 @@ def build(context: ModelContext) -> "OwlModel":
         batch_size=batch_size,
         labels=tuple(entry.label for entry in context.registry.entries),
         network=network,
+        device=device,
         scratch_dir=context.scratch_dir,
         log=context.log,
     )
@@ -106,6 +106,7 @@ class OwlModel:
         batch_size: int,
         labels: tuple[str, ...],
         network: object,
+        device: str,
         scratch_dir: Path,
         log: Log,
     ) -> None:
@@ -114,6 +115,7 @@ class OwlModel:
         self._batch_size = batch_size
         self._labels = labels
         self._network = network
+        self._device = device
         self._scratch_dir = scratch_dir
         self._log = log
         self._png_dir: Path | None = None
@@ -130,7 +132,7 @@ class OwlModel:
         if not bounds:
             return
         paths = self._render_spectrograms(path, bounds)
-        for index, scores in _predict(self._network, paths, self._batch_size):
+        for index, scores in _predict(self._network, paths, self._batch_size, self._device):
             start, end = bounds[index]
             # Every label in output order, unfiltered: the engine keeps what was asked
             # for. strict refuses a network that gives the registry more or fewer scores.
@@ -172,7 +174,7 @@ class OwlModel:
 
 
 def _predict(
-    network, paths: Sequence[str], batch_size: int
+    network, paths: Sequence[str], batch_size: int, device: str
 ) -> Iterator[tuple[int, list[float]]]:
     """Yield `(window index, scores)` per spectrogram, matched by index, not position."""
 
@@ -186,12 +188,12 @@ def _predict(
         .batch(batch_size)
     )
     for images, indices in dataset:
-        predictions = _score_batch(network, images)
+        predictions = _score_batch(network, images, device)
         for index, vector in zip(indices.numpy(), predictions):
             yield int(index), vector.tolist()
 
 
-def _score_batch(network, images):
-    """The network's scores for one batch, computed on the CPU."""
-    with tf.device(TF_DEVICE):
+def _score_batch(network, images, device: str):
+    """Returns the network's scores for one batch, computed on `device`."""
+    with tf.device(device):
         return network(images).numpy()

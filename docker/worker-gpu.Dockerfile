@@ -27,9 +27,8 @@ ENV LD_LIBRARY_PATH=/usr/local/lib/python3.13/site-packages/nvidia/cublas/lib:\
 /usr/local/lib/python3.13/site-packages/nvidia/nvjitlink/lib:\
 /usr/local/lib/python3.13/site-packages/nvidia/cuda_nvcc/nvvm/lib64
 
-# XLA compiles a model for the GPU with ptxas and libdevice, from the cuda_nvcc wheel.
-# Perch is a jax2tf model, so it runs through XLA. Without these, XLA compiles it for
-# the CPU only, and gives no error.
+# XLA compiles for the GPU with ptxas and libdevice, from the cuda_nvcc wheel. Perch
+# is a jax2tf model with functions that XLA must compile, so on the GPU it needs them.
 ENV PATH=/usr/local/lib/python3.13/site-packages/nvidia/cuda_nvcc/bin:${PATH} \
     XLA_FLAGS=--xla_gpu_cuda_data_dir=/usr/local/lib/python3.13/site-packages/nvidia/cuda_nvcc
 
