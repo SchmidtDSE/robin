@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from time import perf_counter
 from typing import get_args
 
 from robin_contracts.canonical import checksum_file
@@ -72,6 +73,27 @@ class _Run:
     inputs: FileProvider
     artifacts: ArtifactWriter
     log: Log
+
+
+@dataclass(slots=True)
+class _StageSeconds:
+    """The seconds that one recording spends in each stage the engine times.
+
+    `adapter` is the time spent inside the adapter's calls. The engine time leaves it out.
+    """
+
+    fetch: float = 0.0
+    adapter: float = 0.0
+    engine: float = 0.0
+    detections: float = 0.0
+    publish: float = 0.0
+
+    def get_text(self) -> str:
+        """Return the stage times for the log, in seconds with one decimal place."""
+        return (
+            f"fetch {self.fetch:.1f} s, engine {self.engine:.1f} s, "
+            f"detections {self.detections:.1f} s, publish {self.publish:.1f} s"
+        )
 
 
 def run_work(
@@ -267,7 +289,8 @@ def _run_recording(
     """Run one recording through the model, publish its files, then clean up after it.
 
     Each accepted window keeps only the scores the request asks for before it is
-    written. Returns the records of the files that were published.
+    written. Returns the records of the files that were published. The log line for a
+    recording that succeeds gives the seconds of each stage.
     """
     requested = scores_request(run.work)
     boundary.begin_recording(position)
@@ -280,13 +303,17 @@ def _run_recording(
         ),
         log=run.log,
     ):
+        seconds = _StageSeconds()
+        started = perf_counter()
         path = _fetch_input(run.inputs, recording)
+        seconds.fetch = perf_counter() - started
         model_input = _prepare_recording_input(run.work, recording, path, boundary, recipe.id)
         with _report_local_write_errors(recording):
+            started = perf_counter()
             with outputs.open_window_writers(position, recording) as writers:
-                windows = _start(model, recording, model_input)
+                windows = _start(model, recording, model_input, seconds)
                 accepted = 0
-                for window in _iterate_adapter_windows(windows, recording):
+                for window in _iterate_adapter_windows(windows, recording, seconds):
                     kept = boundary.accept(window)
                     if requested is not None:
                         kept = replace(kept, scores=retain_scores(kept.scores, requested))
@@ -295,7 +322,10 @@ def _run_recording(
                     accepted += 1
                 boundary.end_recording()
                 staged = writers.finish()
+            seconds.engine = perf_counter() - started - seconds.adapter
+            started = perf_counter()
             detected = outputs.stage_detections(staged)
+            seconds.detections = perf_counter() - started
         if detected is not None:
             staged += (detected,)
         coverage.end_recording(
@@ -306,8 +336,13 @@ def _run_recording(
         )
         # Publishing starts only after every file is staged, so a failure while staging
         # publishes none of this recording's files.
+        started = perf_counter()
         records = tuple(_publish(run.artifacts, one) for one in staged)
-        run.log(f"recording {errors.get_recording_name(recording)}: {accepted} windows accepted")
+        seconds.publish = perf_counter() - started
+        run.log(
+            f"recording {errors.get_recording_name(recording)}: {accepted} windows accepted; "
+            f"{seconds.get_text()}"
+        )
         return records
 
 
@@ -425,24 +460,35 @@ def _fetch_input(inputs: FileProvider, recording: RecordingRef) -> Path:
         ) from exc
 
 
-def _start(model: Model, recording: RecordingRef, given: Input) -> Iterator[WindowOutput]:
+def _start(
+    model: Model, recording: RecordingRef, given: Input, seconds: _StageSeconds
+) -> Iterator[WindowOutput]:
+    started = perf_counter()
     try:
         return iter(model.run(given))
     except Exception as exc:
         raise _run_failure(recording, exc) from exc
+    finally:
+        seconds.adapter += perf_counter() - started
 
 
 def _iterate_adapter_windows(
-    windows: Iterator[WindowOutput], recording: RecordingRef
+    windows: Iterator[WindowOutput], recording: RecordingRef, seconds: _StageSeconds
 ) -> Iterator[WindowOutput]:
-    """The adapter's windows, with only what the adapter raises reported as its failure."""
+    """The adapter's windows, with only what the adapter raises reported as its failure.
+
+    The time spent inside the adapter is added to `seconds.adapter`.
+    """
     while True:
+        started = perf_counter()
         try:
             window = next(windows)
         except StopIteration:
             return
         except Exception as exc:
             raise _run_failure(recording, exc) from exc
+        finally:
+            seconds.adapter += perf_counter() - started
         yield window
 
 

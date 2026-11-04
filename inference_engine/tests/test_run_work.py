@@ -5,6 +5,7 @@ import hashlib
 import inspect
 import json
 import math
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -1660,3 +1661,67 @@ def test_the_callers_log_receives_lines_and_changes_nothing_else(rig, capsys):
     assert all(isinstance(line, str) and line for line in lines)
     assert canonical_json_bytes(logged) == canonical_json_bytes(silent)
     assert capsys.readouterr().out == ""
+
+
+class FakeClock:
+    """A clock that moves only when a test's stand-in function moves it."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class TimedModel:
+    """A scripted model whose windows each take 10 seconds of the fake clock."""
+
+    def __init__(self, model: ScriptedModel, clock: FakeClock) -> None:
+        self._model = model
+        self._clock = clock
+
+    def run(self, input):
+        for window in self._model.run(input):
+            self._clock.now += 10
+            yield window
+
+    def after_recording(self) -> None:
+        self._model.after_recording()
+
+    def clean_up(self) -> None:
+        self._model.clean_up()
+
+
+def test_each_stage_of_a_recording_gets_its_own_time(rig, monkeypatch):
+    clock = FakeClock()
+    monkeypatch.setattr(engine, "perf_counter", clock)
+
+    class TimedFiles(LocalFiles):
+        def fetch(self, uri: str) -> Path:
+            clock.now += 1
+            return super().fetch(uri)
+
+    class TimedWriter(CopyingWriter):
+        def create(self, **kwargs) -> ArtifactRecord:
+            clock.now += 100
+            return super().create(**kwargs)
+
+    work = rig.work(recordings=2)
+    lines: list[str] = []
+    rig.run(
+        work,
+        TimedModel(rig.model(script(2, 3)), clock),
+        inputs=TimedFiles("audio", rig.build.audio_paths, rig.calls),
+        artifacts=TimedWriter(rig.destination, rig.calls),
+        log=lines.append,
+    )
+
+    timed = [line for line in lines if line.startswith("recording ") and " s" in line]
+    assert len(timed) == 2, lines
+    for line in timed:
+        seconds = {
+            stage: float(found.group(1))
+            for stage in ("fetch", "engine", "detections", "publish")
+            if (found := re.search(rf"\b{stage} (\d+\.\d) s\b", line))
+        }
+        assert seconds == {"fetch": 1.0, "engine": 0.0, "detections": 0.0, "publish": 100.0}

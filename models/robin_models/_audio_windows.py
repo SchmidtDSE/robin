@@ -8,6 +8,7 @@ this module loads NumPy and soundfile, but no ML runtime.
 
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
+from time import perf_counter
 
 import numpy as np
 import soundfile as sf
@@ -33,20 +34,34 @@ def run_windows(
 
     `read_window(audio, start, end)` gives one window's samples at the model's rate, not
     yet padded. `run_batch(bounds, batch)` gives the outputs of one batch of padded rows.
+    When the last window is yielded, the loop logs the seconds spent in each of the two
+    calls. The model seconds count only the `run_batch` call, not the iteration over its
+    outputs.
     """
     with sf.SoundFile(str(path)) as audio:
         if audio.frames == 0:
             raise ValueError(f"{owner} cannot run {path}: it has no audio frames")
         bounds = window_bounds(audio.frames / audio.samplerate, geometry)
         log(f"running {len(bounds)} windows of {path.name}")
+        read_seconds = 0.0
+        model_seconds = 0.0
         for first in range(0, len(bounds), batch_size):
             batch_bounds = bounds[first : first + batch_size]
             batch = np.zeros((len(batch_bounds), width), dtype=np.float32)
             for row, (start, end) in zip(batch, batch_bounds):
+                started = perf_counter()
                 window = read_window(audio, start, end)
+                read_seconds += perf_counter() - started
                 # The rest of the row stays zero, which pads the window at the end.
                 row[: len(window)] = window
-            yield from run_batch(batch_bounds, batch)
+            started = perf_counter()
+            outputs = run_batch(batch_bounds, batch)
+            model_seconds += perf_counter() - started
+            yield from outputs
+        log(
+            f"ran {len(bounds)} windows of {path.name}: read {read_seconds:.1f} s, "
+            f"model {model_seconds:.1f} s"
+        )
 
 
 def mix_down(frames: np.ndarray) -> np.ndarray:
