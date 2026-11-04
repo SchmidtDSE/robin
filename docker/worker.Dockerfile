@@ -1,4 +1,5 @@
-# The Robin worker image: `robin-worker` and the OWL model, for linux/amd64 on CPU.
+# The Robin worker image: `robin-worker` with every model and head runtime of
+# robin-models (OWL, BirdNET, Perch, and ONNX heads), for linux/amd64 on CPU.
 #
 # Build it with `pixi run -e test worker-image`, which first builds Robin's own wheels
 # into `.worker-image/dist`. See docker/README.md.
@@ -20,7 +21,7 @@ RUN pip install --no-cache-dir \
         /tmp/robin-wheels/robin_inference_engine-*.whl \
         /tmp/robin-wheels/robin_worker-*.whl \
         "$(ls /tmp/robin-wheels/robin_adapters-*.whl)[ondio]" \
-        "$(ls /tmp/robin-wheels/robin_models-*.whl)[owl]" \
+        "$(ls /tmp/robin-wheels/robin_models-*.whl)[owl,birdnet,perch,onnx-head]" \
     && pip check \
     && rm -rf /tmp/robin-wheels
 

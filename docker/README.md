@@ -1,7 +1,8 @@
 # The worker image
 
 `worker.Dockerfile` builds the image that AWS Batch runs for each task: `robin-worker`
-with the OWL model, for `linux/amd64` on CPU. `worker-gpu.Dockerfile` builds the GPU
+with every model and head runtime of `robin-models` (OWL, BirdNET, Perch, and ONNX
+heads), for `linux/amd64` on CPU. `worker-gpu.Dockerfile` builds the GPU
 image on top of it. Neither holds a credential or a profile.
 
 ## Build it
@@ -35,8 +36,12 @@ same TensorFlow version). `LD_LIBRARY_PATH` names their folders: without it,
 TensorFlow runs on the CPU and gives no error. The GPU image is about three times the
 size of the CPU image, so CPU jobs use the CPU image.
 
-On a Mac with Apple Silicon, these images run under emulation, which cannot run TensorFlow. To check that TensorFlow sees the GPU, run the image as a Batch job on a GPU queue (see
-[AWS Batch](../docs/aws-batch.md)).
+On a Mac with Apple Silicon, these images run under emulation, which cannot run
+TensorFlow. To check that TensorFlow sees the GPU, run a task on a GPU queue (see
+[AWS Batch](../docs/aws-batch.md)), and look in the job's log for TensorFlow's
+`Created device ... GPU:0` line. A "Cannot dlopen some GPU libraries" line means that
+TensorFlow runs on the CPU. A Batch job cannot override the image's entrypoint, so the
+check is a real task, not a separate `python` command.
 
 ## Push it to ECR
 

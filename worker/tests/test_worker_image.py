@@ -1,4 +1,5 @@
-"""The worker image installs Robin's own packages only from the wheels it was built with.
+"""The worker image installs Robin's own packages only from the wheels it was built with,
+and every model and head runtime that robin-models has.
 
 Robin's packages are not on PyPI, and each is version 0.0.0. If pip may choose a Robin
 package by name, a package of the same name published on PyPI at a higher version
@@ -6,9 +7,12 @@ would replace Robin's own in the image, and run with the job role's access.
 """
 
 import re
+import tomllib
 from pathlib import Path
 
-DOCKERFILE = Path(__file__).resolve().parents[2] / "docker" / "worker.Dockerfile"
+ROOT = Path(__file__).resolve().parents[2]
+DOCKERFILE = ROOT / "docker" / "worker.Dockerfile"
+MODELS_PYPROJECT = ROOT / "models" / "pyproject.toml"
 ROBIN_PACKAGES = ("contracts", "inference_engine", "models", "adapters", "worker")
 
 
@@ -33,3 +37,12 @@ def test_no_robin_package_is_installed_by_name():
     assert "--find-links" not in install
     named = re.findall(r"(?<![\w/])robin-[a-z-]+", install)
     assert named == [], named
+
+
+def test_the_image_installs_every_extra_of_robin_models():
+    install = get_pip_install_text()
+    extras = tomllib.loads(MODELS_PYPROJECT.read_text())["project"]["optional-dependencies"]
+
+    installed = re.search(r"robin_models-\*\.whl\)\[([^\]]*)\]", install)
+    assert installed is not None, "the Dockerfile installs robin-models with no extras"
+    assert set(installed.group(1).split(",")) == set(extras)
