@@ -430,7 +430,9 @@ Example configuration:
   outputs:
     - kind: scores
       contract_id: robin.scores.parquet/1
-      retention: full
+      retention: top_k
+      top_k: 5
+      min_score: 0.0
 """
 
 
