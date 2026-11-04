@@ -43,27 +43,31 @@ TensorFlow. To check that TensorFlow sees the GPU, run a task on a GPU queue (se
 TensorFlow runs on the CPU. A Batch job cannot override the image's entrypoint, so the
 check is a real task, not a separate `python` command.
 
-## Push it to ECR
+## Push it to a registry
 
-Give the image a tag that names its build, such as the commit, so that each job
-definition revision names one image. Use your own account, region, and repository.
+`worker-push` builds both images from the current commit and pushes them as
+`<commit>` and `<commit>-gpu`, so that each job definition revision names one image.
+It refuses a working tree with uncommitted changes, because the tag would then not
+name the code in the image.
+
+Give the repository once, as a line in `.env` (git-ignored). The task reads only this
+line:
 
 ```sh
-ACCOUNT=123456789012
-REGION=us-west-2
-REPOSITORY=robin-worker
-TAG=$(git rev-parse --short HEAD)
-REGISTRY=$ACCOUNT.dkr.ecr.$REGION.amazonaws.com
-
-aws ecr get-login-password --region $REGION \
-  | docker login --username AWS --password-stdin $REGISTRY
-docker tag robin-worker:dev $REGISTRY/$REPOSITORY:$TAG
-docker push $REGISTRY/$REPOSITORY:$TAG
-
-# The GPU image, under its own tag.
-docker tag robin-worker:dev-gpu $REGISTRY/$REPOSITORY:$TAG-gpu
-docker push $REGISTRY/$REPOSITORY:$TAG-gpu
+ROBIN_IMAGE_REPOSITORY=123456789012.dkr.ecr.us-west-2.amazonaws.com/robin-worker
 ```
+
+Then push. For an ECR repository, the task logs in with your AWS login, in the
+region that the address names. Set `AWS_PROFILE` if your login is not the default one.
+For another registry, run `docker login` first.
+
+```sh
+pixi run -e test worker-push
+```
+
+An argument, `pixi run -e test worker-push <repository>`, takes precedence, then
+`ROBIN_IMAGE_REPOSITORY` from the environment, then the line in `.env`. The task runs
+`docker/push-worker-images.sh`, and prints the two tags for the job definitions.
 
 Then register a new revision of the job definition with this image. See
 [AWS Batch](../docs/aws-batch.md) for what a new revision does to runs in progress.

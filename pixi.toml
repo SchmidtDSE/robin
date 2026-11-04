@@ -79,6 +79,10 @@ description = "Build the GPU worker image robin-worker:dev-gpu on top of robin-w
 depends-on = ["worker-image"]
 cmd = "docker build --platform linux/amd64 -f docker/worker-gpu.Dockerfile -t robin-worker:dev-gpu docker"
 
+[tasks.worker-push]
+description = "Build both worker images at HEAD and push them as <commit> and <commit>-gpu. Give the repository as an argument or as ROBIN_IMAGE_REPOSITORY. See docker/README.md."
+cmd = "bash docker/push-worker-images.sh"
+
 [tasks.wheels]
 cmd = """
 rm -rf .wheelcheck &&
