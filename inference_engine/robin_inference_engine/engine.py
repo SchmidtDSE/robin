@@ -17,6 +17,8 @@ from tempfile import TemporaryDirectory
 from time import perf_counter
 from typing import get_args
 
+import numpy as np
+
 from robin_contracts.canonical import checksum_file
 from robin_contracts.cards import HeadCard, model_ref
 from robin_contracts.inputs import AudioClip, Input
@@ -50,7 +52,7 @@ from robin_inference_engine.coverage import CoverageBuilder, check_completion_ev
 from robin_inference_engine.load_registry import load_registry
 from robin_inference_engine.recording_outputs import RecordingOutputs
 from robin_inference_engine.requested_outputs import embeddings_request, scores_request
-from robin_inference_engine.retention import retain_scores
+from robin_inference_engine.retention import get_label_rank, retain_scores
 from robin_inference_engine.validate_request import refuse_request
 from robin_inference_engine.verify_head_input import read_head_input
 
@@ -215,6 +217,7 @@ def _infer(
         expect_embeddings=embeddings_request(work) is not None,
     )
     coverage = CoverageBuilder(work.recordings)
+    label_rank = get_label_rank(registry) if registry is not None else None
     records: list[ArtifactRecord] = []
     failed: list[RecordingFailed] = []
     for position, recording in enumerate(work.recordings):
@@ -228,6 +231,7 @@ def _infer(
                 boundary=boundary,
                 coverage=coverage,
                 outputs=outputs,
+                label_rank=label_rank,
             )
         except errors.EngineError as error:
             coverage.discard(position)
@@ -285,11 +289,12 @@ def _run_recording(
     boundary: AcceptanceBoundary,
     coverage: CoverageBuilder,
     outputs: RecordingOutputs,
+    label_rank: np.ndarray | None,
 ) -> tuple[ArtifactRecord, ...]:
     """Run one recording through the model, publish its files, then clean up after it.
 
     Each accepted window keeps only the scores the request asks for before it is
-    written. Returns the records of the files that were published. The log line for a
+    written. `label_rank` is the registry's `get_label_rank`, which `top_k` needs. Returns the records of the files that were published. The log line for a
     recording that succeeds gives the seconds of each stage.
     """
     requested = scores_request(run.work)
@@ -316,7 +321,10 @@ def _run_recording(
                 for window in _iterate_adapter_windows(windows, recording, seconds):
                     kept = boundary.accept(window)
                     if requested is not None:
-                        kept = replace(kept, scores=retain_scores(kept.scores, requested))
+                        scores, indices = retain_scores(
+                            kept.scores, kept.score_indices, requested, label_rank
+                        )
+                        kept = replace(kept, scores=scores, score_indices=indices)
                     coverage.count_window(kept)
                     writers.write(kept)
                     accepted += 1

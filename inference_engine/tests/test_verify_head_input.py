@@ -136,7 +136,8 @@ def write_embeddings(
                     recording=recording,
                     start=start,
                     end=start + 3.0,
-                    scores=(),
+                    scores=np.empty(0),
+                    score_indices=np.empty(0, dtype=np.intp),
                     embedding=vector,
                 )
             )

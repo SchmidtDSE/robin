@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import duckdb
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -18,7 +19,6 @@ from robin_contracts.output_contracts import (
     ThresholdPolicy,
     TopKPolicy,
 )
-from robin_contracts.records import ClassScore
 from robin_contracts.registry import RegistryEntry, TaxonRegistry
 from robin_contracts.specs import AudioSpec, Recipe
 from robin_contracts.work import (
@@ -352,18 +352,27 @@ def header(work, recording, contract_id):
     ) | score_metadata(SCORES_REQUEST, score_domain="sigmoid")
 
 
+# The scores writer's labels: OWLS, then one label that no registry here declares.
+WRITTEN_LABELS = (*(entry.label for entry in OWLS.entries), "HAWK")
+
+
 def stage_scores(folder: Path, work, recording, windows) -> StagedArtifact:
     """`windows` is a list of `(start, {label: score})`; each window lasts three seconds."""
     folder.mkdir(parents=True, exist_ok=True)
     metadata = header(work, recording, "robin.scores.parquet/1")
-    with ScoresWriter(folder / "scores.parquet", recording=recording, metadata=metadata) as writer:
+    with ScoresWriter(
+        folder / "scores.parquet", labels=WRITTEN_LABELS, recording=recording, metadata=metadata
+    ) as writer:
         for start, scores in windows:
             writer.write(
                 AcceptedWindow(
                     recording=recording,
                     start=start,
                     end=start + 3.0,
-                    scores=tuple(ClassScore(label, score) for label, score in scores.items()),
+                    scores=np.array(list(scores.values()), dtype=np.float64),
+                    score_indices=np.array(
+                        [WRITTEN_LABELS.index(label) for label in scores], dtype=np.intp
+                    ),
                     embedding=None,
                 )
             )

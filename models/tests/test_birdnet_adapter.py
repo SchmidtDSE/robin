@@ -27,7 +27,6 @@ from robin_contracts.inputs import AudioClip, Embeddings
 from robin_contracts.layout import artifact_path
 from robin_contracts.output_contracts import EmbeddingsRequest, ScoresRequest
 from robin_contracts.protocols import Model, ModelContext
-from robin_contracts.records import ClassScore
 from robin_contracts.results import InferenceCompleted
 from robin_contracts.work import AudioInput, InferenceWork, PinnedFile, PinnedModel, RecordingRef
 from robin_inference_engine.artifacts.embeddings import read_embeddings
@@ -400,7 +399,7 @@ def changed_card(**changes) -> ModelCard:
         ),
         pytest.param(
             "min_detection_threshold",
-            {"min_detection_threshold": 0.005},
+            {"min_detection_threshold": -0.1},
             id="min_detection_threshold",
         ),
         pytest.param("spectrogram_shape", {"spectrogram_shape": [96, 511]}, id="spectrogram"),
@@ -826,7 +825,7 @@ def test_run_gives_the_sigmoid_of_the_logits_exactly(runtime, tmp_path):
     model, _, path = model_and_noise(runtime, tmp_path, WINDOW)
     [window] = run(model, path)
     expected = np.resize(reference_sigmoid(FIVE_LOGITS), 6522).tolist()
-    assert [score.score for score in window.scores] == expected
+    assert window.scores.tolist() == expected
 
 
 def loaded_classifier_layer(runtime) -> tuple[FakeVariable, FakeVariable]:
@@ -848,10 +847,10 @@ def test_every_window_scores_every_label_once_in_registry_order(runtime, tmp_pat
     [addition] = runtime.additions
     assert addition.added() is bias
     for window, scores in zip(windows, expected, strict=True):
-        assert tuple(score.label for score in window.scores) == LABELS
-        assert all(type(score.score) is float for score in window.scores)
-        assert [score.score for score in window.scores] == scores.tolist()
-    assert windows[0].scores != windows[1].scores
+        assert window.scores.shape == (len(LABELS),)
+        assert window.scores.dtype in (np.float32, np.float64)
+        assert window.scores.tolist() == scores.tolist()
+    assert not np.array_equal(windows[0].scores, windows[1].scores)
 
 
 def test_a_model_returning_fewer_scores_than_it_declares_fails_the_recording(runtime, tmp_path):
@@ -942,7 +941,9 @@ def test_asking_for_embeddings_does_not_change_a_score(runtime, tmp_path):
     both = run(runtime.adapter.build(birdnet_context(tmp_path, emit_embeddings=True)), path)
     assert len(runtime.calls_to("embeddings")) == 1
     assert runtime.calls_to("scores") == []
-    assert [w.scores for w in both] == [w.scores for w in alone]
+    assert all(
+        np.array_equal(b.scores, a.scores) for b, a in zip(both, alone, strict=True)
+    )
 
 
 def test_with_a_registry_scores_are_computed_even_when_only_embeddings_are_asked_for(
@@ -961,7 +962,7 @@ def test_without_a_registry_no_scores_are_computed(runtime, tmp_path):
     windows = run(model, write_audio(tmp_path / "a.wav", noise(2 * WINDOW), 48000))
     assert runtime.calls_to("scores") == []
     assert runtime.matmuls == []
-    assert [window.scores for window in windows] == [(), ()]
+    assert [window.scores for window in windows] == [None, None]
     assert all(window.embedding is not None for window in windows)
 
 

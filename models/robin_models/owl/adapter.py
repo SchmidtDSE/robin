@@ -5,11 +5,12 @@ import shutil
 import tempfile
 from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from robin_contracts.cards import AudioGeometry, ModelCard, RunnerResampled
 from robin_contracts.inputs import AudioClip, Input
 from robin_contracts.protocols import JsonScalar, Log, ModelContext
-from robin_contracts.records import ClassScore, WindowOutput
+from robin_contracts.records import WindowOutput
 from robin_contracts.specs import recipe, window_bounds
 from robin_models._adapter_checks import (
     get_batch_size,
@@ -36,6 +37,9 @@ except ModuleNotFoundError as error:
         f"install robin-models[owl]",
         name=error.name,
     ) from error
+
+if TYPE_CHECKING:
+    import numpy as np
 
 OWNER = "model owl/v4"
 # Batch size changes the scores at float32 rounding level, and nothing else.
@@ -134,13 +138,13 @@ class OwlModel:
         paths = self._render_spectrograms(path, bounds)
         for index, scores in _predict(self._network, paths, self._batch_size, self._device):
             start, end = bounds[index]
-            # Every label in output order, unfiltered: the engine keeps what was asked
-            # for. strict refuses a network that gives the registry more or fewer scores.
-            scored = tuple(
-                ClassScore(label=label, score=score)
-                for label, score in zip(self._labels, scores, strict=True)
-            )
-            yield WindowOutput(start=start, end=end, scores=scored)
+            # Every label in output order, unfiltered: the engine keeps what was asked for.
+            if len(scores) != len(self._labels):
+                raise ValueError(
+                    f"{OWNER} gave {len(scores)} scores for the window at {start} s, "
+                    f"but the registry has {len(self._labels)} labels"
+                )
+            yield WindowOutput(start=start, end=end, scores=scores)
 
     def _render_spectrograms(
         self, path: Path, bounds: Sequence[tuple[float, float]]
@@ -175,8 +179,11 @@ class OwlModel:
 
 def _predict(
     network, paths: Sequence[str], batch_size: int, device: str
-) -> Iterator[tuple[int, list[float]]]:
-    """Yield `(window index, scores)` per spectrogram, matched by index, not position."""
+) -> Iterator[tuple[int, "np.ndarray"]]:
+    """Yield `(window index, scores)` per spectrogram, matched by index, not position.
+
+    The scores are one row of the batch's predictions.
+    """
 
     def load(path, index):
         image = tf.io.decode_png(tf.io.read_file(path), channels=1)
@@ -190,7 +197,7 @@ def _predict(
     for images, indices in dataset:
         predictions = _score_batch(network, images, device)
         for index, vector in zip(indices.numpy(), predictions):
-            yield int(index), vector.tolist()
+            yield int(index), vector
 
 
 def _score_batch(network, images, device: str):

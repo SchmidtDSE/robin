@@ -72,7 +72,7 @@ def test_load_registry_rejects_a_duplicate_class_index(tmp_path):
         load_registry(path)
 
 
-def test_load_registry_rejects_a_duplicate_label(tmp_path):
+def test_load_registry_rejects_a_label_given_twice(tmp_path):
     path = write_registry(tmp_path, [taxon(0, "AAAA"), taxon(1, "AAAA")])
 
     with pytest.raises(ValueError, match="duplicate label"):
@@ -110,7 +110,7 @@ def test_load_registry_rejects_duplicate_interpreted_columns(tmp_path, column):
     assert str(path) in str(failure.value)
 
 
-def test_load_registry_rejects_an_unknown_label_kind(tmp_path):
+def test_load_registry_rejects_a_label_kind_it_does_not_know(tmp_path):
     path = write_registry(tmp_path, [taxon(0, "AAAA") | {"label_kind": "species"}])
 
     with pytest.raises(ValueError, match="label_kind must be"):

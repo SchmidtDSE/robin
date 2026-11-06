@@ -356,7 +356,7 @@ def test_file_order_does_not_change_the_work_digest():
 
 
 def test_the_card_is_part_of_the_work_digest():
-    other_card = CARD.model_copy(update={"min_detection_threshold": 0.1})
+    other_card = CARD.model_copy(update={"model_version": "other"})
 
     assert work_digest(build_work()) != work_digest(
         build_work(model=build_pinned_model(card=other_card))

@@ -72,10 +72,6 @@ EMBEDDING_CARD = build_embedding_card()
 # The backbone whose embeddings the head build_head returns reads.
 BACKBONE_CARD = build_embedding_card(model_name="perch", model_version="8", embedding_dim=1280)
 
-# A model whose library returns only the scores at or above 0.005.
-THRESHOLDED_CARD = build_card(min_detection_threshold=0.005)
-
-
 def build_head(**overrides) -> HeadCard:
     fields = {
         "model_name": "amy-head",
@@ -190,42 +186,9 @@ def test_scores_from_a_card_that_emits_none_are_refused():
     assert "score_domain" in error.detail
 
 
-def test_full_retention_from_a_model_with_a_floor_of_its_own_is_refused():
-    # The scores below the model's floor do not exist, so no stream it emits is full.
-    error = refused(build_work(card=THRESHOLDED_CARD))
-
-    assert error.code == errors.FULL_RETENTION_REDUCED
-    assert "0.005" in error.detail
-
-
 @pytest.mark.parametrize("floor", [0.0, -0.5])
 def test_full_retention_from_a_model_whose_floor_excludes_nothing_is_accepted(floor):
     assert accepted(build_work(card=build_card(min_detection_threshold=floor)))
-
-
-@pytest.mark.parametrize(
-    "request_",
-    [
-        pytest.param(build_scores(retention="thresholded", min_score=0.001), id="thresholded"),
-        pytest.param(build_scores(retention="top_k", min_score=0.001, top_k=5), id="top_k"),
-    ],
-)
-def test_a_floor_below_the_models_own_is_refused(request_):
-    # The scores between the two floors were never emitted, so the stream would be
-    # published under a floor it was not produced at.
-    error = refused(build_work(card=THRESHOLDED_CARD, outputs=(request_,)))
-
-    assert error.code == errors.SCORE_FLOOR_BELOW_MODEL_FLOOR
-    assert "0.001" in error.detail and "0.005" in error.detail
-
-
-@pytest.mark.parametrize("floor", [0.005, 0.5])
-@pytest.mark.parametrize("retention", ["thresholded", "top_k"])
-def test_a_floor_at_or_above_the_models_own_is_accepted(retention, floor):
-    top_k = 5 if retention == "top_k" else None
-    request_ = build_scores(retention=retention, min_score=floor, top_k=top_k)
-
-    assert accepted(build_work(card=THRESHOLDED_CARD, outputs=(request_,)))
 
 
 @pytest.mark.parametrize("k", [1, 3, 51, 10_000])
@@ -588,23 +551,6 @@ def test_a_backbone_overlap_that_does_not_let_windows_advance_is_refused():
     assert_validate_request(error, errors.WINDOW_OVERLAP_INVALID, "3.0", "perch/8")
 
 
-def test_a_floor_below_the_heads_own_is_refused():
-    head = build_head(min_detection_threshold=0.01)
-    request_ = build_scores(retention="thresholded", min_score=0.001)
-
-    error = refused(build_head_work(head, outputs=(request_,)))
-
-    assert_validate_request(
-        error, errors.SCORE_FLOOR_BELOW_MODEL_FLOOR, "0.001", "0.01", "amy-head/1"
-    )
-
-
-def test_full_scores_from_a_head_with_a_floor_of_its_own_are_refused():
-    error = refused(build_head_work(build_head(min_detection_threshold=0.01)))
-
-    assert_validate_request(error, errors.FULL_RETENTION_REDUCED, "0.01", "amy-head/1")
-
-
 @pytest.mark.parametrize(
     "outputs",
     [
@@ -636,13 +582,6 @@ def test_a_duckdb_memory_limit_given_as_a_string_is_not_refused():
 
 REFUSING_CALLS = {
     "scores_not_emitted": lambda: refused(build_work(card=build_card(score_domain=None, taxa_registry_digest=None))),
-    "full_retention_reduced": lambda: refused(build_work(card=THRESHOLDED_CARD)),
-    "score_floor_below_model_floor": lambda: refused(
-        build_work(
-            card=THRESHOLDED_CARD,
-            outputs=(build_scores(retention="thresholded", min_score=0.001),),
-        )
-    ),
     "min_score_out_of_domain": lambda: refused(
         build_work(outputs=(build_scores(retention="thresholded", min_score=1.5),))
     ),

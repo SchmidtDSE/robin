@@ -135,9 +135,9 @@ def build_completed(**overrides) -> InferenceCompleted:
 
 def build_report(**overrides) -> FailureReport:
     fields = {
-        "code": "unknown_label",
+        "code": "score_out_of_domain",
         "stage": "accept_window",
-        "detail": "label 'gull' is not declared by this registry",
+        "detail": "score 2.0 for 'gull' is outside the score range [0.0, 1.0]",
     }
     return FailureReport(**(fields | overrides))
 

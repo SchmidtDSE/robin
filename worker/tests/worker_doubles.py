@@ -40,7 +40,9 @@ TEST_MODEL_SOURCE = f'''
 import os
 import time
 
-from robin_contracts.records import ClassScore, WindowOutput
+import numpy as np
+
+from robin_contracts.records import WindowOutput
 
 
 class TestModel:
@@ -50,9 +52,7 @@ class TestModel:
             open(marker, "w").close()
             while True:
                 time.sleep(0.05)
-        yield WindowOutput(
-            start=0.0, end=3.0, scores=(ClassScore("owl", 0.9), ClassScore("rain", 0.1))
-        )
+        yield WindowOutput(start=0.0, end=3.0, scores=np.array([0.9, 0.1]))
 
     def after_recording(self):
         pass

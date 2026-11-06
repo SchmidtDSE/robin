@@ -30,7 +30,7 @@ MODEL_CARD_FIELDS = {
     "runtime": "tf-saved-model",
     "window_duration": 5.0,
     "sample_rate": 32000,
-    "min_detection_threshold": 0.01,
+    "min_detection_threshold": 0.0,
     "score_domain": "sigmoid",
     "taxa_registry_digest": REGISTRY_DIGEST,
     "audio": {
@@ -124,6 +124,14 @@ def test_a_head_card_that_emits_no_scores_is_refused():
 def test_a_head_card_whose_score_floor_is_not_finite_is_refused(value):
     with pytest.raises(ValidationError, match="must be finite"):
         _head_card(min_detection_threshold=value)
+
+
+@pytest.mark.parametrize("build", [_model_card, _head_card], ids=["model", "head"])
+def test_a_card_with_a_score_floor_above_the_minimum_is_refused(build):
+    with pytest.raises(ValidationError, match="emit every label"):
+        build(min_detection_threshold=0.1)
+
+    assert build(min_detection_threshold=0.0).min_detection_threshold == 0.0
 
 
 @pytest.mark.parametrize(
@@ -443,7 +451,7 @@ def test_reading_a_card_keeps_comments_and_layout_out_of_its_digest(tmp_path):
         "model_name: perch\n"
         "runtime: tf-saved-model\n"
         "window_duration: 5.0\n"
-        "min_detection_threshold: 0.01\n"
+        "min_detection_threshold: 0.0\n"
         "score_domain: sigmoid\n"
         f"taxa_registry_digest: {REGISTRY_DIGEST}\n"
         "audio:\n"

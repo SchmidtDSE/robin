@@ -7,7 +7,7 @@ Rows are written one row group at a time, so the whole artifact is never held in
 and the reader checks the whole file before returning any row.
 """
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -70,13 +70,21 @@ class ScoresWriter:
 
     It checks the header it is given, writes the windows it is given, and leaves
     the file on disk. The caller publishes the finished bytes and deletes the file.
+    `labels` are the registry's labels in `class_index` order. A window's
+    `score_indices` are positions in them.
     """
 
     def __init__(
-        self, path: Path, *, recording: RecordingRef, metadata: Mapping[bytes, bytes]
+        self,
+        path: Path,
+        *,
+        labels: Sequence[str],
+        recording: RecordingRef,
+        metadata: Mapping[bytes, bytes],
     ) -> None:
         _require_writable_header(metadata)
         self._path = path
+        self._labels = tuple(labels)
         self._recording = recording
         self._writer: pq.ParquetWriter | None = pq.ParquetWriter(
             path, SCORES_SCHEMA.with_metadata(dict(metadata))
@@ -90,12 +98,13 @@ class ScoresWriter:
         """Append one row per score in this window, and no rows if it has none."""
         if self._closed or self._writer is None:
             raise RuntimeError(f"{self._path.name} is closed; no window can be added")
-        for score in window.scores:
-            self._pending["window_start_s"].append(window.start)
-            self._pending["window_end_s"].append(window.end)
-            self._pending["label"].append(score.label)
-            self._pending["score"].append(score.score)
-        self._pending_rows += len(window.scores)
+        count = len(window.scores)
+        self._pending["window_start_s"].extend([window.start] * count)
+        self._pending["window_end_s"].extend([window.end] * count)
+        labels = self._labels
+        self._pending["label"].extend(labels[index] for index in window.score_indices.tolist())
+        self._pending["score"].extend(window.scores.tolist())
+        self._pending_rows += count
         # The buffer is flushed at the first window boundary at or past the bound,
         # so a window is never split across two row groups.
         if self._pending_rows >= SCORE_BATCH_ROWS:

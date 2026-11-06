@@ -6,7 +6,7 @@ from pathlib import Path
 from robin_contracts.cards import HeadCard, ModelCard
 from robin_contracts.inputs import Embeddings, Input
 from robin_contracts.protocols import Log, ModelContext
-from robin_contracts.records import ClassScore, WindowOutput
+from robin_contracts.records import WindowOutput
 from robin_contracts.registry import TaxonRegistry
 from robin_contracts.work import REGISTRY_ROLE
 from robin_models._adapter_checks import check_device, get_batch_size
@@ -143,14 +143,9 @@ class OnnxHead:
             starts = embeddings.starts[first : first + len(batch)].tolist()
             ends = embeddings.ends[first : first + len(batch)].tolist()
             _refuse_scores_that_do_not_fit(scores, starts, self._labels)
-            for start, end, row in zip(starts, ends, scores.tolist(), strict=True):
-                yield WindowOutput(start=start, end=end, scores=self._get_class_scores(row))
-
-    def _get_class_scores(self, scores: list[float]) -> tuple[ClassScore, ...]:
-        return tuple(
-            ClassScore(label=label, score=score)
-            for label, score in zip(self._labels, scores, strict=True)
-        )
+            # Each row is in registry order; the engine copies it.
+            for start, end, row in zip(starts, ends, scores, strict=True):
+                yield WindowOutput(start=start, end=end, scores=row)
 
     def after_recording(self) -> None:
         """Nothing to do: a recording leaves no files behind, and the graph stays loaded."""

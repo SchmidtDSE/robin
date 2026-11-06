@@ -13,7 +13,7 @@ from time import perf_counter
 import numpy as np
 import soundfile as sf
 from robin_contracts.protocols import Log
-from robin_contracts.records import ClassScore, WindowOutput
+from robin_contracts.records import WindowOutput
 from robin_contracts.specs import WindowGeometry, window_bounds
 
 Bounds = Sequence[tuple[float, float]]
@@ -93,26 +93,17 @@ def get_window_outputs(
     bounds: Bounds,
     scores: np.ndarray | None,
     embeddings: np.ndarray | None,
-    labels: Sequence[str] | None,
 ) -> Iterator[WindowOutput]:
     """One output for each window of a batch, in order.
 
-    `scores` is None when there are no labels, and `embeddings` is None when none were
-    asked for.
+    `scores` is the batch's (windows, labels) array, or None when there are no labels.
+    Each window's scores are one row of it, in registry order; the engine copies the
+    row. `embeddings` is None when none were asked for.
     """
-    if scores is None:
-        score_rows = [()] * len(bounds)
-    else:
-        score_rows = [_get_class_scores(labels, row) for row in scores.tolist()]
+    score_rows = [None] * len(bounds) if scores is None else list(scores)
     embedding_rows = [None] * len(bounds) if embeddings is None else list(embeddings)
-    # strict refuses a network that gives another number of embedding rows than windows.
-    for (start, end), class_scores, embedding in zip(
-        bounds, score_rows, embedding_rows, strict=True
-    ):
+    # strict refuses a network that gives another number of rows than windows.
+    for (start, end), row, embedding in zip(bounds, score_rows, embedding_rows, strict=True):
         # Each window gets its own copy, so no two share the batch's memory.
         embedding = None if embedding is None else embedding.copy()
-        yield WindowOutput(start=start, end=end, scores=class_scores, embedding=embedding)
-
-
-def _get_class_scores(labels: Sequence[str], scores: list[float]) -> tuple[ClassScore, ...]:
-    return tuple(ClassScore(label=label, score=score) for label, score in zip(labels, scores))
+        yield WindowOutput(start=start, end=end, scores=row, embedding=embedding)

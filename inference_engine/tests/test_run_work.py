@@ -45,7 +45,7 @@ from robin_contracts.output_contracts import (
 )
 from robin_contracts.ports.storage import ArtifactWriter, FileProvider
 from robin_contracts.protocols import ModelContext
-from robin_contracts.records import ClassScore, WindowOutput
+from robin_contracts.records import WindowOutput
 from robin_contracts.results import (
     ArtifactRecord,
     FailureReport,
@@ -483,9 +483,7 @@ def window(position: int, *, scores=True, embedding=False) -> WindowOutput:
     return WindowOutput(
         start=start,
         end=start + 3.0,
-        scores=tuple(ClassScore(label, 0.25 * (position + 1) % 1.0) for label in LABELS)
-        if scores
-        else (),
+        scores=np.full(len(LABELS), 0.25 * (position + 1) % 1.0) if scores else None,
         embedding=np.full(DIM, position + 1.0, dtype=np.float32) if embedding else None,
     )
 
@@ -682,7 +680,7 @@ def test_the_model_is_built_from_the_verified_files_and_the_work(rig):
 # ---------------------------------------------------------------------------
 
 
-def test_a_top_k_request_publishes_the_first_k_of_a_full_stream_per_window(taxa_rig):
+def test_a_top_k_request_publishes_the_first_k_scores_of_each_window(taxa_rig):
     rig = taxa_rig
     request = ScoresRequest(
         contract_id="robin.scores.parquet/1", retention="top_k", min_score=0.0, top_k=2
@@ -709,12 +707,12 @@ def test_a_top_k_request_publishes_the_first_k_of_a_full_stream_per_window(taxa_
     assert header["robin.score_floor"] == "0.0"
 
 
-def test_a_thresholded_request_above_the_models_floor_publishes_only_what_reaches_it(rig):
+def test_a_thresholded_request_publishes_only_what_reaches_its_floor(rig):
     request = ScoresRequest(
         contract_id="robin.scores.parquet/1", retention="thresholded", min_score=0.5
     )
     work = rig.work(outputs=(request,))
-    scores = (ClassScore("owl", 0.4), ClassScore("rain", 0.5))
+    scores = np.array([0.4, 0.5])  # owl, rain
 
     result = success_of(
         rig, rig.run(work, rig.model([[WindowOutput(start=0.0, end=3.0, scores=scores)]])), work
@@ -724,12 +722,12 @@ def test_a_thresholded_request_above_the_models_floor_publishes_only_what_reache
     assert [(row["label"], row["score"]) for row in rows] == [("rain", 0.5)]
 
 
-def test_a_full_stream_missing_a_label_fails_the_recording_under_a_reduced_request(rig):
+def test_a_window_missing_a_label_fails_the_recording_under_a_reduced_request(rig):
     request = ScoresRequest(
         contract_id="robin.scores.parquet/1", retention="top_k", min_score=0.0, top_k=1
     )
     work = rig.work(outputs=(request,))
-    short = WindowOutput(start=0.0, end=3.0, scores=(ClassScore("owl", 0.9),))
+    short = WindowOutput(start=0.0, end=3.0, scores=np.array([0.9]))
 
     result = rig.run(work, rig.model([[short]]))
 
@@ -743,7 +741,7 @@ def test_an_embeddings_only_work_without_a_registry_succeeds_and_drops_every_sco
     rig = Rig(tmp_path, registry_csv=None)
     work = rig.work(outputs=(embeddings_request(),))
     # Scores no one asked for are dropped before they are checked, however malformed.
-    junk = (ClassScore("hawk", math.nan), ClassScore("hawk", 7.0))
+    junk = np.array([math.nan, 7.0, 0.5])
     embedding = np.ones(DIM, dtype=np.float32)
     windows = [
         WindowOutput(start=3.0 * n, end=3.0 * n + 3.0, scores=junk, embedding=embedding)
@@ -806,7 +804,7 @@ def window_at(
     return WindowOutput(
         start=start,
         end=start + 3.0,
-        scores=() if score is None else tuple(ClassScore(label, score) for label in LABELS),
+        scores=None if score is None else np.full(len(LABELS), score),
         embedding=None if embedding is None else np.full(DIM, embedding, dtype=np.float32),
     )
 
@@ -857,7 +855,8 @@ def test_each_recording_gets_its_own_file_of_each_kind(rig):
 def test_a_recording_with_no_score_rows_still_gets_its_embeddings_file(tmp_path):
     rig, request = thresholded_rig(tmp_path)
     work = rig.work(recordings=2, outputs=(request, embeddings_request()))
-    model = rig.model([[window_at(0.0), window_at(3.0)], [window_at(0.0, score=None)]])
+    # Every score of the second recording is below the request's floor.
+    model = rig.model([[window_at(0.0), window_at(3.0)], [window_at(0.0, score=0.25)]])
 
     result = success_of(rig, rig.run(work, model), work)
 
@@ -950,7 +949,7 @@ def detections_request(policy=POLICY) -> DetectionsRequest:
 
 def taxa_window(start: float, owl: float, rain: float, spotted: float, **kwargs) -> WindowOutput:
     """A window scoring every class, as full retention requires."""
-    scores = (ClassScore("owl", owl), ClassScore("rain", rain), ClassScore("spotted", spotted))
+    scores = np.array([owl, rain, spotted])
     return WindowOutput(start=start, end=start + 3.0, scores=scores, **kwargs)
 
 
@@ -1198,19 +1197,23 @@ def test_works_differing_only_in_overlap_publish_different_fingerprints(tmp_path
 
 
 def thresholded_rig(tmp_path: Path, floor: float = 0.5) -> tuple[Rig, ScoresRequest]:
-    """A rig whose model emits only the scores at or above `floor`, and a request for them."""
+    """A rig, and a request that keeps only the scores at or above `floor`."""
     request = ScoresRequest(
         contract_id="robin.scores.parquet/1", retention="thresholded", min_score=floor
     )
-    return Rig(tmp_path, card=build_card(min_detection_threshold=floor)), request
+    return Rig(tmp_path), request
 
 
 def test_a_work_where_no_recording_has_score_rows_has_no_scores_records(tmp_path):
-    # Also shows that an accepted window carrying no scores counts as completed.
+    # Also shows that a window whose scores are all below the floor counts as completed.
     rig, request = thresholded_rig(tmp_path)
     work = rig.work(recordings=2, outputs=(request,))
+    below = [
+        [window_at(3.0 * n, score=0.25, embedding=None) for n in range(count)]
+        for count in (3, 2)
+    ]
 
-    result = success_of(rig, rig.run(work, rig.model(script(3, 2, scores=False))), work)
+    result = success_of(rig, rig.run(work, rig.model(below)), work)
 
     assert result.artifacts == ()
     assert result.resolved_scores_request == request
@@ -1287,12 +1290,12 @@ def test_an_adapter_raising_mid_recording_fails_the_recording(rig):
 
 def test_a_window_the_boundary_refuses_fails_the_recording_where_it_happened(rig):
     work = rig.work()
-    stray = WindowOutput(start=3.0, end=6.0, scores=(ClassScore("hawk", 0.5),))
+    short = WindowOutput(start=3.0, end=6.0, scores=np.array([0.5]))
 
-    result = rig.run(work, rig.model([[window(0), stray]]))
+    result = rig.run(work, rig.model([[window(0), short]]))
 
     failure = recording_failure_of(
-        result, work, value="0", code=errors.UNKNOWN_LABEL, stage=errors.ACCEPT_WINDOW
+        result, work, value="0", code=errors.INCOMPLETE_FULL_SCORES, stage=errors.ACCEPT_WINDOW
     )
     assert failure.window_start_s == 3.0
     assert_failed_cleanly(rig, result)
@@ -1592,7 +1595,7 @@ LEFT_BEHIND_CASES = {
     ),
     "input_unavailable": lambda rig: (rig.model(script(1)), {"inputs": rig.files("audio", {})}),
     "refused_window": lambda rig: (
-        rig.model([[WindowOutput(start=0.0, end=3.0, scores=(ClassScore("hawk", 0.5),))]]),
+        rig.model([[WindowOutput(start=0.0, end=3.0, scores=np.array([0.5]))]]),
         {},
     ),
     "refused_before_construction": lambda rig: (

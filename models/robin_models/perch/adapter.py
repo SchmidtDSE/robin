@@ -165,7 +165,7 @@ class PerchModel:
         if logits is not None:
             refuse_unusable_logits(logits, bounds, self._labels, OWNER)
             scores = get_sigmoid(logits)
-        return get_window_outputs(bounds, scores, embeddings, self._labels)
+        return get_window_outputs(bounds, scores, embeddings)
 
     def after_recording(self) -> None:
         """Nothing to do: a recording leaves no files behind, and the model stays loaded."""

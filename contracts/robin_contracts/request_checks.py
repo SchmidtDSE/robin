@@ -11,7 +11,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TypeVar
 
-from robin_contracts.cards import HeadCard, ModelCard, backbone_mismatch
+from robin_contracts.cards import SCORE_RANGE, HeadCard, ModelCard, backbone_mismatch
 from robin_contracts.output_contracts import (
     DetectionsRequest,
     EmbeddingsRequest,
@@ -26,13 +26,8 @@ from robin_contracts.work import (
     PinnedModel,
 )
 
-# The range every score a model emits must be in.
-SCORE_RANGE = (0.0, 1.0)
-
 SCORES_NOT_EMITTED = "scores_not_emitted"
 EMBEDDINGS_NOT_EMITTED = "embeddings_not_emitted"
-FULL_RETENTION_REDUCED = "full_retention_reduced"
-SCORE_FLOOR_BELOW_MODEL_FLOOR = "score_floor_below_model_floor"
 MIN_SCORE_OUT_OF_DOMAIN = "min_score_out_of_domain"
 EMBEDDING_DTYPE_DISAGREES = "embedding_dtype_disagrees"
 REGISTRY_REQUIRED = "registry_required"
@@ -47,8 +42,6 @@ HEAD_EMITS_NO_EMBEDDINGS = "head_emits_no_embeddings"
 REQUEST_PROBLEM_CODES = (
     SCORES_NOT_EMITTED,
     EMBEDDINGS_NOT_EMITTED,
-    FULL_RETENTION_REDUCED,
-    SCORE_FLOOR_BELOW_MODEL_FLOOR,
     MIN_SCORE_OUT_OF_DOMAIN,
     EMBEDDING_DTYPE_DISAGREES,
     REGISTRY_REQUIRED,
@@ -110,13 +103,9 @@ def _problems(
     yield _find_registry_mismatch(model, card)
     yield _find_undeclared_settings(settings, card)
     yield _find_stalled_overlap(settings, card)
-    scores = _requested(outputs, ScoresRequest)
-    if scores is not None:
+    if _requested(outputs, ScoresRequest) is not None:
         yield _find_unavailable_scores(card)
-        yield _find_full_scores_from_thresholded(scores, card)
     yield _find_floor_outside_domain(outputs)
-    if scores is not None:
-        yield _find_floor_below_model(scores, card)
     yield _find_undeclared_storage_width(outputs, card)
 
 
@@ -247,37 +236,6 @@ def _find_unavailable_scores(card: ModelCard | HeadCard) -> RequestProblem | Non
         SCORES_NOT_EMITTED,
         f"scores were requested but card {_card_id(card)} declares score_domain "
         f"null, so the model emits none",
-    )
-
-
-def _find_full_scores_from_thresholded(
-    scores: ScoresRequest, card: ModelCard | HeadCard
-) -> RequestProblem | None:
-    # A floor at or below the domain minimum excludes nothing, so such a model emits
-    # every label. Above it, the scores under the floor were never produced.
-    minimum = SCORE_RANGE[0]
-    floor = card.min_detection_threshold
-    if scores.retention != "full" or floor <= minimum:
-        return None
-    return RequestProblem(
-        FULL_RETENTION_REDUCED,
-        f"full retention was requested but card {_card_id(card)} declares "
-        f"min_detection_threshold {floor}, above the domain minimum {minimum}, so "
-        f"the model does not emit every score",
-    )
-
-
-def _find_floor_below_model(
-    scores: ScoresRequest, card: ModelCard | HeadCard
-) -> RequestProblem | None:
-    """The scores between the two floors were never produced, so no floor can be below it."""
-    floor = card.min_detection_threshold
-    if scores.retention == "full" or scores.min_score >= floor:
-        return None
-    return RequestProblem(
-        SCORE_FLOOR_BELOW_MODEL_FLOOR,
-        f"{scores.retention} retention was requested at floor {scores.min_score}, "
-        f"below the min_detection_threshold {floor} card {_card_id(card)} declares",
     )
 
 

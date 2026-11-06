@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import numpy as np
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
@@ -11,7 +12,6 @@ from robin_contracts.canonical import checksum_file
 from robin_contracts.cards import AudioGeometry, ModelCard, RunnerResampled, model_ref
 from robin_contracts.layout import NAMESPACE_KEY, VALUE_KEY, artifact_path
 from robin_contracts.output_contracts import ScoresRequest
-from robin_contracts.records import ClassScore
 from robin_contracts.specs import AudioSpec, Recipe
 from robin_contracts.work import (
     REGISTRY_ROLE,
@@ -132,6 +132,10 @@ def build_metadata(request: ScoresRequest | None = None, **overrides) -> dict[by
     return shared | scores
 
 
+# The writer's labels, in registry order. Each test's windows name a few of them.
+LABELS = ("owl", "wren", "a", "b", "c", *(f"label-{index}" for index in range(100)))
+
+
 def build_window(
     start: float = 0.0,
     *,
@@ -144,15 +148,14 @@ def build_window(
         recording=recording,
         start=start,
         end=start + 12.0,
-        scores=tuple(
-            ClassScore(label=label, score=score) for label, score in zip(labels, values)
-        ),
+        scores=np.array(values, dtype=np.float64),
+        score_indices=np.array([LABELS.index(label) for label in labels], dtype=np.intp),
         embedding=None,
     )
 
 
 def write_artifact(path, windows, *, metadata=None):
-    with ScoresWriter(path, recording=SOUNDHUB_42, metadata=metadata or build_metadata()) as writer:
+    with ScoresWriter(path, labels=LABELS, recording=SOUNDHUB_42, metadata=metadata or build_metadata()) as writer:
         for window in windows:
             writer.write(window)
         return writer.close()
@@ -304,7 +307,7 @@ def test_two_recordings_read_as_one_hive_dataset(tmp_path):
             registry_uri="s3://b/registry.csv",
             registry_fingerprint=REGISTRY_FINGERPRINT,
         ) | score_metadata(build_request(), score_domain="sigmoid")
-        with ScoresWriter(path, recording=recording, metadata=metadata) as writer:
+        with ScoresWriter(path, labels=LABELS, recording=recording, metadata=metadata) as writer:
             writer.write(build_window(12.0 * position, recording=recording))
             writer.close()
 
@@ -351,7 +354,7 @@ def test_the_file_grows_before_close(tmp_path):
     labels = tuple(f"label-{index}" for index in range(100))
     path = tmp_path / "scores.parquet"
 
-    with ScoresWriter(path, recording=SOUNDHUB_42, metadata=build_metadata()) as writer:
+    with ScoresWriter(path, labels=LABELS, recording=SOUNDHUB_42, metadata=build_metadata()) as writer:
         for n in range(120):
             writer.write(build_window(float(n) * 12.0, labels=labels))
         assert path.stat().st_size > 0
@@ -364,7 +367,7 @@ def test_a_writer_refuses_a_header_declaring_another_contract(tmp_path):
     path = tmp_path / "scores.parquet"
 
     with pytest.raises(RuntimeError) as exc:
-        ScoresWriter(path, recording=SOUNDHUB_42, metadata=build_metadata(contract_id="robin.embeddings.parquet/1"))
+        ScoresWriter(path, labels=LABELS, recording=SOUNDHUB_42, metadata=build_metadata(contract_id="robin.embeddings.parquet/1"))
 
     assert "robin.embeddings.parquet/1" in str(exc.value)
     assert not path.exists()
@@ -379,7 +382,7 @@ def test_a_writer_refuses_a_header_missing_a_required_key(tmp_path):
     path = tmp_path / "scores.parquet"
 
     with pytest.raises(RuntimeError) as exc:
-        ScoresWriter(path, recording=SOUNDHUB_42, metadata=metadata)
+        ScoresWriter(path, labels=LABELS, recording=SOUNDHUB_42, metadata=metadata)
 
     assert "robin.recipe" in str(exc.value)
     assert not path.exists()
@@ -395,7 +398,7 @@ def test_a_writer_refuses_a_header_missing_a_key_its_retention_requires(tmp_path
     path = tmp_path / "scores.parquet"
 
     with pytest.raises(RuntimeError) as exc:
-        ScoresWriter(path, recording=SOUNDHUB_42, metadata=metadata)
+        ScoresWriter(path, labels=LABELS, recording=SOUNDHUB_42, metadata=metadata)
 
     assert "robin.score_top_k" in str(exc.value)
     assert not path.exists()
@@ -406,7 +409,7 @@ def test_a_writer_refuses_a_retention_the_contract_does_not_declare(tmp_path):
     path = tmp_path / "scores.parquet"
 
     with pytest.raises(RuntimeError) as exc:
-        ScoresWriter(path, recording=SOUNDHUB_42, metadata=metadata)
+        ScoresWriter(path, labels=LABELS, recording=SOUNDHUB_42, metadata=metadata)
 
     assert "banana" in str(exc.value)
     assert not path.exists()
@@ -434,7 +437,7 @@ def test_a_schema_only_stream_reads_back(tmp_path):
 def test_the_writer_leaves_its_file_for_the_caller(tmp_path):
     path = tmp_path / "scores.parquet"
 
-    with ScoresWriter(path, recording=SOUNDHUB_42, metadata=build_metadata()) as writer:
+    with ScoresWriter(path, labels=LABELS, recording=SOUNDHUB_42, metadata=build_metadata()) as writer:
         writer.write(build_window())
         staged = writer.close()
         assert staged.path.exists()
@@ -444,7 +447,7 @@ def test_the_writer_leaves_its_file_for_the_caller(tmp_path):
 
 
 def test_write_after_close_is_refused(tmp_path):
-    writer = ScoresWriter(tmp_path / "scores.parquet", recording=SOUNDHUB_42, metadata=build_metadata())
+    writer = ScoresWriter(tmp_path / "scores.parquet", labels=LABELS, recording=SOUNDHUB_42, metadata=build_metadata())
     writer.close()
 
     with pytest.raises(RuntimeError):
@@ -452,7 +455,7 @@ def test_write_after_close_is_refused(tmp_path):
 
 
 def test_close_twice_is_refused(tmp_path):
-    writer = ScoresWriter(tmp_path / "scores.parquet", recording=SOUNDHUB_42, metadata=build_metadata())
+    writer = ScoresWriter(tmp_path / "scores.parquet", labels=LABELS, recording=SOUNDHUB_42, metadata=build_metadata())
     writer.close()
 
     with pytest.raises(RuntimeError):
@@ -464,7 +467,7 @@ def test_a_writer_released_before_close_refuses_to_stage(tmp_path):
     # a row count and a checksum for a file that was never finished.
     path = tmp_path / "scores.parquet"
     with pytest.raises(ZeroDivisionError):
-        with ScoresWriter(path, recording=SOUNDHUB_42, metadata=build_metadata()) as writer:
+        with ScoresWriter(path, labels=LABELS, recording=SOUNDHUB_42, metadata=build_metadata()) as writer:
             writer.write(build_window())
             raise ZeroDivisionError
 

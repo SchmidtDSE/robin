@@ -394,7 +394,7 @@ def test_a_built_model_satisfies_the_protocol(runtime, tmp_path):
         ),
         pytest.param(
             "min_detection_threshold",
-            {"min_detection_threshold": 0.005},
+            {"min_detection_threshold": -0.1},
             id="min_detection_threshold",
         ),
         pytest.param("spectrogram_shape", {"spectrogram_shape": [500, 160]}, id="spectrogram"),
@@ -787,7 +787,7 @@ def test_run_gives_the_sigmoid_of_the_logits_exactly(runtime, tmp_path):
     model, _, path = model_and_noise(runtime, tmp_path, WINDOW)
     [window] = run(model, path)
     expected = runtime.adapter.get_sigmoid(np.resize(SEVEN_LOGITS, 10932)).tolist()
-    assert [score.score for score in window.scores] == expected
+    assert window.scores.tolist() == expected
 
 
 def test_outputs_are_read_by_name_whatever_their_order(runtime, tmp_path):
@@ -801,7 +801,7 @@ def test_outputs_are_read_by_name_whatever_their_order(runtime, tmp_path):
     logits = call.returned["label"]._values
     embeddings = call.returned["embedding"]._values
     for window, row, embedding in zip(windows, logits, embeddings, strict=True):
-        assert [s.score for s in window.scores] == runtime.adapter.get_sigmoid(row).tolist()
+        assert window.scores.tolist() == runtime.adapter.get_sigmoid(row).tolist()
         assert np.array_equal(window.embedding, embedding)
 
 
@@ -810,10 +810,10 @@ def test_every_window_scores_every_label_once_in_registry_order(runtime, tmp_pat
     windows = run(model, path)
     expected = runtime.adapter.get_sigmoid(fake_logits(rows_given_to(runtime)))
     for window, scores in zip(windows, expected, strict=True):
-        assert tuple(score.label for score in window.scores) == LABELS
-        assert all(type(score.score) is float for score in window.scores)
-        assert [score.score for score in window.scores] == scores.tolist()
-    assert windows[0].scores != windows[1].scores
+        assert window.scores.shape == (len(LABELS),)
+        assert window.scores.dtype in (np.float32, np.float64)
+        assert window.scores.tolist() == scores.tolist()
+    assert not np.array_equal(windows[0].scores, windows[1].scores)
 
 
 def test_a_model_returning_fewer_logits_than_it_declares_fails_the_recording(runtime, tmp_path):
@@ -887,7 +887,9 @@ def test_asking_for_embeddings_does_not_change_a_score(runtime, tmp_path):
     path = write_audio(tmp_path / "a.wav", noise(3 * WINDOW), 32000)
     alone = run(runtime.adapter.build(perch_context(tmp_path)), path)
     both = run(runtime.adapter.build(perch_context(tmp_path, emit_embeddings=True)), path)
-    assert [w.scores for w in both] == [w.scores for w in alone]
+    assert all(
+        np.array_equal(b.scores, a.scores) for b, a in zip(both, alone, strict=True)
+    )
 
 
 def test_with_a_registry_scores_come_even_when_only_embeddings_are_asked_for(runtime, tmp_path):
@@ -901,7 +903,7 @@ def test_without_a_registry_no_scores_come_and_the_label_output_is_not_read(runt
     runtime.logits = lambda batch: np.full((len(batch), 10932), np.nan, dtype=np.float32)
     model = runtime.adapter.build(embeddings_only(tmp_path, emit_embeddings=True))
     windows = run(model, write_audio(tmp_path / "a.wav", noise(2 * WINDOW), 32000))
-    assert [window.scores for window in windows] == [(), ()]
+    assert [window.scores for window in windows] == [None, None]
     assert all(window.embedding is not None for window in windows)
     assert "label" not in runtime.read
 

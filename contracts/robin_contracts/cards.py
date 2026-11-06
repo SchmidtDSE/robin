@@ -25,6 +25,9 @@ PadPolicy = Literal["centre_crop_end_pad", "drop", "time_scaled"]
 
 EmbeddingDtype = Literal["float16", "float32"]
 
+# The range every score a model emits must be in.
+SCORE_RANGE = (0.0, 1.0)
+
 
 def refuse_windows_that_do_not_advance(duration: float, overlap: float) -> None:
     """Refuse an overlap so long that the next window would not start after this one."""
@@ -37,6 +40,16 @@ def refuse_windows_that_do_not_advance(duration: float, overlap: float) -> None:
 def _refuse_a_non_finite_number(value: float) -> float:
     if not math.isfinite(value):
         raise ValueError("model card numeric fields must be finite")
+    return value
+
+
+def _refuse_a_floor_above_the_minimum(value: float) -> float:
+    minimum = SCORE_RANGE[0]
+    if value > minimum:
+        raise ValueError(
+            f"min_detection_threshold {value} is above the score minimum {minimum}; "
+            f"Robin supports only models that emit every label for every window"
+        )
     return value
 
 
@@ -123,8 +136,9 @@ class ModelCard(BaseModel):
 
     `score_domain` is `sigmoid` when each class's score is a sigmoid output: between 0
     and 1, independent of the other classes, and not calibrated.
-    `min_detection_threshold` is the lowest score the model emits. At or below the
-    score domain's minimum, the model emits every label for every window.
+    `min_detection_threshold` is the lowest score the model emits. It must be at or
+    below the score minimum, `SCORE_RANGE[0]`: Robin supports only models that emit
+    every label for every window.
     `taxa_registry_digest` is the digest of the registry file the model's scores are
     labelled by, and a card that emits scores must declare it.
     """
@@ -157,8 +171,8 @@ class ModelCard(BaseModel):
 
     @field_validator("min_detection_threshold")
     @classmethod
-    def _check_finite(cls, value: float) -> float:
-        return _refuse_a_non_finite_number(value)
+    def _check_score_floor(cls, value: float) -> float:
+        return _refuse_a_floor_above_the_minimum(_refuse_a_non_finite_number(value))
 
     @field_validator("sample_rate")
     @classmethod
@@ -230,8 +244,8 @@ class HeadCard(BaseModel):
 
     @field_validator("min_detection_threshold")
     @classmethod
-    def _check_finite(cls, value: float) -> float:
-        return _refuse_a_non_finite_number(value)
+    def _check_score_floor(cls, value: float) -> float:
+        return _refuse_a_floor_above_the_minimum(_refuse_a_non_finite_number(value))
 
     @field_validator("taxa_registry_digest")
     @classmethod

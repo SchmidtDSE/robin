@@ -59,6 +59,9 @@ class RecordingOutputs:
         self.registry_uri = work.model.files[REGISTRY_ROLE].uri if registry is not None else None
         self.registry_fingerprint = registry.fingerprint if registry is not None else None
         self.detections = detections_request(work)
+        self._labels = (
+            tuple(entry.label for entry in registry.entries) if registry is not None else ()
+        )
         self._registry_table: pa.Table | None = None
         if self.detections is not None:
             if registry is None or self._scores is None:
@@ -106,6 +109,7 @@ class RecordingOutputs:
     def _create_scores_writer(self, folder: Path, recording: RecordingRef) -> ScoresWriter:
         return ScoresWriter(
             folder / FILE_NAMES["scores"],
+            labels=self._labels,
             recording=recording,
             metadata=self._header(SCORES_CONTRACT_ID, recording) | self._score_keys(),
         )

@@ -36,7 +36,7 @@ from robin_contracts.protocols import (
     ScoreRetention,
     discard_log_line,
 )
-from robin_contracts.records import ClassScore, WindowOutput
+from robin_contracts.records import WindowOutput
 from robin_contracts.registry import RegistryEntry, TaxonRegistry
 from robin_contracts.request_checks import (
     REQUEST_PROBLEM_CODES,
@@ -97,7 +97,6 @@ __all__ = [
     "AudioSpec",
     "BackendResampled",
     "CanonicalizationError",
-    "ClassScore",
     "DetectionPolicy",
     "DetectionsRequest",
     "EmbeddingArtifactInput",

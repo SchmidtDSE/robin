@@ -42,7 +42,7 @@ def test_read_and_model_seconds_are_counted_apart(tmp_path, monkeypatch):
 
     def run_batch(bounds, batch):
         clock.now += 10
-        return iter([WindowOutput(start=start, end=end, scores=()) for start, end in bounds])
+        return iter([WindowOutput(start=start, end=end) for start, end in bounds])
 
     lines: list[str] = []
     windows = list(

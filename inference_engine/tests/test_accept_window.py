@@ -5,7 +5,7 @@ import pytest
 
 from robin_contracts.cards import AudioGeometry, ModelCard, RunnerResampled
 from robin_contracts.output_contracts import ScoresRequest
-from robin_contracts.records import ClassScore, WindowOutput
+from robin_contracts.records import WindowOutput
 from robin_contracts.registry import RegistryEntry, TaxonRegistry
 from robin_contracts.specs import WindowGeometry, window_bounds
 from robin_contracts.work import RecordingRef
@@ -16,15 +16,11 @@ REGISTRY_DIGEST = "sha256:" + "a" * 64
 
 FINGERPRINT = "sha256:" + "0" * 64
 
-# The model's own floor: its library returns only the scores at or above this.
-MODEL_FLOOR = 0.01
-
-
 def build_scores_request(**overrides) -> ScoresRequest:
     fields = {
         "contract_id": "robin.scores.parquet/1",
         "retention": "thresholded",
-        "min_score": MODEL_FLOOR,
+        "min_score": 0.5,
     }
     return ScoresRequest(**(fields | overrides))
 
@@ -52,7 +48,7 @@ def build_card(*, geometry: WindowGeometry | None = None, **overrides) -> ModelC
         "runtime": "none",
         "window_duration": geometry.window_duration,
         "sample_rate": 16000,
-        "min_detection_threshold": MODEL_FLOOR,
+        "min_detection_threshold": 0.0,
         "score_domain": "sigmoid",
         "taxa_registry_digest": REGISTRY_DIGEST,
         "audio": AudioGeometry(
@@ -65,10 +61,6 @@ def build_card(*, geometry: WindowGeometry | None = None, **overrides) -> ModelC
         "embedding_dtype": "float32",
     }
     return ModelCard(**(fields | overrides))
-
-
-# A model that emits every label for every window.
-FULL_STREAM_CARD = build_card(min_detection_threshold=0.0)
 
 
 def build_recordings(*durations: float | None) -> tuple[RecordingRef, ...]:
@@ -103,11 +95,15 @@ def build_boundary(
     return boundary
 
 
+# One score for each label of build_registry("rain", "wind"), in that order.
+SCORES = (0.5, 0.1)
+
+
 def build_window(**overrides) -> WindowOutput:
     fields = {
         "start": 0.0,
         "end": 3.0,
-        "scores": (ClassScore(label="rain", score=0.5),),
+        "scores": np.array(SCORES),
     }
     return WindowOutput(**(fields | overrides))
 
@@ -122,7 +118,8 @@ def test_accept_returns_the_window_it_was_given():
     assert accepted.recording is RECORDINGS[0]
     assert accepted.start == 3.0
     assert accepted.end == 6.0
-    assert accepted.scores == (ClassScore(label="rain", score=0.5),)
+    assert accepted.scores.tolist() == list(SCORES)
+    assert accepted.score_indices.tolist() == [0, 1]
     assert accepted.embedding is None
 
 
@@ -359,7 +356,7 @@ def test_a_refused_window_does_not_advance_the_accepted_start():
 
     with pytest.raises(errors.EngineError) as exc:
         boundary.accept(
-            build_window(start=3.0, end=6.0, scores=(ClassScore(label="rain", score=2.0),))
+            build_window(start=3.0, end=6.0, scores=np.array([2.0, 0.1]))
         )
 
     assert exc.value.code == errors.SCORE_OUT_OF_DOMAIN
@@ -369,50 +366,80 @@ def test_a_refused_window_does_not_advance_the_accepted_start():
 @pytest.mark.parametrize("score", [2.0, -0.1, math.nan, math.inf, -math.inf])
 def test_accept_refuses_a_score_outside_the_declared_domain(score):
     with pytest.raises(errors.EngineError) as exc:
-        build_boundary().accept(build_window(scores=(ClassScore(label="rain", score=score),)))
+        build_boundary().accept(build_window(scores=np.array([0.5, score])))
 
     assert exc.value.code == errors.SCORE_OUT_OF_DOMAIN
+    assert "'wind'" in exc.value.detail
 
 
-def test_accept_refuses_a_label_the_registry_does_not_declare():
-    with pytest.raises(errors.EngineError) as exc:
-        build_boundary().accept(build_window(scores=(ClassScore(label="sleet", score=0.5),)))
-
-    assert exc.value.code == errors.UNKNOWN_LABEL
-    assert "sleet" in exc.value.detail
-    assert FINGERPRINT in exc.value.detail
-
-
-def test_accept_refuses_an_empty_label():
-    with pytest.raises(errors.EngineError) as exc:
-        build_boundary().accept(build_window(scores=(ClassScore(label="", score=0.5),)))
-
-    assert exc.value.code == errors.UNKNOWN_LABEL
-
-
-def test_accept_refuses_a_label_repeated_within_one_window():
-    scores = (ClassScore(label="rain", score=0.5), ClassScore(label="rain", score=0.4))
+def test_a_bad_value_is_reported_before_a_wrong_length():
+    registry = build_registry("rain", "wind", "hail", "snow", "fog", "mist")
+    row = np.array([0.1, 0.2, 0.3, math.nan, 0.5])
 
     with pytest.raises(errors.EngineError) as exc:
-        build_boundary().accept(build_window(scores=scores))
+        build_boundary(registry=registry).accept(build_window(scores=row))
 
-    assert exc.value.code == errors.DUPLICATE_LABEL
+    assert exc.value.code == errors.SCORE_OUT_OF_DOMAIN
+    assert "'snow'" in exc.value.detail
 
 
-@pytest.mark.parametrize("scores", [(ClassScore(label="rain", score=0.5),), ()])
+def test_a_bad_value_past_the_registry_is_reported_by_position():
+    row = np.array([0.1, 0.2, 0.3, math.nan])
+
+    with pytest.raises(errors.EngineError) as exc:
+        build_boundary().accept(build_window(scores=row))
+
+    assert exc.value.code == errors.SCORE_OUT_OF_DOMAIN
+    assert "position 3" in exc.value.detail
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        pytest.param(None, id="none"),
+        pytest.param(np.array([0.5]), id="too_short"),
+        pytest.param(np.array([0.5, 0.1, 0.2]), id="too_long"),
+        pytest.param(np.array([[0.5, 0.1]]), id="two_dimensional"),
+        pytest.param(np.array([1, 0], dtype=np.int64), id="int64"),
+        pytest.param(np.array([0.5, 0.1], dtype=np.float16), id="float16"),
+        pytest.param(np.array([0.5, 0.1], dtype=object), id="object"),
+    ],
+)
+def test_a_row_of_the_wrong_length_or_kind_is_refused(row):
+    with pytest.raises(errors.EngineError) as exc:
+        build_boundary().accept(build_window(scores=row))
+
+    assert exc.value.code == errors.INCOMPLETE_FULL_SCORES
+    if row is not None:
+        assert str(row.shape) in exc.value.detail and str(row.dtype) in exc.value.detail
+
+
+def test_a_float32_row_is_accepted_as_the_same_values_in_float64():
+    row = np.array([0.1, 0.7], dtype=np.float32)
+
+    accepted = build_boundary().accept(build_window(scores=row))
+
+    assert accepted.scores.dtype == np.float64
+    assert accepted.scores.tolist() == row.tolist()
+
+
+def test_an_accepted_row_keeps_its_values_when_the_adapter_reuses_its_buffer():
+    row = np.array([0.5, 0.1])
+    accepted = build_boundary().accept(build_window(scores=row))
+
+    row[...] = 0.9
+
+    assert accepted.scores.tolist() == [0.5, 0.1]
+
+
+@pytest.mark.parametrize("scores", [np.array([0.5]), np.empty(0), None], ids=["one", "empty", "none"])
 def test_accept_refuses_a_window_missing_a_label_under_full_retention(scores):
-    boundary = build_boundary(card=FULL_STREAM_CARD, scores=FULL)
+    boundary = build_boundary(scores=FULL)
 
     with pytest.raises(errors.EngineError) as exc:
         boundary.accept(build_window(scores=scores))
 
     assert exc.value.code == errors.INCOMPLETE_FULL_SCORES
-
-
-def test_accept_allows_empty_scores_under_reduced_retention():
-    accepted = build_boundary().accept(build_window(scores=()))
-
-    assert accepted.scores == ()
 
 
 def test_accept_refuses_an_embedding_that_was_not_requested():
@@ -554,9 +581,10 @@ def test_accept_refuses_a_start_off_the_grid_on_the_negative_side():
 # --- Scores against the request -------------------------------------------------
 
 UNREQUESTED_SCORES = {
-    "out_of_domain": (ClassScore(label="rain", score=math.nan),),
-    "unknown_label": (ClassScore(label="sleet", score=0.5),),
-    "duplicate_label": (ClassScore(label="rain", score=0.5), ClassScore(label="rain", score=0.4)),
+    "out_of_domain": np.array([math.nan, 0.1]),
+    "wrong_length": np.array([0.5]),
+    "two_dimensional": np.zeros((1, 2)),
+    "int64": np.array([1, 0], dtype=np.int64),
 }
 
 
@@ -564,13 +592,13 @@ UNREQUESTED_SCORES = {
 def test_scores_a_work_did_not_request_are_dropped_unchecked(scores):
     accepted = build_boundary(scores=None).accept(build_window(scores=scores))
 
-    assert accepted.scores == ()
+    assert accepted.scores.size == 0 and accepted.score_indices.size == 0
 
 
 def test_scores_a_work_did_not_request_need_no_registry():
     accepted = build_boundary(scores=None, registry=None).accept(build_window())
 
-    assert accepted.scores == ()
+    assert accepted.scores.size == 0 and accepted.score_indices.size == 0
 
 
 REQUESTS = {
@@ -581,58 +609,24 @@ REQUESTS = {
 
 
 @pytest.mark.parametrize("request_", REQUESTS.values(), ids=REQUESTS.keys())
-def test_a_full_stream_missing_a_label_is_refused_whatever_was_requested(request_):
-    boundary = build_boundary(card=FULL_STREAM_CARD, scores=request_)
+def test_a_window_missing_a_label_is_refused_whatever_was_requested(request_):
+    boundary = build_boundary(scores=request_)
 
     with pytest.raises(errors.EngineError) as exc:
-        boundary.accept(build_window(scores=(ClassScore(label="rain", score=0.9),)))
+        boundary.accept(build_window(scores=np.array([0.9])))
 
     assert exc.value.code == errors.INCOMPLETE_FULL_SCORES
 
 
 @pytest.mark.parametrize("request_", REQUESTS.values(), ids=REQUESTS.keys())
-def test_a_full_stream_is_accepted_whole_whatever_was_requested(request_):
+def test_a_window_with_every_label_is_accepted_whole_whatever_was_requested(request_):
     # The request's floor and k are applied after the boundary, not checked by it.
-    scores = (ClassScore(label="rain", score=0.9), ClassScore(label="wind", score=0.0))
-    boundary = build_boundary(card=FULL_STREAM_CARD, scores=request_)
+    boundary = build_boundary(scores=request_)
 
-    assert boundary.accept(build_window(scores=scores)).scores == scores
+    accepted = boundary.accept(build_window(scores=np.array([0.9, 0.0])))
 
-
-@pytest.mark.parametrize("retention", ["thresholded", "top_k"])
-def test_a_thresholded_stream_carrying_a_score_below_the_models_floor_is_refused(retention):
-    request = build_scores_request(
-        retention=retention, min_score=MODEL_FLOOR, top_k=2 if retention == "top_k" else None
-    )
-    below = (ClassScore(label="rain", score=0.009),)
-
-    with pytest.raises(errors.EngineError) as exc:
-        build_boundary(scores=request).accept(build_window(start=3.0, end=6.0, scores=below))
-
-    assert exc.value.code == errors.SCORE_BELOW_FLOOR
-    assert exc.value.recording is RECORDINGS[0]
-    assert exc.value.window_start_s == 3.0
-    assert "0.009" in exc.value.detail and str(MODEL_FLOOR) in exc.value.detail
-
-
-def test_a_thresholded_stream_may_carry_a_score_exactly_at_the_models_floor():
-    at_floor = (ClassScore(label="rain", score=MODEL_FLOOR),)
-
-    assert build_boundary().accept(build_window(scores=at_floor)).scores == at_floor
-
-
-def test_a_thresholded_stream_is_not_checked_against_the_requests_floor_or_k():
-    request = build_scores_request(retention="top_k", min_score=0.5, top_k=1)
-    scores = (ClassScore(label="rain", score=0.2), ClassScore(label="wind", score=0.1))
-
-    assert build_boundary(scores=request).accept(build_window(scores=scores)).scores == scores
-
-
-def test_a_non_finite_score_is_out_of_domain_before_it_meets_the_floor():
-    with pytest.raises(errors.EngineError) as exc:
-        build_boundary().accept(build_window(scores=(ClassScore(label="rain", score=math.nan),)))
-
-    assert exc.value.code == errors.SCORE_OUT_OF_DOMAIN
+    assert accepted.scores.tolist() == [0.9, 0.0]
+    assert accepted.score_indices.tolist() == [0, 1]
 
 
 # ---------------------------------------------------------------------------

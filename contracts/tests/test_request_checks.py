@@ -115,7 +115,6 @@ def problem(model, input=None, settings=None, outputs=None) -> RequestProblem | 
 
 
 HEAD = pinned(build_head())
-THRESHOLDED = pinned(build_card(min_detection_threshold=0.005))
 
 CASES = {
     request_checks.INPUT_KIND_DISAGREES_WITH_CARD: lambda: problem(HEAD),
@@ -153,12 +152,8 @@ CASES = {
     request_checks.SCORES_NOT_EMITTED: lambda: problem(
         pinned(build_card(score_domain=None, taxa_registry_digest=None))
     ),
-    request_checks.FULL_RETENTION_REDUCED: lambda: problem(THRESHOLDED),
     request_checks.MIN_SCORE_OUT_OF_DOMAIN: lambda: problem(
         pinned(build_card()), outputs=(scores(), detections(1.5))
-    ),
-    request_checks.SCORE_FLOOR_BELOW_MODEL_FLOOR: lambda: problem(
-        THRESHOLDED, outputs=(scores(retention="thresholded", min_score=0.001),)
     ),
 }
 

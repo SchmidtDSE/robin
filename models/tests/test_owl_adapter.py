@@ -17,7 +17,6 @@ import robin_models.owl
 from robin_contracts.cards import ModelCard, read_card
 from robin_contracts.inputs import AudioClip, Embeddings
 from robin_contracts.protocols import Model, ModelContext
-from robin_contracts.records import ClassScore
 from robin_contracts.specs import recipe, window_bounds
 from robin_inference_engine.load_registry import load_registry
 
@@ -214,7 +213,7 @@ class FakeRuntime:
         self.batch_sizes.append(batch_size)
         for index, path in enumerate(paths):
             assert Path(path).exists()
-            yield index, fake_scores(index)[: self.score_count]
+            yield index, np.array(fake_scores(index)[: self.score_count], dtype=np.float32)
 
 
 def fake_scores(index: int) -> list[float]:
@@ -460,13 +459,10 @@ def test_run_yields_every_window_with_every_label_scored_in_output_order(runtime
         (24.0, 36.0),
     ]
     for index, window in enumerate(windows):
-        expected = tuple(
-            ClassScore(label=label, score=score)
-            for label, score in zip(labels, fake_scores(index)[:51], strict=True)
-        )
-        assert window.scores == expected
+        expected = np.array(fake_scores(index)[: len(labels)], dtype=np.float32)
+        assert np.array_equal(window.scores, expected)
         assert window.embedding is None
-    scores = [score.score for score in windows[0].scores]
+    scores = windows[0].scores.tolist()
     assert scores != sorted(scores, reverse=True)
 
 

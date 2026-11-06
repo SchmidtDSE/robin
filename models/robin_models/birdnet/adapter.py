@@ -215,7 +215,7 @@ class BirdnetModel:
             # Checked before the sigmoid's clip, which would turn +inf into a confident score.
             refuse_unusable_logits(logits, bounds, self._labels, OWNER)
             scores = get_sigmoid(logits)
-        return get_window_outputs(bounds, scores, embeddings, self._labels)
+        return get_window_outputs(bounds, scores, embeddings)
 
     def after_recording(self) -> None:
         """Nothing to do: a recording leaves no files behind, and the model stays loaded."""

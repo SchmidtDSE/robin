@@ -42,14 +42,10 @@ def test_every_declared_constant_is_a_stage_or_one_of_its_codes():
     }
 
 
-def test_retention_and_setting_codes_belong_to_their_stages():
-    assert errors.SCORE_BELOW_FLOOR == "score_below_floor"
-    assert errors.SCORE_FLOOR_BELOW_MODEL_FLOOR == "score_floor_below_model_floor"
+def test_setting_codes_belong_to_their_stage():
     assert errors.SETTING_UNDECLARED == "setting_undeclared"
     assert errors.SETTING_TYPE_MISMATCH == "setting_type_mismatch"
-    assert errors.SCORE_BELOW_FLOOR in errors.ACCEPT_WINDOW_FAILURES
     assert {
-        errors.SCORE_FLOOR_BELOW_MODEL_FLOOR,
         errors.SETTING_UNDECLARED,
         errors.SETTING_TYPE_MISMATCH,
     } <= set(errors.VALIDATE_REQUEST_FAILURES)

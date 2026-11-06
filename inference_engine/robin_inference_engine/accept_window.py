@@ -8,7 +8,7 @@ import numpy as np
 
 from robin_contracts.cards import HeadCard, ModelCard
 from robin_contracts.output_contracts import ScoresRequest
-from robin_contracts.records import ClassScore, WindowOutput
+from robin_contracts.records import WindowOutput
 from robin_contracts.registry import TaxonRegistry
 from robin_contracts.request_checks import SCORE_RANGE
 from robin_contracts.specs import WindowGeometry
@@ -18,18 +18,34 @@ from robin_inference_engine import errors
 # Relative to the hop or window. Covers binary rounding in i * hop, nothing more.
 GRID_ALLOWANCE = 1e-9
 
+# The row dtypes the engine accepts. Each converts to float64 exactly.
+_ROW_DTYPES = (np.dtype(np.float32), np.dtype(np.float64))
+
+
+def _get_read_only(array: np.ndarray) -> np.ndarray:
+    array.setflags(write=False)
+    return array
+
+
+# The kept scores of a window whose work requested none.
+_NO_SCORES = _get_read_only(np.empty(0, dtype=np.float64))
+_NO_POSITIONS = _get_read_only(np.empty(0, dtype=np.intp))
+
 
 @dataclass(frozen=True, slots=True)
 class AcceptedWindow:
-    """A validated window the engine owns outright, including its embedding array.
+    """A validated window the engine owns outright, including its arrays.
 
-    `recording` is the recording that was open when the window arrived.
+    `recording` is the recording that was open when the window arrived. `scores` holds
+    the kept scores as float64, and `score_indices` their positions in the registry.
+    Both are empty when the work requested no scores.
     """
 
     recording: RecordingRef
     start: float
     end: float
-    scores: tuple[ClassScore, ...]
+    scores: np.ndarray
+    score_indices: np.ndarray
     embedding: np.ndarray | None
 
 
@@ -38,8 +54,10 @@ class AcceptanceBoundary:
 
     Every check refuses and none repairs. A clamped score, a cast embedding or a sorted
     window stream would each turn a producer defect into a plausible published value.
-    The scores are checked as the model's card says it emits them. The request's own
-    floor and k are applied after this, so they are not checked here.
+    A model emits every label for every window, so each scored window must carry one
+    row with a score for each registry entry. The row is copied before it is checked, so
+    a value cannot change after its check. The request's own floor and k are applied
+    after this, so they are not checked here.
     """
 
     def __init__(
@@ -54,12 +72,15 @@ class AcceptanceBoundary:
     ) -> None:
         self._card = card
         self._geometry = geometry
-        # At or below the domain minimum the floor excludes nothing, so the model emits
-        # every label for every window.
-        self._full_stream = card.min_detection_threshold <= SCORE_RANGE[0]
         self._recordings = tuple(recordings)
         self._registry = registry
         self._scores = scores
+        # Every window of a work keeps the positions of the whole row, so it shares one array.
+        self._all_positions = (
+            _get_read_only(np.arange(len(registry.entries), dtype=np.intp))
+            if scores is not None and registry is not None
+            else _NO_POSITIONS
+        )
         self._expect_embeddings = expect_embeddings
         self._embedding_dtype = np.dtype(card.embedding_dtype) if expect_embeddings else None
         self._open_recording: int | None = None
@@ -122,8 +143,10 @@ class AcceptanceBoundary:
         self._check_within_recording(window)
         # A model is never told whether scores are wanted, so producing unrequested
         # ones is not a defect: they are dropped before any score check applies.
-        scores = window.scores if self._scores is not None else ()
-        self._check_scores(window, scores)
+        if self._scores is None:
+            scores, positions = _NO_SCORES, _NO_POSITIONS
+        else:
+            scores, positions = self._check_scores(window), self._all_positions
         self._check_embedding(window)
 
         # Only now, so a refused window leaves nothing for the next one to be
@@ -135,6 +158,7 @@ class AcceptanceBoundary:
             start=window.start,
             end=window.end,
             scores=scores,
+            score_indices=positions,
             embedding=None if window.embedding is None else window.embedding.copy(),
         )
 
@@ -239,72 +263,54 @@ class AcceptanceBoundary:
                 "under the drop policy",
             )
 
-    def _check_scores(self, window: WindowOutput, scores: tuple[ClassScore, ...]) -> None:
-        seen: set[str] = set()
-        for score in scores:
-            self._check_score_value(window, score)
-            self._check_label(window, score)
-            if score.label in seen:
-                raise self._refuse(
-                    errors.DUPLICATE_LABEL,
-                    window,
-                    f"label {score.label!r} appears more than once in this window",
-                )
-            seen.add(score.label)
-            # After the domain check, so a NaN never reaches a comparison that is false.
-            self._check_score_floor(window, score)
-        self._check_every_label_is_present(window, len(scores))
+    def _check_scores(self, window: WindowOutput) -> np.ndarray:
+        """Return the engine's own float64 copy of the window's row, after checking it."""
+        row = window.scores
+        if not isinstance(row, np.ndarray) or row.ndim != 1 or row.dtype not in _ROW_DTYPES:
+            raise self._refuse_row(window, row)
+        # Checked as a copy, so the adapter can reuse its array once this returns.
+        scores = np.array(row, dtype=np.float64, copy=True)
+        # The values first, so a bad value is reported before a wrong length.
+        self._check_score_values(window, scores)
+        if len(scores) != len(self._registry.entries):
+            raise self._refuse_row(window, row)
+        return scores
 
-    def _check_score_value(self, window: WindowOutput, score: ClassScore) -> None:
+    def _check_score_values(self, window: WindowOutput, scores: np.ndarray) -> None:
         low, high = SCORE_RANGE
-        if not math.isfinite(score.score) or not low <= score.score <= high:
-            raise self._refuse(
-                errors.SCORE_OUT_OF_DOMAIN,
-                window,
-                f"score {score.score} for {score.label!r} is outside the score range "
-                f"[{low}, {high}]",
-            )
-
-    def _check_label(self, window: WindowOutput, score: ClassScore) -> None:
-        if not score.label:
-            raise self._refuse(
-                errors.UNKNOWN_LABEL, window, "a score carries an empty label"
-            )
-        if score.label not in self._registry.labels:
-            raise self._refuse(
-                errors.UNKNOWN_LABEL,
-                window,
-                f"label {score.label!r} is not declared by registry "
-                f"{self._registry.fingerprint}",
-            )
-
-    def _check_score_floor(self, window: WindowOutput, score: ClassScore) -> None:
-        # Exact: the floor is a declared constant the model applied, so a tolerance
-        # would only let a genuinely lower score through.
-        floor = self._card.min_detection_threshold
-        if self._full_stream or score.score >= floor:
+        # A NaN fails both comparisons, so it is outside the range too.
+        outside = ~((scores >= low) & (scores <= high))
+        if not outside.any():
             return
+        position = int(np.argmax(outside))
+        entries = self._registry.entries
+        where = (
+            f"for {entries[position].label!r}"
+            if position < len(entries)
+            else f"at position {position}, past the registry's {len(entries)} labels,"
+        )
         raise self._refuse(
-            errors.SCORE_BELOW_FLOOR,
+            errors.SCORE_OUT_OF_DOMAIN,
             window,
-            f"score {score.score} for {score.label!r} is below the model's own floor "
-            f"{floor}, its card's min_detection_threshold",
+            f"score {float(scores[position])} {where} is outside the score range "
+            f"[{low}, {high}]",
         )
 
-    def _check_every_label_is_present(self, window: WindowOutput, count: int) -> None:
-        if self._scores is None or not self._full_stream:
-            return
-        # Membership and uniqueness are settled above, so an equal count is an equal
-        # set and a several-thousand-label registry needs no second set per window.
-        declared = len(self._registry.entries)
-        if count != declared:
-            raise self._refuse(
-                errors.INCOMPLETE_FULL_SCORES,
-                window,
-                f"this model emits every label, so each of registry "
-                f"{self._registry.fingerprint}'s {declared} labels must appear once, "
-                f"got {count}",
-            )
+    def _refuse_row(self, window: WindowOutput, row: object) -> errors.EngineError:
+        if row is None:
+            given = "none"
+        elif isinstance(row, np.ndarray):
+            given = f"shape {row.shape} and dtype {row.dtype}"
+        else:
+            given = f"a {type(row).__name__}"
+        return self._refuse(
+            errors.INCOMPLETE_FULL_SCORES,
+            window,
+            f"this model emits every label, so each window must carry a 1-D float32 or "
+            f"float64 row with one score for each of registry "
+            f"{self._registry.fingerprint}'s {len(self._registry.entries)} labels, "
+            f"got {given}",
+        )
 
     def _check_embedding(self, window: WindowOutput) -> None:
         if window.embedding is None:

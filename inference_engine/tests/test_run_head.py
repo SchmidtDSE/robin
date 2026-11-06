@@ -43,7 +43,7 @@ from robin_contracts.output_contracts import (
 from robin_contracts.protocols import JsonScalar, ModelContext
 from robin_contracts.inputs import Embeddings
 from robin_contracts.layout import artifact_path
-from robin_contracts.records import ClassScore, WindowOutput
+from robin_contracts.records import WindowOutput
 from robin_contracts.results import InferenceCompleted
 from robin_contracts.specs import recipe
 from robin_contracts.work import InferenceWork, InputArtifact, RecordingRef
@@ -127,7 +127,7 @@ def backbone_window(
 ) -> WindowOutput:
     start = hop * row
     embedding = np.arange(dim, dtype=np.float32) + 10.0 * recording + row / 8
-    scores = (ClassScore(label="owl", score=0.25), ClassScore(label="rain", score=0.75))
+    scores = np.array([0.25, 0.75])  # owl, rain
     return WindowOutput(start=start, end=start + HOP, scores=scores, embedding=embedding)
 
 
@@ -440,7 +440,7 @@ def one_per_row(given: Embeddings) -> list[WindowOutput]:
         WindowOutput(
             start=float(start),
             end=float(end),
-            scores=(ClassScore(label="bullfrog", score=0.5),),
+            scores=np.array([0.5]),  # bullfrog
         )
         for start, end in zip(given.starts, given.ends, strict=True)
     ]

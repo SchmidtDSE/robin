@@ -427,18 +427,18 @@ def test_each_row_is_one_window_scoring_every_label_in_registry_order(runtime, t
     for row, window in enumerate(windows):
         assert type(window.start) is float and window.start == given.starts[row]
         assert type(window.end) is float and window.end == given.ends[row]
-        assert tuple(score.label for score in window.scores) == LABELS
-        assert all(type(score.score) is float for score in window.scores)
-        assert [score.score for score in window.scores] == expected[row].tolist()
+        assert window.scores.shape == (len(LABELS),)
+        assert window.scores.dtype in (np.float32, np.float64)
+        assert window.scores.tolist() == expected[row].tolist()
         assert window.embedding is None
-    assert windows[0].scores != windows[1].scores
+    assert not np.array_equal(windows[0].scores, windows[1].scores)
 
 
 @pytest.mark.parametrize("value", [-0.5, 1.5, 37.0], ids=repr)
 def test_the_graphs_output_is_the_score_unchanged(runtime, tmp_path, value):
     runtime.output = lambda batch: np.full((len(batch), len(LABELS)), value, dtype=np.float32)
     windows = run(built(runtime, tmp_path), embeddings(2))
-    assert {score.score for window in windows for score in window.scores} == {value}
+    assert {score for window in windows for score in window.scores.tolist()} == {value}
 
 
 @pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf], ids=["nan", "inf", "minus_inf"])
@@ -563,7 +563,12 @@ def write_embeddings(path: Path, recording: RecordingRef, values: np.ndarray) ->
             start = 3.0 * row
             writer.write(
                 AcceptedWindow(
-                    recording=recording, start=start, end=start + 3.0, scores=(), embedding=vector
+                    recording=recording,
+                    start=start,
+                    end=start + 3.0,
+                    scores=np.empty(0),
+                    score_indices=np.empty(0, dtype=np.intp),
+                    embedding=vector,
                 )
             )
         writer.close()

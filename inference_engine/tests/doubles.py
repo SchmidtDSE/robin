@@ -17,12 +17,14 @@ from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
+import numpy as np
+
 from robin_contracts.cards import HeadCard, ModelCard
 from robin_contracts.inputs import Embeddings, Input
 from robin_contracts.layout import artifact_path
 from robin_contracts.output_contracts import OutputRequest
 from robin_contracts.protocols import JsonScalar, ModelContext
-from robin_contracts.records import ClassScore, WindowOutput
+from robin_contracts.records import WindowOutput
 from robin_contracts.results import (
     ArtifactContractId,
     ArtifactKind,
@@ -66,8 +68,8 @@ class ScriptedModel:
 
     `script[n]` is what the nth call to `run` yields. A script entry that is an
     exception is raised at that point, so a model can fail after yielding some windows.
-    With `reuse_buffer`, every embedding is written into one array the model keeps and
-    yields again, which a real adapter must never do.
+    With `reuse_buffer`, every score row and every embedding is written into one array
+    of its kind that the model keeps and yields again, as a real adapter may do.
     """
 
     def __init__(
@@ -83,7 +85,7 @@ class ScriptedModel:
         self._calls = calls
         self._runs = 0
         self._reuse_buffer = reuse_buffer
-        self._buffer = None
+        self._buffers: dict[str, np.ndarray] = {}
         self._fail_after_recording = fail_after_recording
         self._fail_clean_up = fail_clean_up
 
@@ -110,16 +112,21 @@ class ScriptedModel:
             yield self._handed_over(item)
 
     def _handed_over(self, window: WindowOutput) -> WindowOutput:
-        if window.embedding is None:
-            return window
+        arrays = {
+            name: value
+            for name in ("scores", "embedding")
+            if isinstance(value := getattr(window, name), np.ndarray)
+        }
         if not self._reuse_buffer:
             # A fresh array per yield, so running one script twice shares nothing.
-            return replace(window, embedding=window.embedding.copy())
-        if self._buffer is None:
-            self._buffer = window.embedding.copy()
-        else:
-            self._buffer[...] = window.embedding
-        return replace(window, embedding=self._buffer)
+            return replace(window, **{name: value.copy() for name, value in arrays.items()})
+        for name, value in arrays.items():
+            buffer = self._buffers.get(name)
+            if buffer is None or buffer.shape != value.shape or buffer.dtype != value.dtype:
+                self._buffers[name] = value.copy()
+            else:
+                buffer[...] = value
+        return replace(window, **{name: self._buffers[name] for name in arrays})
 
 
 class ScriptedHead:
@@ -167,9 +174,9 @@ class ScriptedHead:
             WindowOutput(
                 start=float(start),
                 end=float(end),
-                scores=tuple(
-                    ClassScore(label=label, score=(row * len(self._labels) + column + 1) / count)
-                    for column, label in enumerate(self._labels)
+                scores=np.array(
+                    [(row * len(self._labels) + n + 1) / count for n in range(len(self._labels))],
+                    dtype=np.float64,
                 ),
             )
             for row, (start, end) in enumerate(zip(input.starts, input.ends, strict=True))

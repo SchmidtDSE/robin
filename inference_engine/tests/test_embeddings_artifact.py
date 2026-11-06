@@ -167,7 +167,8 @@ def build_window(
         recording=recording,
         start=start,
         end=start + 5.0,
-        scores=(),
+        scores=np.empty(0),
+        score_indices=np.empty(0, dtype=np.intp),
         embedding=vector,
     )
 

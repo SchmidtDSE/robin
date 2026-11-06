@@ -13,7 +13,6 @@ from robin_contracts.output_contracts import (
     ScoresRequest,
     ThresholdPolicy,
 )
-from robin_contracts.records import ClassScore
 from robin_contracts.results import (
     ArtifactRecord,
     FailureReport,
@@ -57,14 +56,15 @@ CARD = ModelCard(
 GEOMETRY = WindowGeometry(window_duration=3.0, window_overlap=0.0, pad="drop")
 
 
-def build_window(**overrides) -> AcceptedWindow:
+def build_window(*, scores=(0.9,), **overrides) -> AcceptedWindow:
     # A window carries a score by default so that only the case naming the empty
     # window depends on what an empty one is counted as.
     fields = {
         "recording": RecordingRef(namespace="soundhub", value="0", audio_uri="s3://b/0.wav"),
         "start": 0.0,
         "end": 3.0,
-        "scores": (ClassScore("gull", 0.9),),
+        "scores": np.array(scores, dtype=np.float64),
+        "score_indices": np.arange(len(scores), dtype=np.intp),
         "embedding": None,
     }
     return AcceptedWindow(**(fields | overrides))
@@ -241,8 +241,8 @@ def test_a_completed_window_is_counted_even_with_no_scores():
 def test_score_rows_count_every_accepted_score():
     builder = CoverageBuilder(ONE)
     builder.begin_recording(0)
-    builder.count_window(build_window(scores=(ClassScore("gull", 0.9), ClassScore("tern", 0.1))))
-    builder.count_window(build_window(start=3.0, end=6.0, scores=(ClassScore("gull", 0.4),)))
+    builder.count_window(build_window(scores=(0.9, 0.1)))
+    builder.count_window(build_window(start=3.0, end=6.0, scores=(0.4,)))
     builder.end_recording()
     (row,) = builder.build()
 
@@ -265,7 +265,7 @@ def test_embedding_rows_count_only_the_windows_carrying_one():
 def test_detection_rows_are_the_count_passed_when_the_recording_ends():
     builder = CoverageBuilder(TWO)
     builder.begin_recording(0)
-    builder.count_window(build_window(scores=(ClassScore("gull", 0.9), ClassScore("tern", 0.1))))
+    builder.count_window(build_window(scores=(0.9, 0.1)))
     builder.end_recording(detection_rows=2)
     builder.begin_recording(1)
     builder.count_window(build_window(recording=TWO[1]))

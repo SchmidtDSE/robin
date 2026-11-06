@@ -7,24 +7,18 @@ if TYPE_CHECKING:
     import numpy as np
 
 
-@dataclass(frozen=True, slots=True)
-class ClassScore:
-    """One label's score for one window."""
-
-    label: str
-    score: float
-
-
 @dataclass(frozen=True, slots=True, kw_only=True)
 class WindowOutput:
     """Scores, an embedding, or both, for one window of the recording being run.
 
+    `scores` is one row: a 1-D array with one score for each registry entry, in
+    `class_index` order. It is None when the model gives no scores.
     The window does not name its recording: one run call handles one recording.
-    Shallow-frozen: the dataclass does not freeze the embedding array. The engine
-    copies the values as it accepts them and never holds the adapter's array.
+    Shallow-frozen: the dataclass does not freeze the arrays. The engine copies the
+    score row and the embedding as it accepts them, and never holds the adapter's arrays.
     """
 
     start: float
     end: float
-    scores: tuple[ClassScore, ...] = ()
+    scores: "np.ndarray | None" = None
     embedding: "np.ndarray | None" = None
