@@ -32,10 +32,10 @@ from robin_inference_engine.artifacts.metadata import (
 from robin_inference_engine.artifacts import scores as scores_module
 from robin_inference_engine.artifacts.scores import (
     CONTRACT_ID,
-    SCORE_BATCH_ROWS,
     SCORES_SCHEMA,
     ScoresWriter,
     read_scores,
+    read_staged_scores,
 )
 
 HEX = "0" * 64
@@ -206,6 +206,22 @@ def test_a_window_with_no_scores_writes_no_rows(tmp_path):
     assert read_rows(staged.path, staged.checksum) == []
 
 
+def test_windows_with_no_kept_scores_leave_nothing_buffered(tmp_path):
+    with ScoresWriter(
+        tmp_path / "scores.parquet", labels=LABELS, recording=SOUNDHUB_42, metadata=build_metadata()
+    ) as writer:
+        for n in range(10_000):
+            writer.write(build_window(float(n) * 12.0, labels=()))
+        writer.write(build_window(120_000.0, labels=("a", "b", "c")))
+
+        # Memory has no public measure, so this reads the writer's private buffer.
+        assert len(writer._windows) == 1
+        staged = writer.close()
+
+    assert staged.rows == 3
+    assert pq.ParquetFile(staged.path).metadata.num_rows == 3
+
+
 def test_the_schema_is_the_declared_four_fields_with_declared_types(tmp_path):
     staged = write_artifact(tmp_path / "scores.parquet", [build_window()])
 
@@ -246,7 +262,9 @@ def test_row_order_follows_the_windows_it_was_given(tmp_path):
     ]
 
 
-def test_the_stream_is_written_in_bounded_batches(tmp_path):
+def test_the_stream_is_written_in_bounded_batches(tmp_path, monkeypatch):
+    limit = 8192
+    monkeypatch.setattr(scores_module, "SCORE_BATCH_ROWS", limit)
     labels = tuple(f"label-{index}" for index in range(100))
     windows = [build_window(float(n) * 12.0, labels=labels) for n in range(200)]
 
@@ -256,17 +274,19 @@ def test_the_stream_is_written_in_bounded_batches(tmp_path):
     assert len(batches) > 1
     assert sum(len(batch) for batch in batches) == staged.rows == 20000
     # A window is never split, so a batch overshoots the bound by less than one window.
-    assert all(len(batch) <= SCORE_BATCH_ROWS + len(labels) for batch in batches)
+    assert all(len(batch) <= limit + len(labels) for batch in batches)
 
 
-def test_each_flush_is_one_row_group_and_every_row_reads_back(tmp_path):
+def test_each_flush_is_one_row_group_and_every_row_reads_back(tmp_path, monkeypatch):
+    limit = 8192
+    monkeypatch.setattr(scores_module, "SCORE_BATCH_ROWS", limit)
     labels = tuple(f"label-{index}" for index in range(100))
     windows = [build_window(float(n) * 12.0, labels=labels) for n in range(200)]
 
     staged = write_artifact(tmp_path / "scores.parquet", windows)
 
     # A flush happens at the first window that takes the buffer to the bound.
-    per_flush = -(-SCORE_BATCH_ROWS // len(labels)) * len(labels)
+    per_flush = -(-limit // len(labels)) * len(labels)
     full_flushes, rest = divmod(20000, per_flush)
     groups = pq.ParquetFile(staged.path).metadata
     assert [groups.row_group(n).num_rows for n in range(groups.num_row_groups)] == (
@@ -350,7 +370,8 @@ def test_the_writer_places_each_value_under_its_own_column_name(tmp_path, monkey
     assert row["window_end_s"] == 18.0
 
 
-def test_the_file_grows_before_close(tmp_path):
+def test_the_file_grows_before_close(tmp_path, monkeypatch):
+    monkeypatch.setattr(scores_module, "SCORE_BATCH_ROWS", 8192)
     labels = tuple(f"label-{index}" for index in range(100))
     path = tmp_path / "scores.parquet"
 
@@ -782,6 +803,44 @@ def test_a_reader_refuses_a_file_whose_footer_does_not_decode(tmp_path):
     assert exc.value.code == errors.ARTIFACT_MALFORMED
     assert staged.path.name in exc.value.detail
     assert "Parquet" in exc.value.detail
+
+
+def test_a_staged_file_reads_back_without_hashing_its_bytes_again(tmp_path, monkeypatch):
+    staged = write_artifact(tmp_path / "scores.parquet", [build_window(labels=("a", "b"))])
+
+    def refuse(path):
+        raise AssertionError(f"{path.name} was hashed again")
+
+    monkeypatch.setattr(scores_module, "checksum_file", refuse)
+    with read_staged_scores(staged.path) as stream:
+        rows = [row for batch in stream.batches for row in batch.to_pylist()]
+
+    assert [(row["label"], row["score"]) for row in rows] == [("a", 0.5), ("b", 0.5)]
+    assert robin_keys(stream.metadata) == robin_keys(
+        {key.decode(): value for key, value in build_metadata().items()}
+    )
+
+
+def test_a_staged_file_is_still_checked_as_parquet_and_against_its_header(tmp_path):
+    path = tmp_path / "scores.parquet"
+    path.write_bytes(b"not a parquet file")
+    no_registry = tmp_path / "no-registry.parquet"
+    write_raw_file(
+        no_registry,
+        SCORES_SCHEMA.with_metadata(
+            {key: value for key, value in build_metadata().items() if key.decode() not in REGISTRY_KEYS}
+        ),
+    )
+
+    with pytest.raises(errors.EngineError) as malformed:
+        with read_staged_scores(path):
+            pass
+    with pytest.raises(errors.EngineError) as no_header:
+        with read_staged_scores(no_registry):
+            pass
+
+    assert malformed.value.code == errors.ARTIFACT_MALFORMED
+    assert no_header.value.code == errors.ARTIFACT_METADATA_INCOMPLETE
 
 
 def test_a_reader_refuses_bytes_that_are_not_parquet(tmp_path):

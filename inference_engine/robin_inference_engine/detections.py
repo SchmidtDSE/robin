@@ -19,7 +19,7 @@ from robin_contracts.registry import RegistryEntry, TaxonRegistry
 from robin_contracts.specs import Recipe
 from robin_contracts.work import InferenceWork, RecordingRef, recording_work_digest
 from robin_inference_engine import errors
-from robin_inference_engine.artifacts.scores import SCORES_SCHEMA, read_scores
+from robin_inference_engine.artifacts.scores import SCORES_SCHEMA, read_staged_scores
 from robin_inference_engine.artifacts.staging import StagedArtifact
 
 CONTRACT_ID: DetectionsContractId = get_args(DetectionsContractId)[0]
@@ -187,8 +187,12 @@ def _select_and_write(
 ) -> int:
     """Run the query over the verified scores and write what it selects; return the row count."""
     sql, parameters = build_detections_sql(policy, recipe_fingerprint=recipe_fingerprint)
-    with read_scores(scores.path, expected_checksum=scores.checksum) as stream:
-        source = _CheckedScores(stream.batches, registry.column("label"), scores.recording)
+    # The engine hashed this file when it staged it, a moment before, so it is not
+    # hashed again here.
+    with read_staged_scores(scores.path) as stream:
+        source = _CheckedScores(
+            stream.batches, registry.column("label"), scores.recording, floor=policy.min_score
+        )
         config = {"temp_directory": str(temporary / "duckdb")}
         if memory_limit is not None:
             config["memory_limit"] = memory_limit
@@ -216,16 +220,26 @@ def _select_and_write(
 class _CheckedScores:
     """The verified score batches DuckDB reads, with every label checked against the registry.
 
+    Each batch's labels are checked first. Then the rows below `floor` are removed, so
+    DuckDB ranks only the rows the query keeps. The query applies the same floor, so
+    this changes no result. With no floor, every row goes to DuckDB.
+
     DuckDB reports an exception raised inside this stream as its own error, keeping only
     the message. The first one is kept here so the caller can raise it as it was.
     """
 
     def __init__(
-        self, batches: Iterator[pa.RecordBatch], labels: pa.ChunkedArray, recording: RecordingRef
+        self,
+        batches: Iterator[pa.RecordBatch],
+        labels: pa.ChunkedArray,
+        recording: RecordingRef,
+        *,
+        floor: float | None,
     ) -> None:
         self._batches = batches
         self._labels = labels.combine_chunks()
         self._recording = recording
+        self._floor = floor
         self._raised: BaseException | None = None
 
     def reader(self) -> pa.RecordBatchReader:
@@ -240,8 +254,22 @@ class _CheckedScores:
         try:
             for batch in self._batches:
                 columns = batch.select(SCORES_SCHEMA.names)
-                self._require_declared_labels(columns.column("label"))
-                yield pa.RecordBatch.from_arrays(columns.columns, schema=SCORES_SCHEMA)
+                # The reader gives `label` as a dictionary, so each distinct label is
+                # checked once, not once for each row.
+                self._require_declared_labels(columns.column("label").dictionary)
+                if self._floor is not None:
+                    columns = columns.filter(
+                        pc.greater_equal(columns.column("score"), self._floor)
+                    )
+                yield pa.RecordBatch.from_arrays(
+                    [
+                        columns.column(name).dictionary_decode()
+                        if name == "label"
+                        else columns.column(name)
+                        for name in SCORES_SCHEMA.names
+                    ],
+                    schema=SCORES_SCHEMA,
+                )
         except GeneratorExit:
             # Raised when the stream is closed before its end; that is not a failure to record.
             raise
@@ -252,6 +280,7 @@ class _CheckedScores:
     def _require_declared_labels(self, labels: pa.Array) -> None:
         # Every label, not only those selected: a label the registry no longer declares
         # means the registry changed after the scores were written, whatever it scored.
+        # `labels` holds each distinct label of a batch once.
         unmatched = pc.filter(labels, pc.invert(pc.is_in(labels, value_set=self._labels)))
         if len(unmatched):
             raise errors.EngineError(

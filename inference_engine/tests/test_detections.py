@@ -536,27 +536,40 @@ def test_a_label_the_registry_lacks_fails_even_below_the_floor(tmp_path, monkeyp
     assert "HAWK" in error.detail
 
 
-def test_a_scores_file_changed_after_staging_fails_at_aggregation(tmp_path):
+def test_detections_do_not_hash_the_staged_scores_file_again(tmp_path, monkeypatch):
     recording = a_recording()
     work = a_work(recording)
     staged = stage_scores(tmp_path, work, recording, OWL_WINDOWS)
-    data = bytearray(staged.path.read_bytes())
-    data[-1] ^= 0xFF
-    staged.path.write_bytes(bytes(data))
 
-    error = refused(lambda: detect(tmp_path, work, staged))
+    def refuse(path):
+        raise AssertionError(f"{path.name} was hashed again")
 
-    assert (error.code, error.stage) == (errors.ARTIFACT_CHECKSUM_MISMATCH, errors.AGGREGATE)
-    assert error.recording == recording
+    # The engine hashed the file when it staged it, a moment before.
+    monkeypatch.setattr(scores_module, "checksum_file", refuse)
+    detected = detect(tmp_path, work, staged)
+
+    assert detected.rows == 4
+
+
+def test_a_top_k_policy_with_no_floor_selects_from_every_row(tmp_path, monkeypatch):
+    monkeypatch.setattr(scores_module, "SCORE_BATCH_ROWS", 2)
+    windows = [(0.0, {"STVA": 0.1, "STOC": 0.05, "Rain": 0.2}), (3.0, {"STVA": 0.3, "STOC": 0.0})]
+
+    _, _, staged = written(tmp_path, windows, policy=TopKPolicy(k=1))
+
+    table = pq.read_table(staged.path)
+    assert list(zip(table["window_start_s"].to_pylist(), table["label"].to_pylist())) == [
+        (0.0, "Rain"), (3.0, "STVA"),
+    ]
 
 
 def failing_after_one_batch(monkeypatch, failure: Exception) -> None:
     """The scores reader yields its first batch, then raises `failure`."""
-    real = detections.read_scores
+    real = detections.read_staged_scores
 
     @contextmanager
-    def reading(path, *, expected_checksum):
-        with real(path, expected_checksum=expected_checksum) as stream:
+    def reading(path):
+        with real(path) as stream:
 
             def batches():
                 yield next(stream.batches)
@@ -564,7 +577,7 @@ def failing_after_one_batch(monkeypatch, failure: Exception) -> None:
 
             yield ScoresStream(metadata=stream.metadata, batches=batches())
 
-    monkeypatch.setattr(detections, "read_scores", reading)
+    monkeypatch.setattr(detections, "read_staged_scores", reading)
 
 
 def test_a_batch_the_reader_refuses_keeps_the_readers_code(tmp_path, monkeypatch):

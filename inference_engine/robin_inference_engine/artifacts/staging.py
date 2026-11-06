@@ -1,6 +1,6 @@
 """A finished artifact file, and the checks every reader holds one to."""
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -69,10 +69,15 @@ def get_single_field(schema: pa.Schema, name: str, *, contract_id: str) -> pa.Fi
     raise invalid_schema_error(f"{contract_id} does not accept this schema: {problem}")
 
 
-def open_parquet(handle: pa.NativeFile, name: str) -> pq.ParquetFile:
-    """Open a Parquet file, refusing bytes that are not one."""
+def open_parquet(
+    handle: pa.NativeFile, name: str, *, read_dictionary: Sequence[str] = ()
+) -> pq.ParquetFile:
+    """Open a Parquet file, refusing bytes that are not one.
+
+    The columns named in `read_dictionary` are read as dictionary arrays.
+    """
     try:
-        return pq.ParquetFile(handle)
+        return pq.ParquetFile(handle, read_dictionary=list(read_dictionary) or None)
     # pyarrow raises OSError for a footer that does not decode.
     except (pa.ArrowInvalid, OSError) as exc:
         raise malformed_error(f"{name} does not open as Parquet: {exc}") from exc

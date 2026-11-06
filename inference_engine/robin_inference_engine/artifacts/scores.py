@@ -3,8 +3,11 @@ when it is read back.
 
 The header carries the run's provenance, so the file can be interpreted on its own. The
 rows do not name their recording: the published path and the artifact record do.
-Rows are written one row group at a time, so the whole artifact is never held in memory,
-and the reader checks the whole file before returning any row.
+Rows are written one row group at a time, so the whole artifact is never held in memory.
+Both readers check the schema and the header before they return any row. `read_scores`
+also hashes the whole file and compares it with the expected checksum first.
+`read_staged_scores` does not hash the file: it is only for a file this engine has just
+written and staged.
 """
 
 from collections.abc import Iterator, Mapping, Sequence
@@ -13,7 +16,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import get_args
 
+import numpy as np
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from robin_contracts.canonical import checksum_file
@@ -53,7 +58,7 @@ RETENTIONS: tuple[str, ...] = get_args(ScoreRetention)
 # never split across row groups, so a group can pass this by up to one window's rows.
 # Each flush is one row group, and when a flush happens depends only on the rows
 # written, so the file's bytes do too. The reader reads this many rows at a time.
-SCORE_BATCH_ROWS = 8192
+SCORE_BATCH_ROWS = 1_048_576
 
 SCORES_SCHEMA = pa.schema(
     [
@@ -84,12 +89,18 @@ class ScoresWriter:
     ) -> None:
         _require_writable_header(metadata)
         self._path = path
-        self._labels = tuple(labels)
+        # One string array, so a flush picks each row's label with one take.
+        self._labels = pa.array(list(labels), type=pa.string())
         self._recording = recording
         self._writer: pq.ParquetWriter | None = pq.ParquetWriter(
-            path, SCORES_SCHEMA.with_metadata(dict(metadata))
+            path,
+            SCORES_SCHEMA.with_metadata(dict(metadata)),
+            compression="zstd",
+            use_dictionary=["label"],
+            use_byte_stream_split=["score"],
         )
-        self._pending = _empty_columns()
+        # Each pending window as (start, end, scores, score_indices).
+        self._windows: list[tuple[float, float, np.ndarray, np.ndarray]] = []
         self._pending_rows = 0
         self._rows = 0
         self._closed = False
@@ -99,11 +110,11 @@ class ScoresWriter:
         if self._closed or self._writer is None:
             raise RuntimeError(f"{self._path.name} is closed; no window can be added")
         count = len(window.scores)
-        self._pending["window_start_s"].extend([window.start] * count)
-        self._pending["window_end_s"].extend([window.end] * count)
-        labels = self._labels
-        self._pending["label"].extend(labels[index] for index in window.score_indices.tolist())
-        self._pending["score"].extend(window.scores.tolist())
+        # An empty window adds nothing, so a recording that keeps no scores does not
+        # grow the buffer with its length.
+        if not count:
+            return
+        self._windows.append((window.start, window.end, window.scores, window.score_indices))
         self._pending_rows += count
         # The buffer is flushed at the first window boundary at or past the bound,
         # so a window is never split across two row groups.
@@ -143,18 +154,24 @@ class ScoresWriter:
             raise RuntimeError(f"{self._path.name} has no open file to write to")
         if not self._pending_rows:
             return
+        counts = [len(scores) for _, _, scores, _ in self._windows]
+        columns = {
+            "window_start_s": np.repeat([start for start, _, _, _ in self._windows], counts),
+            "window_end_s": np.repeat([end for _, end, _, _ in self._windows], counts),
+            "label": pc.take(
+                self._labels, np.concatenate([indices for _, _, _, indices in self._windows])
+            ),
+            "score": np.concatenate([scores for _, _, scores, _ in self._windows]),
+        }
         self._writer.write_batch(
             pa.RecordBatch.from_arrays(
-                [
-                    pa.array(self._pending[field.name], type=field.type)
-                    for field in SCORES_SCHEMA
-                ],
+                [pa.array(columns[field.name], type=field.type) for field in SCORES_SCHEMA],
                 schema=SCORES_SCHEMA,
             ),
             row_group_size=self._pending_rows,
         )
         self._rows += self._pending_rows
-        self._pending = _empty_columns()
+        self._windows = []
         self._pending_rows = 0
 
     def _release(self) -> None:
@@ -177,24 +194,44 @@ def read_scores(path: Path, *, expected_checksum: str) -> Iterator[ScoresStream]
 
     `batches` can be read once, and the file is closed when the block ends.
     Returning every row instead would hold the whole artifact in memory, which
-    streaming avoids.
+    streaming avoids. The `label` column is dictionary-encoded: each distinct
+    label is stored once, and each row points to it.
     """
     try:
         actual = checksum_file(path)
+    except OSError as exc:
+        raise unreadable_error(path.name, exc) from exc
+    require_checksum(path.name, actual=actual, expected=expected_checksum)
+    with _stream_verified(path) as stream:
+        yield stream
+
+
+@contextmanager
+def read_staged_scores(path: Path) -> Iterator[ScoresStream]:
+    """Verify a file's schema and header, then stream its rows, as `read_scores` does.
+
+    It does not hash the bytes. Use it only for a file this engine has just written
+    and staged, which `ScoresWriter.close` hashed a moment before.
+    """
+    with _stream_verified(path) as stream:
+        yield stream
+
+
+@contextmanager
+def _stream_verified(path: Path) -> Iterator[ScoresStream]:
+    try:
         handle = pa.OSFile(str(path), "rb")
     except OSError as exc:
         raise unreadable_error(path.name, exc) from exc
     with handle:
-        require_checksum(path.name, actual=actual, expected=expected_checksum)
-        file = open_parquet(handle, path.name)
+        metadata = _verified_header(open_parquet(handle, path.name).schema_arrow)
+        # Opened again to read `label` as a dictionary. The schema check above sees
+        # the declared string type.
+        file = open_parquet(handle, path.name, read_dictionary=["label"])
         yield ScoresStream(
-            metadata=_verified_header(file.schema_arrow),
+            metadata=metadata,
             batches=read_batches(file, path.name, batch_rows=SCORE_BATCH_ROWS),
         )
-
-
-def _empty_columns() -> dict[str, list[object]]:
-    return {name: [] for name in SCORES_SCHEMA.names}
 
 
 def _verified_header(schema: pa.Schema) -> dict[str, str]:
