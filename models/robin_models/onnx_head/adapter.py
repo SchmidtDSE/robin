@@ -1,45 +1,48 @@
 """The ONNX head runtime. Importing this module loads onnxruntime."""
 
-from collections.abc import Iterator, Mapping, Sequence
-from pathlib import Path
+from collections.abc import Iterator, Sequence
+from typing import Literal
 
+from pydantic import PositiveInt
 from robin_contracts.cards import HeadCard, ModelCard
 from robin_contracts.inputs import Embeddings, Input
 from robin_contracts.protocols import Log, ModelContext
 from robin_contracts.records import WindowOutput
 from robin_contracts.registry import TaxonRegistry
 from robin_contracts.work import REGISTRY_ROLE
-from robin_models._adapter_checks import check_device, get_batch_size
+from robin_models._adapter_support.adapter_setup import (
+    Resources,
+    explain_a_missing_runtime,
+    get_resources,
+    require_roles,
+)
 from robin_models.registration import GRAPH_ROLE
 
+OWNER = "head runtime onnx"
 _RUNTIME_MODULES = ("numpy", "onnxruntime")
 
-try:
+with explain_a_missing_runtime(OWNER, "onnx-head", _RUNTIME_MODULES):
     import numpy as np
     import onnxruntime
-except ModuleNotFoundError as error:
-    if (error.name or "").split(".")[0] not in _RUNTIME_MODULES:
-        raise
-    raise ModuleNotFoundError(
-        f"head runtime onnx needs {error.name}, which is not installed; "
-        f"install robin-models[onnx-head]",
-        name=error.name,
-    ) from error
 
 RUNTIME = "onnx"
-OWNER = "head runtime onnx"
-DEFAULT_BATCH_SIZE = 256
 PROVIDERS = ["CPUExecutionProvider"]
 FLOAT32 = "tensor(float)"
+
+
+class _Resources(Resources):
+    batch_size: PositiveInt = 256
+    # onnxruntime runs here on the CPU only.
+    device: Literal["cpu"] = "cpu"
 
 
 def build(context: ModelContext) -> "OnnxHead":
     """Check the card, resources and files, load the graph, check it, and return the head."""
     card = context.card
     _refuse_a_card_this_runtime_does_not_run(card)
-    batch_size = get_batch_size(context.resources, DEFAULT_BATCH_SIZE)
-    check_device(context.resources, OWNER)
-    _require_roles(context.files, context.registry)
+    resources = get_resources(_Resources, context.resources, OWNER)
+    require_roles(context.files, [GRAPH_ROLE], OWNER)
+    _require_registry(context.registry)
     session = onnxruntime.InferenceSession(str(context.files[GRAPH_ROLE]), providers=PROVIDERS)
     labels = tuple(entry.label for entry in context.registry.entries)
     dim, count = card.embedding_dim, len(labels)
@@ -54,7 +57,7 @@ def build(context: ModelContext) -> "OnnxHead":
         input_name=input_name,
         output_name=output_name,
         labels=labels,
-        batch_size=batch_size,
+        batch_size=resources.batch_size,
         log=context.log,
     )
 
@@ -69,12 +72,7 @@ def _refuse_a_card_this_runtime_does_not_run(card: ModelCard | HeadCard) -> None
         )
 
 
-def _require_roles(files: Mapping[str, Path], registry: TaxonRegistry | None) -> None:
-    if GRAPH_ROLE not in files:
-        raise ValueError(
-            f"head runtime onnx needs a file under the role {GRAPH_ROLE!r}, "
-            f"and got the roles {sorted(files)}"
-        )
+def _require_registry(registry: TaxonRegistry | None) -> None:
     if registry is None:
         raise ValueError(
             f"head runtime onnx needs the registry loaded from the role {REGISTRY_ROLE!r}, "

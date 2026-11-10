@@ -2,52 +2,48 @@
 
 import math
 from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from fractions import Fraction
 
+from pydantic import PositiveInt
 from robin_contracts.cards import AudioGeometry, ModelCard, RunnerResampled
 from robin_contracts.inputs import AudioClip, Input
 from robin_contracts.protocols import JsonScalar, Log, ModelContext
 from robin_contracts.records import WindowOutput
 from robin_contracts.specs import recipe
-from robin_models._adapter_checks import (
-    get_batch_size,
+from robin_models._adapter_support.adapter_setup import (
+    explain_a_missing_runtime,
+    get_resources,
     get_tf_device,
     refuse_a_card_the_model_does_not_follow,
+    require_roles,
 )
 
+OWNER = "model perch/v8"
 _RUNTIME_MODULES = ("numpy", "scipy", "soundfile", "tensorflow")
 
-try:
+with explain_a_missing_runtime(OWNER, "perch", _RUNTIME_MODULES):
     import numpy as np
     import soundfile as sf
     from scipy.signal import resample_poly
     import tensorflow as tf
-except ModuleNotFoundError as error:
-    if (error.name or "").split(".")[0] not in _RUNTIME_MODULES:
-        raise
-    raise ModuleNotFoundError(
-        f"model perch/v8 needs {error.name}, which is not installed; "
-        f"install robin-models[perch]",
-        name=error.name,
-    ) from error
 
-from robin_models._audio_windows import (
-    Bounds,
+from robin_models._adapter_support.audio_windows import (
+    drop_padded_rows,
     get_window_outputs,
     mix_down,
     refuse_unusable_logits,
     run_windows,
 )
-from robin_models._saved_model import (
+from robin_models._adapter_support.batch_pipeline import Bounds, WindowResources
+from robin_models._adapter_support.saved_model import (
     create_saved_model_folder,
     get_signature,
     require_input,
     require_output,
-    require_roles,
 )
+from robin_models.registration import SAVED_MODEL_LAYOUT
 
-OWNER = "model perch/v8"
-DEFAULT_BATCH_SIZE = 32
 SIGNATURE = "serving_default"
 
 # What Perch does whatever its card says. The SavedModel takes 5 seconds of mono audio at
@@ -72,13 +68,17 @@ BEHAVIOUR = {
 }
 
 
+class _Resources(WindowResources):
+    batch_size: PositiveInt = 32
+
+
 def build(context: ModelContext) -> "PerchModel":
     """Check the card, resources and files, load the SavedModel, and return the model."""
     card = context.card
     refuse_a_card_the_model_does_not_follow(card, BEHAVIOUR, OWNER)
-    batch_size = get_batch_size(context.resources, DEFAULT_BATCH_SIZE)
-    device = get_tf_device(context.resources, OWNER, tf)
-    require_roles(context.files, OWNER)
+    resources = get_resources(_Resources, context.resources, OWNER)
+    device = get_tf_device(resources.device, tf, OWNER)
+    require_roles(context.files, SAVED_MODEL_LAYOUT, OWNER)
     folder = create_saved_model_folder(context.files, context.scratch_dir, "perch-savedmodel-")
     with tf.device(device):
         loaded = tf.saved_model.load(str(folder))
@@ -92,7 +92,7 @@ def build(context: ModelContext) -> "PerchModel":
     return PerchModel(
         card=card,
         settings=context.settings,
-        batch_size=batch_size,
+        resources=resources,
         labels=labels,
         loaded=loaded,
         device=device,
@@ -110,7 +110,7 @@ class PerchModel:
         *,
         card: ModelCard,
         settings: Mapping[str, JsonScalar],
-        batch_size: int,
+        resources: WindowResources,
         labels: tuple[str, ...] | None,
         loaded: object,
         device: str,
@@ -121,7 +121,7 @@ class PerchModel:
         self._geometry = recipe(card, settings).audio.geometry
         self._rate = card.sample_rate
         self._width = round(card.window_duration * card.sample_rate)
-        self._batch_size = batch_size
+        self._resources = resources
         self._labels = labels
         # Kept so the signature's variables stay loaded.
         self._loaded = loaded
@@ -138,15 +138,17 @@ class PerchModel:
             input.path,
             geometry=self._geometry,
             width=self._width,
-            batch_size=self._batch_size,
-            read_window=self._read_window,
+            resources=self._resources,
+            read_block=self._read_block,
+            cut_window=_cut_window,
             run_batch=self._run_batch,
             log=self._log,
             owner=OWNER,
         )
 
-    def _read_window(self, audio: "sf.SoundFile", start: float, end: float) -> "np.ndarray":
-        return _read_window_at_rate(audio, start, end, self._rate)
+    def _read_block(self, audio: "sf.SoundFile", bounds: Bounds) -> "_Block":
+        """Read a block at this model's rate, which the window loop does not pass."""
+        return _read_block_at_rate(audio, bounds, self._rate)
 
     def _infer(self, batch: "np.ndarray") -> tuple["np.ndarray | None", "np.ndarray | None"]:
         """The batch's logits when there are labels, and its embeddings when asked for."""
@@ -161,6 +163,8 @@ class PerchModel:
     def _run_batch(self, bounds: Bounds, batch: "np.ndarray") -> Iterator[WindowOutput]:
         """Score one batch of padded rows, and make one output for each window."""
         logits, embeddings = self._infer(batch)
+        logits = drop_padded_rows(logits, batch, bounds, "logits", OWNER)
+        embeddings = drop_padded_rows(embeddings, batch, bounds, "embeddings", OWNER)
         scores = None
         if logits is not None:
             refuse_unusable_logits(logits, bounds, self._labels, OWNER)
@@ -175,42 +179,77 @@ class PerchModel:
         self._loaded = self._serving = None
 
 
-def _read_window_at_rate(
-    audio: "sf.SoundFile", start: float, end: float, target_rate: int
-) -> "np.ndarray":
-    """The window's samples at the model's rate, mixed down and not yet padded.
+@dataclass(frozen=True)
+class _Block:
+    """A block of windows at the model's rate.
 
-    Away from 32 kHz, the window is read with up to a second of frames either side and
-    resampled with them, then trimmed to its own samples. The polyphase filter reaches far less
-    than a second, so the result equals the same samples of the whole recording resampled at
+    `samples[n]` is sample `offset + n` of the whole recording at the model's rate.
+    `file_rate` is the file's sample rate, and `file_frames` is the number of frames in the
+    whole file.
+    `gcd` is the greatest common divisor of the two rates, and `up / down` is their ratio.
+    """
+
+    samples: "np.ndarray"
+    offset: int
+    file_rate: int
+    file_frames: int
+    gcd: int
+    up: int
+    down: int
+
+
+def _read_block_at_rate(audio: "sf.SoundFile", bounds: Bounds, target_rate: int) -> _Block:
+    """Decode the frames of every window in `bounds` at once, mix them down, and return
+    them as a block at the model's rate.
+
+    Away from 32 kHz, the block is read with up to a second of frames either side and
+    resampled at once, with them, to float32. The polyphase filter reaches far less than a
+    second, so each sample equals the same sample of the whole recording resampled at
     once, which is how Perch's training data was resampled.
     """
-    rate, frames = audio.samplerate, audio.frames
-    g = math.gcd(rate, target_rate)
-    up, down = target_rate // g, rate // g
-    first = _get_first_frame_on_grid(start, rate, g)
-    last = min(round(end * rate), frames)
+    rate, file_frames = audio.samplerate, audio.frames
+    gcd = math.gcd(rate, target_rate)
+    up, down = target_rate // gcd, rate // gcd
+    first = _get_first_frame_on_grid(bounds[0][0], rate, gcd)
+    last = max(min(round(end * rate), file_frames) for _, end in bounds)
     if rate == target_rate:
-        return mix_down(_read_frames(audio, first, last))
-    context_first = max(first - rate, 0)
-    context_last = min(last + rate, frames)
-    window = mix_down(_read_frames(audio, context_first, context_last))
-    resampled = resample_poly(window, up, down)
-    offset = context_first * up // down
-    # The grid check makes first and context_first multiples of down, so these are exact;
-    # -(-a // b) rounds up.
-    keep_from = first * up // down - offset
-    keep_to = -(-last * up // down) - offset
-    return resampled[keep_from:keep_to].astype(np.float32)
+        samples, offset = mix_down(_read_frames(audio, first, last)), first
+    else:
+        context_first = max(first - rate, 0)
+        context_last = min(last + rate, file_frames)
+        decoded = mix_down(_read_frames(audio, context_first, context_last))
+        samples = resample_poly(decoded, up, down).astype(np.float32)
+        # The grid check makes context_first a multiple of down, so this is exact.
+        offset = context_first * up // down
+    return _Block(
+        samples=samples,
+        offset=offset,
+        file_rate=rate,
+        file_frames=file_frames,
+        gcd=gcd,
+        up=up,
+        down=down,
+    )
 
 
-def _get_first_frame_on_grid(start: float, rate: int, g: int) -> int:
+def _cut_window(block: _Block, start: float, end: float) -> "np.ndarray":
+    """Return the window's samples at the model's rate, cut from its block and not yet padded."""
+    first = _get_first_frame_on_grid(start, block.file_rate, block.gcd)
+    last = min(round(end * block.file_rate), block.file_frames)
+    # The grid check makes first a multiple of down, so this is exact; -(-a // b) rounds up.
+    # At 32 kHz, up and down are 1, so this keeps the window's own frames.
+    keep_from = first * block.up // block.down - block.offset
+    keep_to = -(-last * block.up // block.down) - block.offset
+    return block.samples[keep_from:keep_to]
+
+
+def _get_first_frame_on_grid(start: float, rate: int, gcd: int) -> int:
     """The window's first frame, once its start is a whole 32 kHz sample as well."""
     # Checked exactly: a start that is on the grid in decimal but not in binary is refused too.
-    if (Fraction(start) * g).denominator != 1:
+    if (Fraction(start) * gcd).denominator != 1:
         raise ValueError(
             f"{OWNER} cannot place the window at {start!r} s exactly: at {rate} Hz, "
-            f"a start must be a whole number of 1/{g} s steps"
+            f"a start must be a whole number of 1/{gcd} s steps"
         )
     return int(Fraction(start) * rate)
 

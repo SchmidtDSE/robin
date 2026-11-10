@@ -33,6 +33,7 @@ robin --help
 - [The `robin` command](docs/commands.md): each command and what it does.
 - [The profile](docs/profile.md): the database, compute, storage, and catalog sections.
 - [AWS Batch](docs/aws-batch.md): what to make in AWS, the worker image, and job definition revisions.
+- [How a model runs](docs/how-a-model-runs.md): how a recording is read and scored, and why reading and scoring overlap.
 
 ## License
 

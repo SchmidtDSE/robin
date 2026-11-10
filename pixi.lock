@@ -2514,6 +2514,7 @@ packages:
 - pypi: models
   name: robin-models
   requires_dist:
+  - pydantic>=2.12,<3
   - robin-contracts>=0.0,<0.1
   - sox-tensorflow>=0.1.3,<0.2 ; extra == 'owl'
   - soundfile>=0.13.1,<0.14 ; extra == 'owl'

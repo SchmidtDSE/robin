@@ -255,28 +255,13 @@ def test_a_context_with_no_registry_is_refused_naming_the_registry_role(runtime,
     assert runtime.constructions == []
 
 
-# Resources.
+# Resources. The checks of each value are tested once, in test_adapter_setup.
 
 
-@pytest.mark.parametrize(
-    ("resources", "expected"),
-    [
-        pytest.param({}, 256, id="none_given"),
-        pytest.param({"batch_size": 1}, 1, id="one"),
-        pytest.param({"batch_size": 7}, 7, id="seven"),
-    ],
-)
+@pytest.mark.parametrize(("resources", "expected"), [({}, 256), ({"batch_size": 7}, 7)])
 def test_the_batch_size_is_read_from_the_resources(runtime, tmp_path, resources, expected):
     model = runtime.adapter.build(head_context(tmp_path, resources=resources))
     assert model._batch_size == expected
-
-
-@pytest.mark.parametrize("value", [0, -1, True, 256.0, "256"], ids=repr)
-def test_a_batch_size_that_is_not_a_positive_int_is_refused(runtime, tmp_path, value):
-    with pytest.raises(ValueError, match="batch_size") as caught:
-        runtime.adapter.build(head_context(tmp_path, resources={"batch_size": value}))
-    assert repr(value) in str(caught.value)
-    assert runtime.constructions == []
 
 
 @pytest.mark.parametrize("resources", [{}, {"device": "cpu"}], ids=["absent", "cpu"])
@@ -284,11 +269,12 @@ def test_the_cpu_is_the_device_that_builds(runtime, tmp_path, resources):
     runtime.adapter.build(head_context(tmp_path, resources=resources))
 
 
-@pytest.mark.parametrize("value", ["gpu", "cuda", None], ids=repr)
-def test_any_other_device_is_refused(runtime, tmp_path, value):
-    with pytest.raises(ValueError, match="device") as caught:
-        runtime.adapter.build(head_context(tmp_path, resources={"device": value}))
-    assert repr(value) in str(caught.value)
+@pytest.mark.parametrize(
+    ("name", "value"), [("batch_size", 0), ("device", "gpu")], ids=["batch_size", "gpu"]
+)
+def test_a_bad_resource_is_refused_before_the_graph_loads(runtime, tmp_path, name, value):
+    with pytest.raises(ValueError, match=name):
+        runtime.adapter.build(head_context(tmp_path, resources={name: value}))
     assert runtime.constructions == []
 
 

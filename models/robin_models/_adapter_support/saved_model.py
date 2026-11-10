@@ -12,18 +12,8 @@ from pathlib import Path
 from robin_models.registration import SAVED_MODEL_LAYOUT
 
 
-def require_roles(files: Mapping[str, Path], owner: str) -> None:
-    """Refuse files that do not give each role of the SavedModel layout."""
-    for role in SAVED_MODEL_LAYOUT:
-        if role not in files:
-            raise ValueError(
-                f"{owner} needs a file under the role {role!r}, "
-                f"and got the roles {sorted(files)}"
-            )
-
-
 def create_saved_model_folder(files: Mapping[str, Path], scratch_dir: Path, prefix: str) -> Path:
-    """A new folder laid out as TensorFlow expects, linking to the pinned files."""
+    """Make a new folder laid out as TensorFlow expects, with links to the pinned files."""
     folder = Path(tempfile.mkdtemp(prefix=prefix, dir=scratch_dir))
     for role, place in SAVED_MODEL_LAYOUT.items():
         link = folder / place
@@ -33,7 +23,7 @@ def create_saved_model_folder(files: Mapping[str, Path], scratch_dir: Path, pref
 
 
 def get_signature(loaded, name: str, owner: str) -> object:
-    """The loaded SavedModel's signature `name`."""
+    """Return the loaded SavedModel's signature `name`."""
     signatures = loaded.signatures
     if name not in signatures:
         raise ValueError(

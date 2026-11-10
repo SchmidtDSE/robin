@@ -1,51 +1,47 @@
 """The BirdNET v2.4 adapter. Importing this module loads TensorFlow."""
 
 from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 
+from pydantic import PositiveInt
 from robin_contracts.cards import AudioGeometry, ModelCard, RunnerResampled
 from robin_contracts.inputs import AudioClip, Input
 from robin_contracts.protocols import JsonScalar, Log, ModelContext
 from robin_contracts.records import WindowOutput
 from robin_contracts.specs import recipe
-from robin_models._adapter_checks import (
-    get_batch_size,
+from robin_models._adapter_support.adapter_setup import (
+    explain_a_missing_runtime,
+    get_resources,
     get_tf_device,
     refuse_a_card_the_model_does_not_follow,
+    require_roles,
 )
 
+OWNER = "model birdnet/v2p4"
 _RUNTIME_MODULES = ("numpy", "scipy", "soundfile", "tensorflow")
 
-try:
+with explain_a_missing_runtime(OWNER, "birdnet", _RUNTIME_MODULES):
     import numpy as np
     import soundfile as sf
     from scipy.signal import resample
     import tensorflow as tf
-except ModuleNotFoundError as error:
-    if (error.name or "").split(".")[0] not in _RUNTIME_MODULES:
-        raise
-    raise ModuleNotFoundError(
-        f"model birdnet/v2p4 needs {error.name}, which is not installed; "
-        f"install robin-models[birdnet]",
-        name=error.name,
-    ) from error
 
-from robin_models._audio_windows import (
-    Bounds,
+from robin_models._adapter_support.audio_windows import (
+    drop_padded_rows,
     get_window_outputs,
     mix_down,
     refuse_unusable_logits,
     run_windows,
 )
-from robin_models._saved_model import (
+from robin_models._adapter_support.batch_pipeline import Bounds, WindowResources
+from robin_models._adapter_support.saved_model import (
     create_saved_model_folder,
     get_signature,
     require_input,
     require_output,
-    require_roles,
 )
+from robin_models.registration import SAVED_MODEL_LAYOUT
 
-OWNER = "model birdnet/v2p4"
-DEFAULT_BATCH_SIZE = 32
 SIGNATURE = "embeddings"
 
 # The SavedModel's last layer, which turns an embedding into logits.
@@ -73,13 +69,17 @@ BEHAVIOUR = {
 }
 
 
+class _Resources(WindowResources):
+    batch_size: PositiveInt = 32
+
+
 def build(context: ModelContext) -> "BirdnetModel":
     """Check the card, resources and files, load the SavedModel, and return the model."""
     card = context.card
     refuse_a_card_the_model_does_not_follow(card, BEHAVIOUR, OWNER)
-    batch_size = get_batch_size(context.resources, DEFAULT_BATCH_SIZE)
-    device = get_tf_device(context.resources, OWNER, tf)
-    require_roles(context.files, OWNER)
+    resources = get_resources(_Resources, context.resources, OWNER)
+    device = get_tf_device(resources.device, tf, OWNER)
+    require_roles(context.files, SAVED_MODEL_LAYOUT, OWNER)
     folder = create_saved_model_folder(context.files, context.scratch_dir, "birdnet-savedmodel-")
     with tf.device(device):
         loaded = tf.saved_model.load(str(folder))
@@ -95,7 +95,7 @@ def build(context: ModelContext) -> "BirdnetModel":
     return BirdnetModel(
         card=card,
         settings=context.settings,
-        batch_size=batch_size,
+        resources=resources,
         labels=labels,
         loaded=loaded,
         device=device,
@@ -143,7 +143,7 @@ class BirdnetModel:
         *,
         card: ModelCard,
         settings: Mapping[str, JsonScalar],
-        batch_size: int,
+        resources: WindowResources,
         labels: tuple[str, ...] | None,
         loaded: object,
         device: str,
@@ -156,7 +156,7 @@ class BirdnetModel:
         self._geometry = recipe(card, settings).audio.geometry
         self._rate = card.sample_rate
         self._width = round(card.window_duration * card.sample_rate)
-        self._batch_size = batch_size
+        self._resources = resources
         self._labels = labels
         # Kept so the signature's variables stay loaded.
         self._loaded = loaded
@@ -175,18 +175,25 @@ class BirdnetModel:
             input.path,
             geometry=self._geometry,
             width=self._width,
-            batch_size=self._batch_size,
-            read_window=self._read_window,
+            resources=self._resources,
+            read_block=_read_block,
+            cut_window=self._cut_window,
             run_batch=self._run_batch,
             log=self._log,
             owner=OWNER,
         )
 
-    def _read_window(self, audio: "sf.SoundFile", start: float, end: float) -> "np.ndarray":
-        """The window mixed down and resampled, and not longer than the network takes."""
-        # mix_down averages channels as birdnet 0.2.12's convert_to_mono does.
-        window = mix_down(_read_frames(audio, start, end))
-        window = _resample_window(window, audio.samplerate, self._rate, start)
+    def _cut_window(self, block: "_Block", start: float, end: float) -> "np.ndarray":
+        """Return the window cut from its block and resampled, and refuse it if it is longer
+        than the network takes.
+
+        Each window is resampled on its own, as birdnet 0.2.12 does, so the block changes
+        only how the audio is decoded.
+        """
+        window_first, count = _get_frame_span(block.file_rate, block.file_frames, start, end)
+        at = window_first - block.first
+        window = block.samples[at : at + count]
+        window = _resample_window(window, block.file_rate, self._rate, start)
         if len(window) > self._width:
             raise ValueError(
                 f"{OWNER} read {len(window)} samples for the window at {start} s, "
@@ -210,6 +217,8 @@ class BirdnetModel:
     def _run_batch(self, bounds: Bounds, batch: "np.ndarray") -> Iterator[WindowOutput]:
         """Score one batch of padded rows, and make one output for each window."""
         logits, embeddings = self._infer(batch)
+        logits = drop_padded_rows(logits, batch, bounds, "logits", OWNER)
+        embeddings = drop_padded_rows(embeddings, batch, bounds, "embeddings", OWNER)
         scores = None
         if logits is not None:
             # Checked before the sigmoid's clip, which would turn +inf into a confident score.
@@ -225,15 +234,41 @@ class BirdnetModel:
         self._loaded = self._embeddings = self._kernel = self._bias = None
 
 
-def _read_frames(audio: "sf.SoundFile", start: float, end: float) -> "np.ndarray":
-    """The window's frames, read on their own, as float32 with one column per channel."""
-    rate = audio.samplerate
-    first = round(start * rate)
-    # Counted from the first frame: rounding both ends can read one frame too many or too few.
+@dataclass(frozen=True)
+class _Block:
+    """The mixed-down samples of a block of windows, from frame `first` of the file.
+
+    `file_rate` is the file's sample rate, and `file_frames` is the number of frames in the
+    whole file.
+    """
+
+    first: int
+    samples: "np.ndarray"
+    file_rate: int
+    file_frames: int
+
+
+def _read_block(audio: "sf.SoundFile", bounds: Bounds) -> _Block:
+    """Decode the frames of every window in `bounds` at once, and mix them down."""
+    rate, file_frames = audio.samplerate, audio.frames
+    spans = [_get_frame_span(rate, file_frames, start, end) for start, end in bounds]
+    first = spans[0][0]
+    last = max(window_first + count for window_first, count in spans)
     audio.seek(first)
-    return audio.read(
-        min(round((end - start) * rate), audio.frames - first), dtype="float32", always_2d=True
+    decoded = audio.read(last - first, dtype="float32", always_2d=True)
+    # mix_down averages channels as birdnet 0.2.12's convert_to_mono does, frame by frame,
+    # so mixing the block down gives each window the same samples as mixing it alone.
+    return _Block(
+        first=first, samples=mix_down(decoded), file_rate=rate, file_frames=file_frames
     )
+
+
+def _get_frame_span(rate: int, file_frames: int, start: float, end: float) -> tuple[int, int]:
+    """Return the window's first frame and its number of frames."""
+    first = round(start * rate)
+    # The count comes from the window's length, not from its end, because rounding both
+    # ends can give one frame too many or too few.
+    return first, min(round((end - start) * rate), file_frames - first)
 
 
 def _resample_window(

@@ -277,28 +277,7 @@ def test_a_built_model_satisfies_the_protocol(runtime, tmp_path):
     assert isinstance(model, Model)
 
 
-# The batch size, a resource.
-
-
-@pytest.mark.parametrize(
-    ("resources", "expected"),
-    [
-        pytest.param({}, 64, id="none_given"),
-        pytest.param({"batch_size": 8}, 8, id="given"),
-        pytest.param({"device": "cpu", "batch_size": 1}, 1, id="beside_another_key"),
-        pytest.param({"device": "cpu"}, 64, id="only_the_device"),
-    ],
-)
-def test_the_batch_size_is_read_from_the_resources(runtime, tmp_path, resources, expected):
-    model = runtime.adapter.build(owl_context(tmp_path, resources=resources))
-    assert model._batch_size == expected
-
-
-@pytest.mark.parametrize("value", [0, -1, True, 1.5, "8", None], ids=repr)
-def test_a_batch_size_that_is_not_a_positive_int_is_refused(runtime, tmp_path, value):
-    with pytest.raises(ValueError, match="batch_size") as caught:
-        runtime.adapter.build(owl_context(tmp_path, resources={"batch_size": value}))
-    assert repr(value) in str(caught.value)
+# Resources. The checks of each value are tested once, in test_adapter_setup.
 
 
 @pytest.mark.parametrize(("resources", "expected"), [({}, 64), ({"batch_size": 8}, 8)])
@@ -308,13 +287,11 @@ def test_the_batch_size_reaches_the_network(runtime, tmp_path, resources, expect
     assert runtime.batch_sizes == [expected]
 
 
-def test_a_bad_batch_size_is_refused_before_the_weights_load(runtime, tmp_path):
-    with pytest.raises(ValueError, match="batch_size"):
-        runtime.adapter.build(owl_context(tmp_path, resources={"batch_size": 0}))
+@pytest.mark.parametrize(("name", "value"), [("batch_size", 0), ("device", "tpu")])
+def test_a_bad_resource_is_refused_before_the_weights_load(runtime, tmp_path, name, value):
+    with pytest.raises(ValueError, match=name):
+        runtime.adapter.build(owl_context(tmp_path, resources={name: value}))
     assert runtime.loaded == []
-
-
-# The device, a resource.
 
 
 @pytest.mark.parametrize("resources", [{}, {"device": "cpu"}], ids=["absent", "cpu"])
@@ -334,14 +311,6 @@ def test_device_gpu_is_refused_before_the_weights_load_when_tensorflow_sees_no_g
 ):
     with pytest.raises(ValueError, match="no GPU"):
         runtime.adapter.build(owl_context(tmp_path, resources={"device": "gpu"}))
-    assert runtime.loaded == []
-
-
-@pytest.mark.parametrize("value", ["GPU", "/GPU:0", "/CPU:0", "CPU", "", None], ids=repr)
-def test_any_other_device_is_refused_before_the_weights_load(runtime, tmp_path, value):
-    with pytest.raises(ValueError, match="device") as caught:
-        runtime.adapter.build(owl_context(tmp_path, resources={"device": value}))
-    assert repr(value) in str(caught.value)
     assert runtime.loaded == []
 
 

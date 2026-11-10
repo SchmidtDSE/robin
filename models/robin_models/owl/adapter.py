@@ -7,43 +7,36 @@ from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from pydantic import PositiveInt
 from robin_contracts.cards import AudioGeometry, ModelCard, RunnerResampled
 from robin_contracts.inputs import AudioClip, Input
 from robin_contracts.protocols import JsonScalar, Log, ModelContext
 from robin_contracts.records import WindowOutput
 from robin_contracts.specs import recipe, window_bounds
-from robin_models._adapter_checks import (
-    get_batch_size,
+from robin_models._adapter_support.adapter_setup import (
+    Resources,
+    explain_a_missing_runtime,
+    get_resources,
     get_tf_device,
     refuse_a_card_the_model_does_not_follow,
+    require_roles,
 )
 from robin_models.registration import WEIGHTS_ROLE
 
 # Must be set before TensorFlow is imported: the weights are a Keras 2 file.
 os.environ.setdefault("TF_USE_LEGACY_KERAS", "1")
 
+OWNER = "model owl/v4"
 _RUNTIME_MODULES = ("numpy", "soundfile", "tensorflow", "tf_keras", "sox_tensorflow")
 
-try:
+with explain_a_missing_runtime(OWNER, "owl", _RUNTIME_MODULES):
     import soundfile as sf
     import tensorflow as tf
     import tf_keras  # noqa: F401  Legacy Keras runs from it.
     from sox_tensorflow.processor import spectrogram_from_flac
-except ModuleNotFoundError as error:
-    if (error.name or "").split(".")[0] not in _RUNTIME_MODULES:
-        raise
-    raise ModuleNotFoundError(
-        f"model owl/v4 needs {error.name}, which is not installed; "
-        f"install robin-models[owl]",
-        name=error.name,
-    ) from error
 
 if TYPE_CHECKING:
     import numpy as np
-
-OWNER = "model owl/v4"
-# Batch size changes the scores at float32 rounding level, and nothing else.
-DEFAULT_BATCH_SIZE = 64
 
 # What OWL does whatever its card says. sox_tensorflow renders at 8 kHz from the first
 # channel, resampled by soxr at its high-quality setting, and renders only full windows.
@@ -60,27 +53,27 @@ BEHAVIOUR = {
 }
 
 
+class _Resources(Resources):
+    # Batch size changes the scores at float32 rounding level, and nothing else.
+    batch_size: PositiveInt = 64
+
+
 def build(context: ModelContext) -> "OwlModel":
     """Check the card, resources and files, load the weights, and return the model."""
     card = context.card
     refuse_a_card_the_model_does_not_follow(card, BEHAVIOUR, OWNER)
-    batch_size = get_batch_size(context.resources, DEFAULT_BATCH_SIZE)
-    device = get_tf_device(context.resources, OWNER, tf)
+    resources = get_resources(_Resources, context.resources, OWNER)
+    device = get_tf_device(resources.device, tf, OWNER)
     if context.registry is None:
         raise ValueError(f"{OWNER} needs a registry to name its outputs, and got none")
-    weights = context.files.get(WEIGHTS_ROLE)
-    if weights is None:
-        raise ValueError(
-            f"{OWNER} needs a file under the role {WEIGHTS_ROLE!r}, "
-            f"and got the roles {sorted(context.files)}"
-        )
+    require_roles(context.files, [WEIGHTS_ROLE], OWNER)
     with tf.device(device):
-        network = tf.keras.models.load_model(str(weights))
+        network = tf.keras.models.load_model(str(context.files[WEIGHTS_ROLE]))
     _refuse_a_spectrogram_shape_the_network_does_not_take(card, network)
     return OwlModel(
         card=card,
         settings=context.settings,
-        batch_size=batch_size,
+        batch_size=resources.batch_size,
         labels=tuple(entry.label for entry in context.registry.entries),
         network=network,
         device=device,

@@ -84,6 +84,18 @@ model, and `device`, `cpu` (the default) or `gpu`. OWL, BirdNET, and Perch run o
 GPU only with `device: gpu`; ONNX heads run on the CPU only. See
 [AWS Batch](aws-batch.md#gpu).
 
+BirdNET and Perch read two more keys. They change speed and memory, but not results.
+
+- `read_ahead_batches`, a whole number above 0 (default 4), limits how many batches of
+  audio are read ahead of the model. The audio in memory is at most
+  `read_ahead_batches + readers + 1` batches, where there are 1 to 3 readers (two fewer
+  than the machine's CPUs). Each window takes about 0.6 MB, so at the defaults, with 3
+  readers and `batch_size: 32`, the audio uses about 150 MB.
+- `read_block_seconds`, a number above 0 (default 60), is the longest span of windows
+  that a reader decodes at once, with every channel of the file. A block always holds at
+  least one whole window, so a window longer than this is decoded alone. Perch also
+  decodes up to 1 s of audio on each side of a block, to resample it.
+
 A run freezes its settings at submit: the model's setup name, the setup's other
 fields except `max_in_flight`, the merged `request` and `resources`, and the
 `storage` section. A later change to the profile applies only to runs submitted after

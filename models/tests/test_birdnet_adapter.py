@@ -19,7 +19,7 @@ import scipy.signal
 import soundfile
 
 import robin_models.birdnet
-from robin_models import _audio_windows as audio_windows
+from robin_models._adapter_support import audio_windows
 from robin_adapters.storage.local.adapter import LocalArtifactWriter
 from robin_adapters.storage.local.adapter import LocalFileProvider
 from robin_contracts.cards import ModelCard, model_ref, read_card
@@ -429,33 +429,48 @@ def test_overlapping_windows_build(runtime, tmp_path):
     runtime.adapter.build(birdnet_context(tmp_path, settings={"window_overlap": 1.0}))
 
 
-# Resources.
+# Resources. The checks of each value are tested once, in test_adapter_setup.
+
+
+GIVEN_RESOURCES = {"batch_size": 8, "read_ahead_batches": 2, "read_block_seconds": 7.0}
 
 
 @pytest.mark.parametrize(
     ("resources", "expected"),
     [
-        pytest.param({}, 32, id="none_given"),
-        pytest.param({"batch_size": 8}, 8, id="given"),
-        pytest.param({"device": "cpu", "batch_size": 1}, 1, id="beside_the_device"),
-        pytest.param({"device": "cpu"}, 32, id="only_the_device"),
+        pytest.param({}, {"batch_size": 32}, id="default_batch_size"),
+        pytest.param(GIVEN_RESOURCES, GIVEN_RESOURCES, id="given"),
     ],
 )
-def test_the_batch_size_is_read_from_the_resources(runtime, tmp_path, resources, expected):
-    model = runtime.adapter.build(birdnet_context(tmp_path, resources=resources))
-    assert model._batch_size == expected
+def test_a_run_reads_with_the_resources_it_was_built_with(
+    runtime, tmp_path, monkeypatch, resources, expected
+):
+    given = []
+
+    def run_windows(*args, **kwargs):
+        given.append(kwargs["resources"])
+        return audio_windows.run_windows(*args, **kwargs)
+
+    monkeypatch.setattr(runtime.adapter, "run_windows", run_windows)
+    model, _, path = model_and_noise(runtime, tmp_path, 2 * WINDOW, resources=resources)
+    run(model, path)
+    [used] = given
+    assert {key: getattr(used, key) for key in expected} == expected
 
 
-@pytest.mark.parametrize("value", [0, -1, True, 32.0, "8", None], ids=repr)
-def test_a_batch_size_that_is_not_a_positive_int_is_refused(runtime, tmp_path, value):
-    with pytest.raises(ValueError, match="batch_size") as caught:
-        runtime.adapter.build(birdnet_context(tmp_path, resources={"batch_size": value}))
-    assert repr(value) in str(caught.value)
+BAD_RESOURCES = [
+    ("batch_size", 0),
+    ("device", "tpu"),
+    ("read_ahead_batches", 0),
+    ("read_block_seconds", 0),
+]
 
 
-@pytest.mark.parametrize("resources", [{}, {"device": "cpu"}], ids=["absent", "cpu"])
-def test_the_cpu_is_the_device_that_builds(runtime, tmp_path, resources):
-    runtime.adapter.build(birdnet_context(tmp_path, resources=resources))
+@pytest.mark.parametrize(("name", "value"), BAD_RESOURCES)
+def test_a_bad_resource_is_refused_before_the_model_loads(runtime, tmp_path, name, value):
+    with pytest.raises(ValueError, match=name):
+        runtime.adapter.build(birdnet_context(tmp_path, resources={name: value}))
+    assert runtime.loads == []
 
 
 def test_device_gpu_is_refused_before_the_model_loads_when_tensorflow_sees_no_gpu(
@@ -463,22 +478,6 @@ def test_device_gpu_is_refused_before_the_model_loads_when_tensorflow_sees_no_gp
 ):
     with pytest.raises(ValueError, match="no GPU"):
         runtime.adapter.build(birdnet_context(tmp_path, resources={"device": "gpu"}))
-    assert runtime.loads == []
-
-
-@pytest.mark.parametrize("value", ["GPU", "gpu:0", "CPU", "/CPU:0", 0, None], ids=repr)
-def test_any_other_device_is_refused(runtime, tmp_path, value):
-    with pytest.raises(ValueError, match="device") as caught:
-        runtime.adapter.build(birdnet_context(tmp_path, resources={"device": value}))
-    assert repr(value) in str(caught.value)
-
-
-@pytest.mark.parametrize(
-    "resources", [{"batch_size": 0}, {"device": "tpu"}], ids=["batch_size", "device"]
-)
-def test_a_bad_resource_is_refused_before_the_model_loads(runtime, tmp_path, resources):
-    with pytest.raises(ValueError):
-        runtime.adapter.build(birdnet_context(tmp_path, resources=resources))
     assert runtime.loads == []
 
 
@@ -648,8 +647,16 @@ def run(model, path) -> list:
     return list(model.run(AudioClip(path=path)))
 
 
-def rows_given_to(runtime, output: str = "embeddings") -> np.ndarray:
-    return np.concatenate([call.values for call in runtime.calls_to(output)])
+def get_rows_given_to(runtime, output: str = "embeddings") -> np.ndarray:
+    """Every row given to the model, one for each window.
+
+    Every batch has the full size, so the last batch ends in all-zero rows that are no
+    window. They are dropped. The test audio is noise or a ramp, so no window's row is
+    all zero.
+    """
+    rows = np.concatenate([call.values for call in runtime.calls_to(output)])
+    used = np.flatnonzero(rows.any(axis=1))
+    return rows[: used[-1] + 1] if len(used) else rows[:0]
 
 
 def model_and_noise(runtime, tmp_path, frames: int, rate: int = 48000, **changes):
@@ -692,7 +699,7 @@ def test_a_48khz_file_yields_one_window_per_started_3_seconds(runtime, tmp_path,
 def test_the_last_window_is_padded_with_zeros_at_its_end(runtime, tmp_path):
     model, samples, path = model_and_noise(runtime, tmp_path, WINDOW + 1000)
     run(model, path)
-    last = rows_given_to(runtime)[1]
+    last = get_rows_given_to(runtime)[1]
     assert np.array_equal(last[:1000], samples[WINDOW:])
     assert np.array_equal(last[1000:], np.zeros(WINDOW - 1000, dtype=np.float32))
 
@@ -700,7 +707,7 @@ def test_the_last_window_is_padded_with_zeros_at_its_end(runtime, tmp_path):
 def test_a_mono_window_reaches_the_model_bit_for_bit(runtime, tmp_path):
     model, samples, path = model_and_noise(runtime, tmp_path, WINDOW)
     run(model, path)
-    assert np.array_equal(rows_given_to(runtime)[0], samples)
+    assert np.array_equal(get_rows_given_to(runtime)[0], samples)
 
 
 def test_a_stereo_window_reaches_the_model_as_its_channel_mean(runtime, tmp_path):
@@ -708,7 +715,7 @@ def test_a_stereo_window_reaches_the_model_as_its_channel_mean(runtime, tmp_path
     samples = noise(WINDOW, channels=2)
     run(model, write_audio(tmp_path / "a.wav", samples, 48000))
     expected = np.mean(samples, axis=1, dtype=np.float32)
-    assert np.array_equal(rows_given_to(runtime)[0], expected)
+    assert np.array_equal(get_rows_given_to(runtime)[0], expected)
 
 
 @pytest.mark.parametrize("rate", [44100, 32000])
@@ -716,7 +723,7 @@ def test_a_window_at_another_rate_is_resampled_on_its_own_with_scipy(runtime, tm
     model, samples, path = model_and_noise(runtime, tmp_path, 3 * rate, rate=rate)
     run(model, path)
     expected = scipy.signal.resample(samples, WINDOW)
-    row = rows_given_to(runtime)[0]
+    row = get_rows_given_to(runtime)[0]
     assert len(expected) == WINDOW
     assert np.array_equal(row, expected)
 
@@ -729,7 +736,7 @@ def test_a_short_last_window_is_resampled_then_padded(runtime, tmp_path):
     expected = np.zeros(WINDOW, dtype=np.float32)
     expected[:48000] = scipy.signal.resample(last, round(len(last) / rate * 48000))
     padded_first = scipy.signal.resample(np.pad(last, (0, 3 * rate - len(last))), WINDOW)
-    row = rows_given_to(runtime)[1]
+    row = get_rows_given_to(runtime)[1]
     assert np.array_equal(row, expected)
     assert not np.array_equal(row, padded_first.astype(np.float32))
 
@@ -772,7 +779,7 @@ def test_overlapping_windows_each_reach_the_model_as_their_own_slice(runtime, tm
     samples = np.arange(n, dtype=np.float32) / n
     windows = run(model, write_audio(tmp_path / "a.wav", samples, 48000))
     assert [w.start for w in windows] == [0.0, 2.0, 4.0, 6.0]
-    for window, row in zip(windows, rows_given_to(runtime), strict=True):
+    for window, row in zip(windows, get_rows_given_to(runtime), strict=True):
         first = round(window.start * 48000)
         assert np.array_equal(row, samples[first : first + WINDOW])
 
@@ -781,12 +788,88 @@ def test_overlapping_windows_at_an_odd_rate_each_read_one_full_window(runtime, t
     model = runtime.adapter.build(birdnet_context(tmp_path, settings={"window_overlap": 0.5}))
     samples = noise(12 * 11025)
     windows = run(model, write_audio(tmp_path / "a.wav", samples, 11025))
-    full = [(w, row) for w, row in zip(windows, rows_given_to(runtime)) if w.end <= 12.0]
+    full = [(w, row) for w, row in zip(windows, get_rows_given_to(runtime)) if w.end <= 12.0]
     assert [w.start for w, _ in full] == [0.0, 2.5, 5.0, 7.5]
     for window, row in full:
         first = round(window.start * 11025)
         expected = scipy.signal.resample(samples[first : first + 33_075], WINDOW)
         assert np.array_equal(row, expected.astype(np.float32))
+
+
+@pytest.mark.parametrize("channels", [None, 2], ids=["mono", "stereo"])
+@pytest.mark.parametrize("rate", [48000, 44100])
+def test_block_reads_give_each_window_the_samples_it_read_alone(
+    runtime, tmp_path, rate, channels
+):
+    # 7 s blocks of 3 s windows 2 s apart: each block edge has a window on each side of it.
+    context = birdnet_context(
+        tmp_path, settings={"window_overlap": 1.0}, resources={"read_block_seconds": 7.0}
+    )
+    model = runtime.adapter.build(context)
+    samples = noise(20 * rate, channels=channels)
+    windows = run(model, write_audio(tmp_path / "a.wav", samples, rate))
+    mono = samples if channels is None else np.mean(samples, axis=1, dtype=np.float32)
+    # Only the windows whose audio is all in the file: the last one is padded.
+    rows = get_rows_given_to(runtime)
+    whole_windows = [(w, row) for w, row in zip(windows, rows) if w.end <= 20.0]
+    assert len(whole_windows) > 4
+    for window, row in whole_windows:
+        first = round(window.start * rate)
+        alone = mono[first : first + round(3.0 * rate)]
+        # 48 kHz is BirdNET's own rate, so nothing is resampled.
+        expected = alone if rate == 48000 else scipy.signal.resample(alone, WINDOW)
+        assert np.array_equal(row, np.asarray(expected, dtype=np.float32)), window.start
+
+
+def test_the_extra_rows_of_a_full_batch_give_no_outputs(runtime, tmp_path):
+    path = write_audio(tmp_path / "a.wav", noise(5 * WINDOW), 48000)
+
+    def run_in_batches_of(size):
+        resources = {"batch_size": size}
+        context = birdnet_context(tmp_path, emit_embeddings=True, resources=resources)
+        return run(runtime.adapter.build(context), path)
+
+    by_four = run_in_batches_of(4)
+    by_one = run_in_batches_of(1)
+    assert len(by_four) == len(by_one) == 5
+    for four, one in zip(by_four, by_one, strict=True):
+        assert (four.start, four.end) == (one.start, one.end)
+        assert np.array_equal(four.scores, one.scores)
+        assert np.array_equal(four.embedding, one.embedding)
+
+
+def get_rows(values: np.ndarray, count: int) -> np.ndarray:
+    """`count` rows made from `values`, so a fake network gives too many or too few."""
+    return np.resize(values, (count, *values.shape[1:]))
+
+
+# Two windows in a full batch of 2 (no zero rows), and two in a batch of 4 (two zero rows).
+WRONG_ROWS = [
+    pytest.param(2, 3, id="extra_row_in_a_full_batch"),
+    pytest.param(4, 2, id="only_the_windows_rows_of_a_padded_batch"),
+]
+
+
+@pytest.mark.parametrize(("batch_size", "rows"), WRONG_ROWS)
+@pytest.mark.parametrize("output", ["logits", "embeddings"])
+def test_an_output_without_one_row_for_each_row_given_fails_the_recording(
+    runtime, tmp_path, output, batch_size, rows
+):
+    if output == "logits":
+        runtime.logits = lambda embeddings: get_rows(head_logits(embeddings), rows)
+    else:
+        runtime.outputs["embeddings"] = (
+            lambda batch: get_rows(runtime.default_embeddings(batch), rows)
+        )
+    model, _, path = model_and_noise(
+        runtime,
+        tmp_path,
+        2 * WINDOW,
+        emit_embeddings=True,
+        resources={"batch_size": batch_size},
+    )
+    with pytest.raises(ValueError):
+        run(model, path)
 
 
 # Scores and the sigmoid.
@@ -840,6 +923,8 @@ def test_every_window_scores_every_label_once_in_registry_order(runtime, tmp_pat
     kernel, bias = loaded_classifier_layer(runtime)
     [call] = runtime.calls_to("embeddings")
     embeddings = call.returned.numpy()
+    # The batch has its full size: only its first rows are windows.
+    embeddings = embeddings[: len(windows)]
     expected = reference_sigmoid(np.matmul(embeddings, kernel.values) + bias.values)
     [matmul] = runtime.matmuls
     assert matmul.a is call.returned
@@ -921,7 +1006,7 @@ def test_a_model_without_the_basic_signature_scores(runtime, tmp_path):
 def test_each_window_gets_its_own_copy_of_its_embedding(runtime, tmp_path):
     model, _, path = model_and_noise(runtime, tmp_path, 3 * WINDOW, emit_embeddings=True)
     windows = run(model, path)
-    expected = fake_embeddings(rows_given_to(runtime, "embeddings"), 1024)
+    expected = fake_embeddings(get_rows_given_to(runtime, "embeddings"), 1024)
     for window, row in zip(windows, expected, strict=True):
         embedding = window.embedding
         assert embedding.shape == (1024,)
@@ -974,7 +1059,8 @@ def test_windows_are_batched_within_one_recording_only(runtime, tmp_path):
     run(model, path)
     run(model, write_audio(tmp_path / "b.wav", noise(3 * WINDOW, seed=1), 48000))
     batches = [call.given for call in runtime.calls_to("embeddings")]
-    assert [len(batch) for batch in batches] == [2, 2, 1, 2, 1]
+    # Every batch has the full size.
+    assert [len(batch) for batch in batches] == [2, 2, 2, 2, 2]
     for batch in batches:
         assert batch.dtype == np.float32
         assert batch.shape[1] == WINDOW
