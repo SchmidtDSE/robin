@@ -39,8 +39,11 @@ compile. The GPU image is about three
 times the size of the CPU image, so CPU jobs use the CPU image.
 
 The GPU image's entrypoint logs the GPU's use with `nvidia-smi` once a minute, as lines
-that start with `gpu:`, and then runs `robin-worker`. Set `ROBIN_GPU_LOG_SECONDS` in the
-job definition to change the interval, or to `0` to turn it off.
+that start with `gpu:`, and then runs `robin-worker`. At the same interval, it logs the
+container's memory, now and at its peak so far, as lines that start with `memory:`. The
+values come from the container's cgroup, so they include the page cache that the
+container uses. Set `ROBIN_GPU_LOG_SECONDS` in the job definition to change the
+interval, or to `0` to turn both off.
 
 On a Mac with Apple Silicon, these images run under emulation, which cannot run
 TensorFlow. To check that TensorFlow sees the GPU, run a task on a GPU queue (see

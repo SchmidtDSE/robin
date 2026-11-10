@@ -36,7 +36,10 @@ ENV PATH=/usr/local/lib/python3.13/site-packages/nvidia/cuda_nvcc/bin:${PATH} \
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
 # The entrypoint logs the GPU's use once every ROBIN_GPU_LOG_SECONDS (60 by default; 0
-# turns it off), as lines that start with `gpu:`, and then runs robin-worker.
+# turns it off), as lines that start with `gpu:`. At the same interval, it logs the
+# container's memory in MiB, now and at its peak so far, as lines that start with
+# `memory:`. Then it runs robin-worker. The memory values come from the container's
+# cgroup v2 files, so they include the page cache that the container uses.
 COPY --chmod=755 <<'EOF' /usr/local/bin/robin-worker-gpu
 #!/bin/sh
 interval=${ROBIN_GPU_LOG_SECONDS:-60}
@@ -47,6 +50,14 @@ if [ "$interval" != 0 ]; then
       | sed -u 's/^/gpu: /' &
   else
     echo "gpu: nvidia-smi is not available, so GPU use is not logged" >&2
+  fi
+  cgroup=/sys/fs/cgroup
+  if [ -r "$cgroup/memory.current" ] && [ -r "$cgroup/memory.peak" ]; then
+    while sleep "$interval"; do
+      echo "memory: $(date -u +%H:%M:%S) current $(($(cat "$cgroup/memory.current") / 1048576)) MiB, peak $(($(cat "$cgroup/memory.peak") / 1048576)) MiB"
+    done &
+  else
+    echo "memory: the cgroup v2 memory files are not available, so memory is not logged" >&2
   fi
 fi
 exec robin-worker "$@"
