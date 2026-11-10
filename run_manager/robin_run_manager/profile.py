@@ -17,7 +17,9 @@ A submit, in `get_resolved_settings`, for the model of the configuration:
 2. `_get_model_key` finds the model's `compute.models` entry: its model ID, or for a
    head, `head_runtime:<runtime>`. No entry is `model_not_in_profile`.
 3. `get_merged_model_settings` merges the entry over its setup: the setup name, and
-   the request and resources key by key (`_get_merged_values`).
+   the request and resources key by key (`_get_merged_values`). A submit can name
+   another setup, and give resources that are merged over the result, for that run
+   only. A setup that the profile lacks is `invalid_request`.
 4. The setup's `check_new_run` checks the merged request against the rules of its
    kind. A problem is `invalid_profile`.
 5. `get_setup_target` gives the setup's target: its compute's `TARGET_FIELDS`, and
@@ -61,6 +63,7 @@ from robin_contracts.work import FiniteScalarMap, NonEmptyText
 from robin_models.registration import get_head_runtime_roles
 from robin_run_manager.errors import (
     INVALID_PROFILE,
+    INVALID_REQUEST,
     MODEL_NOT_IN_PROFILE,
     NotConfigured,
     Refused,
@@ -249,30 +252,43 @@ class MergedModelSettings:
     resources: Mapping[str, JsonScalar]
 
 
-def get_merged_model_settings(compute: ComputeSettings, key: str) -> MergedModelSettings:
+def get_merged_model_settings(
+    compute: ComputeSettings,
+    key: str,
+    *,
+    setup: str | None = None,
+    resources: Mapping[str, JsonScalar] | None = None,
+) -> MergedModelSettings:
     """Returns the setup and the merged request and resources of a `compute.models` entry.
 
-    `key` is a model ID or `head_runtime:<runtime>`. Raises `KeyError` if
-    `compute.models` has no such key. The merged request is not checked against the
-    setup's kind.
+    `key` is a model ID or `head_runtime:<runtime>`. `setup`, if given, replaces the
+    entry's setup. `resources` are merged over the setup's and the entry's resources.
+    Raises `KeyError` if `compute.models` has no such key, or `compute.setups` no such
+    setup. The merged request is not checked against the setup's kind.
     """
     model = compute.models[key]
-    name = model.setup if model.setup is not None else next(iter(compute.setups))
-    setup = compute.setups[name]
+    if setup is not None:
+        name = setup
+    elif model.setup is not None:
+        name = model.setup
+    else:
+        name = next(iter(compute.setups))
+    compute_setup = compute.setups[name]
     change = model.request
     if "active_deadline_seconds" in change.model_fields_set:
         deadline = change.active_deadline_seconds
     else:
-        deadline = setup.request.active_deadline_seconds
+        deadline = compute_setup.request.active_deadline_seconds
     request = ComputeRequest(
-        requests=_get_merged_values(setup.request.requests, change.requests),
-        limits=_get_merged_values(setup.request.limits, change.limits),
+        requests=_get_merged_values(compute_setup.request.requests, change.requests),
+        limits=_get_merged_values(compute_setup.request.limits, change.limits),
         active_deadline_seconds=deadline,
     )
+    merged_resources = _get_merged_values(compute_setup.resources, model.resources)
     return MergedModelSettings(
         setup=name,
         request=request,
-        resources=_get_merged_values(setup.resources, model.resources),
+        resources=_get_merged_values(merged_resources, resources or {}),
     )
 
 
@@ -346,9 +362,19 @@ class ResolvedSettings:
     execution_settings: Mapping[str, Any]
 
 
-def get_resolved_settings(profile: Profile, card: ModelCard | HeadCard) -> ResolvedSettings:
+def get_resolved_settings(
+    profile: Profile,
+    card: ModelCard | HeadCard,
+    *,
+    setup: str | None = None,
+    resources: Mapping[str, JsonScalar] | None = None,
+) -> ResolvedSettings:
     """Returns the settings of a new run of the card's model: its `compute.models`
     entry merged over its setup, and the storage section.
+
+    `setup` and `resources` change this run only: `setup` replaces the entry's setup,
+    and `resources` are merged over the result. Raises `Refused` with `invalid_request`
+    if the profile has no setup named `setup`.
 
     The entry is the model ID, or for a head with no entry of its own,
     `head_runtime:<runtime>`. Raises `NotConfigured` if the profile has no `compute`
@@ -357,7 +383,15 @@ def get_resolved_settings(profile: Profile, card: ModelCard | HeadCard) -> Resol
     request.
     """
     compute = get_compute_section(profile)
-    merged = get_merged_model_settings(compute, _get_model_key(compute, card))
+    key = _get_model_key(compute, card)
+    if setup is not None and setup not in compute.setups:
+        raise Refused(
+            INVALID_REQUEST,
+            f"The profile has no setup {setup!r}. Its setups are: "
+            f"{', '.join(sorted(compute.setups))}.",
+            details={"setup": setup, "setups": sorted(compute.setups)},
+        )
+    merged = get_merged_model_settings(compute, key, setup=setup, resources=resources)
     _check_new_run(compute.setups[merged.setup], merged, model_ref(card).id)
     target_compute, storage = get_setup_target(profile, merged.setup)
     execution_settings = {

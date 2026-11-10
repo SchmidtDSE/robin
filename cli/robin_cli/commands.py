@@ -168,7 +168,12 @@ def submit_run(context: Context, arguments) -> Output:
         preset=arguments.preset,
         configuration=configuration,
         recordings=recordings,
-        get_resolved_settings=partial(get_resolved_settings, context.services.profile),
+        get_resolved_settings=partial(
+            get_resolved_settings,
+            context.services.profile,
+            setup=arguments.setup,
+            resources=dict(arguments.resources),
+        ),
         actor=context.actor,
     )
     data = {

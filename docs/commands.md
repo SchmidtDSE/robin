@@ -13,6 +13,7 @@
 | `robin runs submit --recordings FILE --preset P` | Submit a run of the recordings in a JSON Lines file. Use `--configuration FILE` in place of `--preset`. |
 | `robin runs submit --uris FILE --namespace NS --preset P` | Submit a run of a file with one URI or absolute path on each line. |
 | `robin runs submit --selection JSON --preset P` | Submit a run of the recordings that the profile's catalog adapter selects. Use `--selection @FILE` for a YAML file. |
+| `robin runs submit ... --setup NAME --resource KEY=VALUE` | Run this one run on another setup of the profile, or with other resources, such as `--resource batch_size=64`. Repeat `--resource` for each resource. The profile does not change. |
 | `robin runs list` | List the runs, newest first. Filter with `--submitted-by` and `--created-after`. |
 | `robin runs show RUN` | Show one run, with its status and counts. |
 | `robin runs recordings RUN` | List the recordings of a run. Filter with `--state` and `--skip-reason`. |

@@ -23,6 +23,7 @@ from importlib.metadata import version
 from pathlib import Path
 
 from robin_contracts.local_files import has_uri_scheme
+from robin_contracts.text_formats import InvalidText, load_yaml
 from robin_run_manager import models
 from robin_run_manager.compose import Services, compose
 from robin_run_manager.database import NoticeListener, check_login, current_login, listen
@@ -516,6 +517,15 @@ setup, its request and resources, and the storage section, as they are at submit
 If the model's merged request breaks the rules of its setup's kind, such as a GPU of
 0 for aws-batch, Robin refuses the submit with invalid_profile, and stores nothing.
 
+--setup NAME runs the model on that setup of compute.setups, in place of the setup
+that its compute.models entry names. The entry's request and resources are still
+merged over it. A name that the profile lacks is refused with invalid_request.
+--resource KEY=VALUE sets one resource for this run, over the setup's and the
+entry's, such as batch_size=64. Repeat it for each resource. VALUE is one YAML
+value: a whole number, a finite number, true or false, or text. The model checks
+its resources when it starts, so a bad value, such as batch_size=0, fails the run
+there. Neither option changes the profile: only this run keeps the values.
+
 Setup names are shared by every profile that uses the database. If a run of the
 model's setup name still has work and was submitted with another compute kind (or
 namespace, or job queue) or another storage section, Robin refuses the submit with
@@ -570,6 +580,8 @@ Examples:
   robin runs submit --recordings recordings.jsonl --configuration owl.yaml
   robin runs submit --selection '{{"site": "04"}}' --preset dawn-owl
   robin runs submit --selection @selection.yaml --preset dawn-owl
+  robin runs submit --uris uris.txt --namespace survey --preset dawn-owl \\
+      --setup aws-gpu --resource batch_size=64
 """
 
 RUN_SHOW_EPILOG = f"""\
@@ -613,6 +625,14 @@ def _add_run_commands(nouns) -> None:
     computes.add_argument("--preset", metavar="P", help="the preset to run")
     computes.add_argument(
         "--configuration", type=Path, metavar="FILE", help="a configuration file to run"
+    )
+    submit.add_argument(
+        "--setup", metavar="NAME",
+        help="the setup to run on, in place of the one that compute.models names",
+    )
+    submit.add_argument(
+        "--resource", metavar="KEY=VALUE", dest="resources", action="append", default=[],
+        type=_parse_resource, help="one resource for this run only; repeat for each",
     )
 
     listed = _add_list_command(
@@ -919,8 +939,31 @@ def _add_command(
 # ---------------------------------------------------------------------------
 
 
+def _parse_resource(text: str) -> tuple[str, str | int | float | bool]:
+    """Parse KEY=VALUE, where VALUE is one finite YAML value."""
+    key, equals, raw = text.partition("=")
+    if not equals or not key or not raw:
+        raise argparse.ArgumentTypeError(f"{text!r} is not KEY=VALUE")
+    try:
+        value = load_yaml(raw)
+    except InvalidText:
+        value = None
+    finite = not isinstance(value, float) or math.isfinite(value)
+    if not isinstance(value, (str, int, float, bool)) or not finite:
+        raise argparse.ArgumentTypeError(
+            f"{text!r} does not give one value: give a whole number, a finite number, "
+            "true or false, or text"
+        )
+    return key, value
+
+
 def _check_submit(arguments: argparse.Namespace) -> str | None:
-    """Check the submit options that argparse cannot: --namespace goes with --uris only."""
+    """Check the submit options that argparse cannot: --namespace goes with --uris only,
+    and each --resource key is given once."""
+    keys = [key for key, _ in arguments.resources]
+    repeated = sorted({key for key in keys if keys.count(key) > 1})
+    if repeated:
+        return f"Give each resource once. Given more than once: {', '.join(repeated)}."
     if arguments.uris is not None and arguments.namespace is None:
         return "--uris needs --namespace."
     if arguments.uris is None and arguments.namespace is not None:

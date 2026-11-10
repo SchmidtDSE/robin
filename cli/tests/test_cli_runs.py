@@ -253,6 +253,49 @@ def test_submit_with_a_model_that_the_profile_does_not_list(robin, owl_preset, e
     assert get_run_count(robin) == 0
 
 
+def test_submit_options_choose_the_setup_and_resources_of_one_run(robin, owl_preset, environ):
+    compute = {
+        "setups": {"a": {"kind": "local"}, "b": {"kind": "local", "resources": {"batch_size": 32}}},
+        "models": {"owl/v4": {"setup": "a", "resources": {"batch_size": 16}}},
+    }
+    write_environment_file(environ, {"compute": compute})
+
+    run_id = submit(
+        robin, "--recordings", str(RECORDINGS), "--preset", "owl", "--setup", "b",
+        "--resource", "batch_size=8", "--resource", "read_block_seconds=30.5",
+        "--resource", "device=gpu",
+    )["run_id"]
+
+    settings = json.loads(robin("--json", "runs", "show", run_id).stdout)["execution_settings"]
+    assert settings["setup"] == "b"
+    assert settings["resources"] == {"batch_size": 8, "read_block_seconds": 30.5, "device": "gpu"}
+
+
+@pytest.mark.parametrize(
+    "resource",
+    ["batch_size", "=8", "batch_size=", "batch_size=[8]", "batch_size={a: 1}", "batch_size=.inf"],
+)
+def test_a_resource_option_that_is_not_one_finite_value_exits_2(robin, owl_preset, resource):
+    ran = robin(
+        "--json", "runs", "submit", "--recordings", str(RECORDINGS), "--preset", "owl",
+        "--resource", resource,
+    )
+
+    assert ran.code == 2
+    assert ran.error()["reason"] == "invalid_arguments"
+    assert get_run_count(robin) == 0
+
+
+def test_a_resource_given_twice_exits_2(robin, owl_preset):
+    ran = robin(
+        "--json", "runs", "submit", "--recordings", str(RECORDINGS), "--preset", "owl",
+        "--resource", "batch_size=8", "--resource", "batch_size=16",
+    )
+
+    assert ran.code == 2
+    assert ran.error()["reason"] == "invalid_arguments"
+
+
 def test_a_new_storage_root_does_not_change_a_submitted_run(robin, owl_preset, environ, tmp_path):
     config = yaml.safe_load((Path(environ["ROBIN_PROFILE"]) / "config.yaml").read_text())
     run_id = submit(robin, "--recordings", str(RECORDINGS), "--preset", "owl")["run_id"]

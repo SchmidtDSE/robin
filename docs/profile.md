@@ -79,6 +79,10 @@ it. In the example, `perch/v8` asks for `memory: 20Gi` and the limits and deadli
 the setup, with no `cpu` request. `active_deadline_seconds: null` removes the setup's
 deadline.
 
+One submit can change these for its run only, with no edit to the profile:
+`robin runs submit --setup NAME` names another setup, and `--resource KEY=VALUE` sets a
+resource over the merged values. See `robin runs submit --help`.
+
 The models read two `resources` keys: `batch_size`, the windows in each call of the
 model, and `device`, `cpu` (the default) or `gpu`. OWL, BirdNET, and Perch run on the
 GPU only with `device: gpu`; ONNX heads run on the CPU only. See

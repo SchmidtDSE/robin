@@ -682,6 +682,44 @@ def test_execution_settings_hold_the_model_setup_target_and_merged_request(tmp_p
     )
 
 
+def test_a_submit_can_choose_the_setup_and_resources_of_one_run(tmp_path):
+    profile = load_with_compute(tmp_path, {
+        "setups": {
+            "a": LOCAL_SETUP,
+            "b": {**KUBERNETES_SETUP, "request": {"requests": {"cpu": "2"}},
+                  "resources": {"batch_size": 32, "device": "cpu"}},
+        },
+        "models": {"owl/v4": {
+            "setup": "a",
+            "request": {"requests": {"memory": "16Gi"}},
+            "resources": {"batch_size": 16},
+        }},
+    }, S3_STORAGE)
+
+    resolved = get_resolved_settings(
+        profile, OWL_CARD, setup="b", resources={"batch_size": 8, "read_threads": 6}
+    )
+
+    settings = resolved.execution_settings
+    assert (resolved.setup, settings["setup"]) == ("b", "b")
+    assert resolved.target_compute == {"kind": "kubernetes", "namespace": "robin"}
+    assert settings["request"]["requests"] == {"cpu": "2", "memory": "16Gi"}
+    assert settings["resources"] == {"batch_size": 8, "device": "cpu", "read_threads": 6}
+
+
+def test_a_submit_that_names_a_setup_the_profile_lacks_is_refused(tmp_path):
+    profile = load_with_compute(tmp_path, {
+        "setups": {"a": LOCAL_SETUP, "b": LOCAL_SETUP}, "models": {"owl/v4": {"setup": "a"}},
+    })
+
+    with pytest.raises(Refused) as raised:
+        get_resolved_settings(profile, OWL_CARD, setup="c")
+
+    assert raised.value.reason == "invalid_request"
+    assert "c" in raised.value.details["setup"]
+    assert raised.value.details["setups"] == ["a", "b"]
+
+
 def not_in_profile(profile, card) -> Refused:
     with pytest.raises(Refused) as raised:
         get_resolved_settings(profile, card)
