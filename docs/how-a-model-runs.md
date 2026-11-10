@@ -160,13 +160,19 @@ If it is large, reading is the slow part. A machine with more CPUs has more read
 to 3. Longer blocks can also help.
 
 The engine then writes its own line for the recording, with the seconds of its stages:
-fetch, engine, detections, and publish.
+fetch, engine, detections, and publish. `fetch` is the time that the recording waited
+for its input. The engine fetches each input while the recording before it runs, so
+`fetch` is near 0 when the fetch finished in that time. The first recording waits for
+the whole of its fetch.
 
 ## What still runs one after another
 
-The engine runs the recordings one at a time. It fetches the next recording only after
-it has published the files of the one before. The model is built once for each work, and
-it stays loaded for all the recordings.
+The engine runs the recordings one at a time. While a recording runs, one background
+thread fetches the next recording's input. The engine fetches only one recording ahead,
+because a long recording can be large on disk. If the next recording never runs, because
+the work stops, the engine releases its input. If a fetch fails, only the recording that
+it was for fails. The model is built once for each work, and it stays loaded for all the
+recordings.
 
 ## OWL and the ONNX heads
 

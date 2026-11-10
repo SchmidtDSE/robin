@@ -13,16 +13,16 @@ from robin_inference_engine import errors
 from robin_inference_engine.detections import DUCKDB_MEMORY_LIMIT
 
 
-def refuse_request(work: InferenceWork, *, registry: TaxonRegistry | None) -> None:
-    """Everything the engine refuses before it builds the model."""
+def refuse_invalid_request(work: InferenceWork, *, registry: TaxonRegistry | None) -> None:
+    """Raise a refusal if the engine cannot run `work`, before the model is built."""
     problem = check_request_for_problem(work.model, work.input, work.settings, work.outputs)
     if problem is not None:
-        raise _refused(problem.code, problem.detail)
+        raise _build_refusal(problem.code, problem.detail)
     _refuse_a_substituted_registry(work, registry)
     _refuse_a_duckdb_memory_limit_that_is_not_a_string(work)
 
 
-def _refused(code: str, detail: str) -> errors.EngineError:
+def _build_refusal(code: str, detail: str) -> errors.EngineError:
     return errors.EngineError(code, errors.VALIDATE_REQUEST, detail)
 
 
@@ -35,13 +35,13 @@ def _refuse_a_substituted_registry(
     if pinned is None:
         return
     if registry is None:
-        raise _refused(
+        raise _build_refusal(
             errors.REGISTRY_FINGERPRINT_MISMATCH,
             f"the work pins {REGISTRY_ROLE} file digest {pinned.digest} but no registry "
             f"was loaded",
         )
     if registry.fingerprint != pinned.digest:
-        raise _refused(
+        raise _build_refusal(
             errors.REGISTRY_FINGERPRINT_MISMATCH,
             f"the work pins {REGISTRY_ROLE} file digest {pinned.digest} but the loaded "
             f"registry's fingerprint is {registry.fingerprint}",
@@ -52,7 +52,7 @@ def _refuse_a_duckdb_memory_limit_that_is_not_a_string(work: InferenceWork) -> N
     # DuckDB parses the value itself, when it builds the detections.
     limit = work.resources.get(DUCKDB_MEMORY_LIMIT)
     if DUCKDB_MEMORY_LIMIT in work.resources and not (isinstance(limit, str) and limit):
-        raise _refused(
+        raise _build_refusal(
             errors.RESOURCE_INVALID,
             f"resource {DUCKDB_MEMORY_LIMIT!r} is {limit!r}, but DuckDB needs a non-empty "
             f"string such as '4GB'",

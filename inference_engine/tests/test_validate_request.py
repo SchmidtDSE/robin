@@ -29,7 +29,7 @@ from robin_contracts.work import (
     RecordingRef,
 )
 from robin_inference_engine import errors
-from robin_inference_engine.validate_request import refuse_request
+from robin_inference_engine.validate_request import refuse_invalid_request
 
 HEX = "0" * 64
 RECORD_DIGEST = f"sha256:v1:{HEX}"
@@ -166,12 +166,12 @@ def refused(
     work: InferenceWork, *, registry: TaxonRegistry | None = REGISTRY
 ) -> errors.EngineError:
     with pytest.raises(errors.EngineError) as exc:
-        refuse_request(work, registry=registry)
+        refuse_invalid_request(work, registry=registry)
     return exc.value
 
 
 def accepted(work: InferenceWork, *, registry: TaxonRegistry | None = REGISTRY) -> bool:
-    return refuse_request(work, registry=registry) is None
+    return refuse_invalid_request(work, registry=registry) is None
 
 
 # ---------------------------------------------------------------------------

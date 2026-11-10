@@ -8,6 +8,7 @@ import math
 import re
 import shutil
 import tempfile
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -209,7 +210,7 @@ def assert_nothing_constructed(rig: Rig) -> None:
     engine_calls = {"run", "after_recording", "clean_up", "create"}
     assert not rig.contexts
     assert not any(call[0] in engine_calls or call[0] == "audio" for call in rig.calls)
-    assert rig.released_model_files() == rig.model_files.returned
+    assert rig.released_model_files() == rig.model_files.returned[::-1]
 
 
 # ---------------------------------------------------------------------------
@@ -1267,7 +1268,7 @@ def test_zero_windows_under_a_geometry_that_floors_at_one_are_unexplained(rig):
 def assert_failed_cleanly(rig: Rig, result: InferenceResult) -> None:
     """clean_up ran once, every model file was released, and no artifact is named."""
     assert rig.calls.count(("clean_up",)) == 1
-    assert rig.released_model_files() == rig.model_files.returned
+    assert rig.released_model_files() == rig.model_files.returned[::-1]
     text = canonical_json_bytes(result).decode()
     assert rig.destination.as_uri() not in text
     for relative in published_files(rig):
@@ -1361,19 +1362,19 @@ def model_file_fetches(rig: Rig) -> list[tuple]:
     return [("model_files", "fetch", rig.model_file_uri(role)) for role in sorted(rig.build.files)]
 
 
-def model_file_releases(rig: Rig) -> list[tuple]:
-    paths = [rig.build.model_path(role) for role in sorted(rig.build.files)]
+def get_model_file_release_calls(rig: Rig) -> list[tuple]:
+    """The model files' releases: last fetched, first released."""
+    paths = [rig.build.model_path(role) for role in reversed(sorted(rig.build.files))]
     return [("model_files", "release", path) for path in paths]
 
 
-def recording_run(
+def get_recording_calls(
     rig: Rig, work: InferenceWork, position: int, *, kinds: tuple[str, ...] = ("scores",)
 ) -> list[tuple]:
-    """The calls for one recording: fetch, run, publish each kind, then clean up."""
+    """The calls for one recording, except its fetch: run, publish each kind, clean up."""
     recording = work.recordings[position]
     path = rig.build.audio_paths[recording.audio_uri]
     return [
-        ("audio", "fetch", recording.audio_uri),
         ("run", path),
         *(("create", kind, recording.namespace, recording.value) for kind in kinds),
         ("after_recording",),
@@ -1381,16 +1382,28 @@ def recording_run(
     ]
 
 
+def split_input_fetches(calls: CallLog) -> tuple[list[tuple], list[tuple]]:
+    """The input fetches, and every other call, each in the order they were made.
+
+    The engine fetches the next input in a background thread, so a fetch has no fixed
+    place among the other calls.
+    """
+    fetches = [call for call in calls if call[:2] == ("audio", "fetch")]
+    return fetches, [call for call in calls if call[:2] != ("audio", "fetch")]
+
+
 def test_each_recording_is_published_when_it_ends(rig):
     work = rig.work(recordings=3)
 
     success_of(rig, rig.run(work, rig.model(script(1, 1, 1))), work)
 
-    assert rig.calls == [
+    fetches, others = split_input_fetches(rig.calls)
+    assert fetches == [("audio", "fetch", recording.audio_uri) for recording in work.recordings]
+    assert others == [
         *model_file_fetches(rig),
-        *(call for position in range(3) for call in recording_run(rig, work, position)),
+        *(call for position in range(3) for call in get_recording_calls(rig, work, position)),
         ("clean_up",),
-        *model_file_releases(rig),
+        *get_model_file_release_calls(rig),
     ]
 
 
@@ -1405,13 +1418,15 @@ def test_a_failing_recording_does_not_stop_the_others(rig):
     )
     assert "out of memory" in report.detail
     assert [row.value for row in result.coverage] == ["0", "2"]
-    assert rig.calls == [
+    fetches, others = split_input_fetches(rig.calls)
+    assert fetches == [("audio", "fetch", recording.audio_uri) for recording in work.recordings]
+    assert others == [
         *model_file_fetches(rig),
-        *recording_run(rig, work, 0),
-        *recording_run(rig, work, 1, kinds=()),
-        *recording_run(rig, work, 2),
+        *get_recording_calls(rig, work, 0),
+        *get_recording_calls(rig, work, 1, kinds=()),
+        *get_recording_calls(rig, work, 2),
         ("clean_up",),
-        *model_file_releases(rig),
+        *get_model_file_release_calls(rig),
     ]
 
 
@@ -1435,7 +1450,7 @@ def test_cleanup_failures_after_a_failed_recording_are_logged_and_change_nothing
     assert "the first failure" in report.detail
     for later in ("the second failure", "the third failure", "the fourth failure"):
         assert any(later in line for line in lines), later
-    assert rig.calls[-3:] == [("clean_up",), *model_file_releases(rig)]
+    assert rig.calls[-3:] == [("clean_up",), *get_model_file_release_calls(rig)]
 
 
 CLEANUP_FAILURES = {
@@ -1465,7 +1480,7 @@ def test_a_failing_cleanup_step_is_only_logged(rig, step):
 
     success_of(rig, result, work)
     assert any("OSError" in line and message in line for line in lines), lines
-    assert rig.calls[-3:] == [("clean_up",), *model_file_releases(rig)]
+    assert rig.calls[-3:] == [("clean_up",), *get_model_file_release_calls(rig)]
 
 
 def test_a_late_publish_failure_discards_the_recordings_coverage_and_files(rig):
@@ -1488,6 +1503,21 @@ def test_a_late_publish_failure_discards_the_recordings_coverage_and_files(rig):
     }
     # The scores file stays in storage, but no result names it.
     assert artifact_path("scores", "test", "0") in published_files(rig)
+
+
+def test_a_recording_whose_input_cannot_be_fetched_never_reaches_the_model(rig):
+    work = rig.work(recordings=2)
+    first = work.recordings[0].audio_uri
+    inputs = rig.files("audio", rig.build.audio_paths, raise_on={first: OSError("gone")})
+
+    result = rig.run(work, rig.model(script(1)), inputs=inputs)
+
+    recording_failure_of(
+        result, work, value="0", code=errors.INPUT_UNAVAILABLE, stage=errors.ACQUIRE_INPUT
+    )
+    second = rig.build.audio_paths[work.recordings[1].audio_uri]
+    model_calls = [call for call in rig.calls if call[0] in ("run", "after_recording")]
+    assert model_calls == [("run", second), ("after_recording",)]
 
 
 def test_a_work_in_which_every_recording_fails_is_still_completed(rig):
@@ -1570,7 +1600,7 @@ def test_an_engine_defect_during_a_recording_is_raised_after_cleanup(rig, monkey
     with pytest.raises(RuntimeError, match="contradicted itself"):
         rig.run(work, rig.model(script(1, 1)))
 
-    assert rig.calls[-3:] == [("clean_up",), *model_file_releases(rig)]
+    assert rig.calls[-3:] == [("clean_up",), *get_model_file_release_calls(rig)]
 
 
 # ---------------------------------------------------------------------------
@@ -1700,8 +1730,12 @@ def test_each_stage_of_a_recording_gets_its_own_time(rig, monkeypatch):
     monkeypatch.setattr(engine, "perf_counter", clock)
 
     class TimedFiles(LocalFiles):
+        # Only the first fetch moves the clock. The engine waits for it, so the move
+        # falls in the first recording's fetch time. The second fetch runs while the
+        # first recording runs, and the engine does not wait for it.
         def fetch(self, uri: str) -> Path:
-            clock.now += 1
+            if not self.returned:
+                clock.now += 1
             return super().fetch(uri)
 
     class TimedWriter(CopyingWriter):
@@ -1721,10 +1755,205 @@ def test_each_stage_of_a_recording_gets_its_own_time(rig, monkeypatch):
 
     timed = [line for line in lines if line.startswith("recording ") and " s" in line]
     assert len(timed) == 2, lines
+    fetch_seconds = []
     for line in timed:
         seconds = {
             stage: float(found.group(1))
             for stage in ("fetch", "engine", "detections", "publish")
             if (found := re.search(rf"\b{stage} (\d+\.\d) s\b", line))
         }
-        assert seconds == {"fetch": 1.0, "engine": 0.0, "detections": 0.0, "publish": 100.0}
+        fetch_seconds.append(seconds.pop("fetch"))
+        assert seconds == {"engine": 0.0, "detections": 0.0, "publish": 100.0}
+    assert fetch_seconds == [1.0, 0.0]
+
+
+# ---------------------------------------------------------------------------
+# The next recording is fetched while the current one runs.
+# ---------------------------------------------------------------------------
+
+# Long enough for a background fetch to happen; a test that passes never waits this long.
+FETCH_TIMEOUT_S = 10.0
+
+
+class SignallingFiles(LocalFiles):
+    """Local files that set an event for each uri when its fetch is called."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.fetching = {uri: threading.Event() for uri in self._paths}
+
+    def fetch(self, uri: str) -> Path:
+        try:
+            return super().fetch(uri)
+        finally:
+            self.fetching[uri].set()
+
+
+class WaitingModel:
+    """A scripted model whose first run waits for `event` before its first window.
+
+    `waited` holds True when the event came within `timeout` seconds, and False when not.
+    """
+
+    def __init__(self, model: ScriptedModel, event: threading.Event, *, timeout: float) -> None:
+        self._model = model
+        self._event = event
+        self._timeout = timeout
+        self.waited: bool | None = None
+
+    def run(self, input):
+        return self._yield(self._model.run(input))
+
+    def after_recording(self) -> None:
+        self._model.after_recording()
+
+    def clean_up(self) -> None:
+        self._model.clean_up()
+
+    def _yield(self, windows):
+        if self.waited is None:
+            self.waited = self._event.wait(self._timeout)
+        yield from windows
+
+
+def build_signalling_inputs(rig: Rig, **kwargs) -> SignallingFiles:
+    return SignallingFiles("audio", rig.build.audio_paths, rig.calls, **kwargs)
+
+
+def test_the_next_recording_is_fetched_while_the_current_one_runs(rig):
+    work = rig.work(recordings=2)
+    inputs = build_signalling_inputs(rig)
+    second = inputs.fetching[work.recordings[1].audio_uri]
+    model = WaitingModel(rig.model(script(1, 1)), second, timeout=FETCH_TIMEOUT_S)
+
+    success_of(rig, rig.run(work, model, inputs=inputs), work)
+
+    assert model.waited is True
+
+
+def test_at_most_one_recording_is_fetched_ahead(rig):
+    work = rig.work(recordings=3)
+    inputs = build_signalling_inputs(rig)
+    third = work.recordings[2].audio_uri
+    # The first recording gives a fetch of the third time to happen. It must not happen.
+    model = WaitingModel(rig.model(script(1, 1, 1)), inputs.fetching[third], timeout=0.5)
+
+    success_of(rig, rig.run(work, model, inputs=inputs), work)
+
+    assert model.waited is False
+    first_path = rig.build.audio_paths[work.recordings[0].audio_uri]
+    assert rig.calls.index(("audio", "fetch", third)) > rig.calls.index(
+        ("audio", "release", first_path)
+    )
+
+
+def test_a_failed_early_fetch_fails_its_own_recording_only(rig):
+    work = rig.work(recordings=2)
+    second = work.recordings[1].audio_uri
+    inputs = build_signalling_inputs(rig, raise_on={second: OSError("the bucket is gone")})
+    model = WaitingModel(rig.model(script(1, 1)), inputs.fetching[second], timeout=FETCH_TIMEOUT_S)
+
+    result = rig.run(work, model, inputs=inputs)
+
+    assert model.waited is True
+    report = recording_failure_of(
+        result, work, value="1", code=errors.INPUT_UNAVAILABLE, stage=errors.ACQUIRE_INPUT
+    )
+    assert "the bucket is gone" in report.detail
+    assert [row.value for row in result.coverage] == ["0"]
+
+
+def test_a_file_fetched_early_and_never_run_is_released(rig, monkeypatch):
+    def defect(self, window):
+        raise RuntimeError("the engine contradicted itself")
+
+    monkeypatch.setattr(CoverageBuilder, "count_window", defect)
+    work = rig.work(recordings=2)
+    inputs = build_signalling_inputs(rig)
+    second = work.recordings[1].audio_uri
+    model = WaitingModel(rig.model(script(1, 1)), inputs.fetching[second], timeout=FETCH_TIMEOUT_S)
+
+    with pytest.raises(RuntimeError, match="contradicted itself"):
+        rig.run(work, model, inputs=inputs)
+
+    assert model.waited is True
+    path = rig.build.audio_paths[second]
+    assert ("run", path) not in rig.calls
+    assert rig.calls.count(("audio", "release", path)) == 1
+
+
+def test_a_recording_after_a_failed_one_uses_its_early_fetch(rig):
+    work = rig.work(recordings=2)
+    inputs = build_signalling_inputs(rig)
+    second = work.recordings[1].audio_uri
+    scripted = rig.model([[ValueError("broken")], [window(0)]])
+    model = WaitingModel(scripted, inputs.fetching[second], timeout=FETCH_TIMEOUT_S)
+
+    result = rig.run(work, model, inputs=inputs)
+
+    assert model.waited is True
+    recording_failure_of(result, work, value="0", code=errors.MODEL_RUN_FAILED, stage=errors.INFER)
+    assert [row.value for row in result.coverage] == ["1"]
+    path = rig.build.audio_paths[second]
+    assert rig.calls.count(("audio", "fetch", second)) == 1
+    assert ("run", path) in rig.calls
+    assert rig.calls.count(("audio", "release", path)) == 1
+
+
+# ---------------------------------------------------------------------------
+# The adapter's windows are closed as soon as the engine is done with them.
+# ---------------------------------------------------------------------------
+
+
+class ClosingWindows:
+    """An adapter's windows that note in the call log when they are closed."""
+
+    def __init__(self, windows, calls: CallLog) -> None:
+        self._windows = windows
+        self._calls = calls
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> WindowOutput:
+        return next(self._windows)
+
+    def close(self) -> None:
+        self._calls.append(("close",))
+
+
+class ClosingModel:
+    """A scripted model whose windows note when they are closed."""
+
+    def __init__(self, model: ScriptedModel, calls: CallLog) -> None:
+        self._model = model
+        self._calls = calls
+
+    def run(self, input):
+        return ClosingWindows(self._model.run(input), self._calls)
+
+    def after_recording(self) -> None:
+        self._model.after_recording()
+
+    def clean_up(self) -> None:
+        self._model.clean_up()
+
+
+CLOSE_CASES = {
+    "success": ([[window(0)]], ("create", "scores", "test", "0")),
+    "refused_window": (
+        [[WindowOutput(start=0.0, end=3.0, scores=np.array([0.5]))]],
+        ("after_recording",),
+    ),
+}
+
+
+@pytest.mark.parametrize("case", CLOSE_CASES)
+def test_the_adapters_windows_are_closed_before_the_recording_goes_on(rig, case):
+    windows, next_call = CLOSE_CASES[case]
+    work = rig.work()
+
+    rig.run(work, ClosingModel(rig.model(windows), rig.calls))
+
+    assert rig.calls.count(("close",)) == 1
+    assert rig.calls.index(("close",)) < rig.calls.index(next_call)
