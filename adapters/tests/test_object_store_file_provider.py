@@ -122,15 +122,56 @@ def test_releasing_a_path_twice_is_refused(tmp_path, s3_bucket):
     assert str(path) in str(refused.value)
 
 
-def test_backend_options_reach_every_ondio_call(tmp_path, monkeypatch):
-    calls: list[dict] = []
-    monkeypatch.setattr(provider_module.ondio, "download", _writing_spy(calls))
-    files = ObjectStoreFileProvider(tmp_path / "scratch", profile_name="x", region_name="y")
+def _backend_spies(monkeypatch) -> tuple[list[tuple], list]:
+    """Records each backend build, and the backend that each download receives."""
+    builds = []
+    received = []
+    real_get_backend = provider_module.ondio.get_backend
+    real_download = provider_module.ondio.download
 
-    files.fetch("s3://robin-test/a.wav")
-    files.fetch("s3://robin-test/b.wav")
+    def get_backend(uri, **options):
+        backend = real_get_backend(uri, **options)
+        builds.append((uri, options, backend))
+        return backend
 
-    assert calls == [{"profile_name": "x", "region_name": "y"}] * 2
+    def download(uri, out_path, **kwargs):
+        received.append(kwargs.get("backend"))
+        return real_download(uri, out_path, **kwargs)
+
+    monkeypatch.setattr(provider_module.ondio, "get_backend", get_backend)
+    monkeypatch.setattr(provider_module.ondio, "download", download)
+    return builds, received
+
+
+def test_one_backend_serves_every_fetch_from_a_store(tmp_path, s3_bucket, monkeypatch):
+    uris = [_put(s3_bucket, f"{name}.wav", name.encode()) for name in ("a", "b", "c")]
+    builds, received = _backend_spies(monkeypatch)
+    files = ObjectStoreFileProvider(tmp_path / "scratch", region_name="us-east-1")
+    assert builds == []
+
+    paths = [files.fetch(uri) for uri in uris]
+
+    [(store, options, backend)] = builds
+    assert (store, options) == (f"s3://{s3_bucket}", {"region_name": "us-east-1"})
+    assert all(given is backend for given in received) and len(received) == 3
+    assert [path.read_bytes() for path in paths] == [b"a", b"b", b"c"]
+
+
+def test_each_store_has_its_own_backend(tmp_path, s3_bucket, monkeypatch):
+    boto3.client("s3").create_bucket(Bucket="robin-other")
+    first = _put(s3_bucket, "a.wav", b"first bucket")
+    second = _put("robin-other", "a.wav", b"other bucket")
+    builds, _ = _backend_spies(monkeypatch)
+    files = ObjectStoreFileProvider(tmp_path / "scratch")
+
+    paths = [files.fetch(first), files.fetch(second), files.fetch(first)]
+
+    assert [store for store, _, _ in builds] == [f"s3://{s3_bucket}", "s3://robin-other"]
+    assert [path.read_bytes() for path in paths] == [
+        b"first bucket",
+        b"other bucket",
+        b"first bucket",
+    ]
 
 
 def test_a_relative_directory_gives_absolute_paths(tmp_path, monkeypatch, s3_bucket):

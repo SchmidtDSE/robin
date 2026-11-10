@@ -283,29 +283,37 @@ def test_an_s3_root_is_accepted(root):
 # ---------------------------------------------------------------------------
 
 
-def test_backend_options_reach_every_ondio_call(tmp_path, monkeypatch):
-    stored = {}
-    seen = []
+def test_one_backend_serves_every_publish(s3_bucket, tmp_path, monkeypatch):
+    builds = []
+    received = []
+    real_get_backend = writer_module.ondio.get_backend
 
-    def exists(uri, **kwargs):
-        seen.append(("exists", kwargs))
-        return uri in stored
+    def get_backend(uri, **options):
+        backend = real_get_backend(uri, **options)
+        builds.append((uri, options, backend))
+        return backend
 
-    def download(uri, out_path, **kwargs):
-        seen.append(("download", kwargs))
-        Path(out_path).write_bytes(stored[uri])
+    def recording(real):
+        def call(*args, **kwargs):
+            received.append((real.__name__, kwargs.get("backend")))
+            return real(*args, **kwargs)
 
-    def upload(uri, source_path, **kwargs):
-        seen.append(("upload", kwargs))
-        stored[uri] = Path(source_path).read_bytes()
+        return call
 
-    for name, double in (("exists", exists), ("download", download), ("upload", upload)):
-        monkeypatch.setattr(writer_module.ondio, name, double)
-    writer = ObjectStoreArtifactWriter("s3://b", profile_name="x", region_name="y")
+    monkeypatch.setattr(writer_module.ondio, "get_backend", get_backend)
+    for name in ("exists", "download", "upload"):
+        real = getattr(writer_module.ondio, name)
+        monkeypatch.setattr(writer_module.ondio, name, recording(real))
+    root = f"s3://{s3_bucket}/runs/one"
+    writer = ObjectStoreArtifactWriter(root, region_name="us-east-1")
+    assert builds == []
 
+    _create(writer, _staged(tmp_path / "staging"))
     _create(writer, _staged(tmp_path / "staging"))
     with pytest.raises(FileExistsError):
         _create(writer, _staged(tmp_path / "staging", OTHER))
 
-    assert {name for name, _ in seen} == {"exists", "download", "upload"}
-    assert all(kwargs == {"profile_name": "x", "region_name": "y"} for _, kwargs in seen)
+    [(uri, options, backend)] = builds
+    assert (uri, options) == (root, {"region_name": "us-east-1"})
+    assert {name for name, _ in received} == {"exists", "download", "upload"}
+    assert all(given is backend for _, given in received)
