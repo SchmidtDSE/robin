@@ -84,13 +84,17 @@ model, and `device`, `cpu` (the default) or `gpu`. OWL, BirdNET, and Perch run o
 GPU only with `device: gpu`; ONNX heads run on the CPU only. See
 [AWS Batch](aws-batch.md#gpu).
 
-BirdNET and Perch read two more keys. They change speed and memory, but not results.
+BirdNET and Perch read three more keys. They change speed and memory, but not results.
 
+- `read_threads`, a whole number above 0, is the number of threads that read audio. The
+  default is two fewer than the CPUs that the job can use, and at least 1. In a container
+  with a CPU limit, the limit counts, not the host's CPUs. So a g4dn.xlarge (4 vCPUs) gets
+  2, and a g4dn.2xlarge (8 vCPUs) gets 6.
 - `read_ahead_batches`, a whole number above 0 (default 4), limits how many batches of
   audio are read ahead of the model. The audio in memory is at most
-  `read_ahead_batches + readers + 1` batches, where there are 1 to 3 readers (two fewer
-  than the machine's CPUs). Each window takes about 0.6 MB, so at the defaults, with 3
-  readers and `batch_size: 32`, the audio uses about 150 MB.
+  `read_ahead_batches + read_threads + 1` batches. Each window takes about 0.6 MB, so
+  with 2 read threads and `batch_size: 32`, the audio uses about 140 MB, and with 6 read
+  threads about 190 MB.
 - `read_block_seconds`, a number above 0 (default 60), is the longest span of windows
   that a reader decodes at once, with every channel of the file. A block always holds at
   least one whole window, so a window longer than this is decoded alone. Perch also

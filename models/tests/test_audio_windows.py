@@ -201,7 +201,8 @@ def test_closing_the_windows_early_stops_every_thread_and_closes_the_file(tmp_pa
 def test_the_reader_stays_a_bounded_number_of_batches_ahead(tmp_path, read_ahead_batches):
     batch_size = 2
     # The batches read ahead, one being read by each reader, and one the model holds.
-    bound = (read_ahead_batches + batch_pipeline.READERS + 1) * batch_size
+    read_threads = 2
+    bound = (read_ahead_batches + read_threads + 1) * batch_size
     reads = []
     release = threading.Event()
 
@@ -217,6 +218,7 @@ def test_the_reader_stays_a_bounded_number_of_batches_ahead(tmp_path, read_ahead
         write_seconds(tmp_path, 60),
         batch_size=batch_size,
         read_ahead_batches=read_ahead_batches,
+        read_threads=read_threads,
         cut_window=cut_window,
         run_batch=run_batch,
     )
@@ -350,8 +352,6 @@ class TrackedNumpy:
 
 
 def test_a_batch_the_model_has_finished_is_not_kept_alive(tmp_path, monkeypatch):
-    # One reader, so the input arrays are made in batch order.
-    monkeypatch.setattr(batch_pipeline, "READERS", 1)
     tracked = TrackedNumpy()
     monkeypatch.setattr(batch_pipeline, "np", tracked)
     first_batch_given = threading.Event()
@@ -366,7 +366,11 @@ def test_a_batch_the_model_has_finished_is_not_kept_alive(tmp_path, monkeypatch)
         return cut_silence(block, start, end)
 
     starts = []
-    for window in get_windows(write_seconds(tmp_path, 6), batch_size=2, cut_window=cut_window):
+    # One reader, so the input arrays are made in batch order.
+    windows = get_windows(
+        write_seconds(tmp_path, 6), batch_size=2, cut_window=cut_window, read_threads=1
+    )
+    for window in windows:
         starts.append(window.start)
         if window.start == 1.0:
             first_batch_given.set()
@@ -376,7 +380,6 @@ def test_a_batch_the_model_has_finished_is_not_kept_alive(tmp_path, monkeypatch)
 
 
 def test_a_batch_read_while_the_loop_stops_is_not_kept(tmp_path, monkeypatch):
-    monkeypatch.setattr(batch_pipeline, "READERS", 1)
     tracked = TrackedNumpy()
     monkeypatch.setattr(batch_pipeline, "np", tracked)
     pipelines = []
@@ -395,7 +398,9 @@ def test_a_batch_read_while_the_loop_stops_is_not_kept(tmp_path, monkeypatch):
             time.sleep(0.2)
         return None
 
-    windows = get_windows(write_seconds(tmp_path, 6), batch_size=2, read_block=read_block)
+    windows = get_windows(
+        write_seconds(tmp_path, 6), batch_size=2, read_block=read_block, read_threads=1
+    )
     next(windows)
     windows.close()
 
@@ -443,6 +448,8 @@ def test_a_whole_number_of_block_seconds_is_accepted():
         ("read_block_seconds", 0),
         ("read_block_seconds", float("nan")),
         ("read_block_seconds", float("inf")),
+        ("read_threads", 0),
+        ("read_threads", 2.0),
     ],
     ids=repr,
 )
@@ -450,3 +457,46 @@ def test_a_read_setting_that_is_not_a_positive_number_is_refused(name, value):
     resources = {"batch_size": 8, name: value}
     with pytest.raises(ValueError, match=name):
         get_resources(batch_pipeline.WindowResources, resources, "model test/1")
+
+
+@pytest.mark.parametrize("read_threads", [1, 4])
+def test_the_loop_reads_on_the_given_number_of_threads_with_the_same_windows(
+    tmp_path, read_threads
+):
+    readers = set()
+
+    def run_batch(bounds, batch):
+        prefix = f"{batch_pipeline.THREAD_NAME_PREFIX}reader-"
+        readers.update(t.name for t in get_loop_threads() if t.name.startswith(prefix))
+        return get_outputs_without_scores(bounds, batch)
+
+    windows = get_windows(
+        write_seconds(tmp_path, 30), batch_size=2, run_batch=run_batch, read_threads=read_threads
+    )
+
+    assert [window.start for window in windows] == [float(n) for n in range(30)]
+    assert len(readers) == read_threads
+
+
+@pytest.mark.parametrize(
+    ("cpu_max", "cpus", "expected"),
+    [
+        pytest.param(None, 4, 2, id="no_cgroup_file"),
+        pytest.param("max 100000\n", 8, 6, id="no_limit"),
+        pytest.param("max 100000\n", 32, 30, id="no_cap"),
+        pytest.param("200000 100000\n", 64, 1, id="two_cpu_limit_on_a_large_host"),
+        pytest.param("650000 100000\n", 64, 4, id="part_of_a_cpu_is_not_counted"),
+        pytest.param("800000 100000\n", 4, 2, id="limit_above_the_hosts_cpus"),
+        pytest.param(None, None, 1, id="cpu_count_unknown"),
+    ],
+)
+def test_the_default_read_threads_leave_two_cpus_free(
+    tmp_path, monkeypatch, cpu_max, cpus, expected
+):
+    cpu_max_file = tmp_path / "cpu.max"
+    if cpu_max is not None:
+        cpu_max_file.write_text(cpu_max)
+    monkeypatch.setattr(batch_pipeline, "CPU_MAX_FILE", cpu_max_file)
+    monkeypatch.setattr(batch_pipeline.os, "cpu_count", lambda: cpus)
+
+    assert batch_pipeline.WindowResources(batch_size=8).read_threads == expected

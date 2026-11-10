@@ -432,7 +432,12 @@ def test_overlapping_windows_build(runtime, tmp_path):
 # Resources. The checks of each value are tested once, in test_adapter_setup.
 
 
-GIVEN_RESOURCES = {"batch_size": 8, "read_ahead_batches": 2, "read_block_seconds": 7.0}
+GIVEN_RESOURCES = {
+    "batch_size": 8,
+    "read_ahead_batches": 2,
+    "read_block_seconds": 7.0,
+    "read_threads": 2,
+}
 
 
 @pytest.mark.parametrize(
@@ -463,6 +468,7 @@ BAD_RESOURCES = [
     ("device", "tpu"),
     ("read_ahead_batches", 0),
     ("read_block_seconds", 0),
+    ("read_threads", 0),
 ]
 
 

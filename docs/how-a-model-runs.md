@@ -39,8 +39,9 @@ compressed audio such as FLAC.
 1. **Plan.** The loop counts the frames of the file and makes the list of windows from
    the window geometry: the window length, the overlap, and the padding. It puts the
    windows into batches of `batch_size` windows, and numbers the batches from 0.
-2. **Read.** Up to 3 reader threads run: two fewer than the machine's CPUs, and at
-   least 1. Each reader opens its own handle on the file. A reader takes the next batch
+2. **Read.** `read_threads` reader threads run. By default there are two fewer than the
+   CPUs that the process can use, and at least 1. In a container with a CPU limit, the
+   limit counts, not the host's CPUs. Each reader opens its own handle on the file. A reader takes the next batch
    number, and decodes the batch's windows in blocks of at most `read_block_seconds`.
    The adapter cuts each window from its block, at the model's sample rate. A batch is
    an array of `batch_size` rows. After the last window of the recording, the rows are
@@ -77,7 +78,7 @@ each model:
   each real window.
 
 The adapter also gives the window length in samples and its resources: `batch_size`,
-`read_ahead_batches`, and `read_block_seconds`. `BatchPipeline` does the rest: it makes
+`read_threads`, `read_ahead_batches`, and `read_block_seconds`. `BatchPipeline` does the rest: it makes
 the batches, pads them, runs the threads, and keeps the windows in order.
 
 ### The threads and the queues
@@ -128,8 +129,8 @@ The window loop writes them in the log line below.
 
 ## The settings change speed, not results
 
-`batch_size`, `read_ahead_batches`, and `read_block_seconds` change only speed and
-memory. Each window gets the same samples and the same scores with any value:
+`batch_size`, `read_threads`, `read_ahead_batches`, and `read_block_seconds` change only
+speed and memory. Each window gets the same samples and the same scores with any value:
 
 - A block read gives each window the same samples that a read of that window alone
   would give.
@@ -156,8 +157,9 @@ ran 720 windows of a.flac: read 41.3 s, model 18.0 s, waited for audio 0.4 s
 - `waited for audio` is the time that the model thread spent waiting for a batch.
 
 If `waited for audio` is near 0, the model is the slow part, and the readers keep up.
-If it is large, reading is the slow part. A machine with more CPUs has more readers, up
-to 3. Longer blocks can also help.
+If it is large, reading is the slow part. More readers can help, if the machine has
+CPUs to spare: set `read_threads`. Longer blocks can also help. The loop's first line for
+a recording gives the number of read threads.
 
 The engine then writes its own line for the recording, with the seconds of its stages:
 fetch, engine, detections, and publish. `fetch` is the time that the recording waited

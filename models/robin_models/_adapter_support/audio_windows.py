@@ -63,7 +63,8 @@ def run_windows(
         if audio.frames == 0:
             raise ValueError(f"{owner} cannot run {path}: it has no audio frames")
         bounds = window_bounds(audio.frames / audio.samplerate, geometry)
-    log(f"running {len(bounds)} windows of {path.name}")
+    threads = resources.read_threads
+    log(f"running {len(bounds)} windows of {path.name} on {threads} read threads")
     pipeline = BatchPipeline(
         path,
         bounds,

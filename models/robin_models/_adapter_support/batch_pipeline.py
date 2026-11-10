@@ -27,23 +27,46 @@ BatchRunner = Callable[[Bounds, np.ndarray], Iterator[WindowOutput]]
 # A batch that a reader has read: its windows' bounds and its padded rows.
 _ReadBatch = tuple[Bounds, np.ndarray]
 
-# Each reader reads one batch at a time, with its own file handle. Two CPUs stay free for
-# the model thread and the engine.
-READERS = max(1, min(3, (os.cpu_count() or 1) - 2))
+# A container's CPU limit, as "<quota> <period>" in microseconds, or "max <period>" for no
+# limit. os.cpu_count() counts the host's CPUs, not this limit.
+CPU_MAX_FILE = Path("/sys/fs/cgroup/cpu.max")
 
 # Every thread of the window loop has a name with this prefix.
 THREAD_NAME_PREFIX = "robin-windows-"
 
 
+def get_default_read_threads() -> int:
+    """Return the CPUs that this process can use, less two, and at least 1."""
+    return max(1, get_cpu_count() - 2)
+
+
+def get_cpu_count() -> int:
+    """Return the host's CPUs, or the container's CPU limit if it is lower.
+
+    A limit that includes part of a CPU is rounded down. Returns 1 if the count is unknown.
+    """
+    count = os.cpu_count() or 1
+    try:
+        quota, period = CPU_MAX_FILE.read_text().split()
+    except FileNotFoundError:
+        return count
+    if quota == "max":
+        return count
+    return max(1, min(count, int(quota) // int(period)))
+
+
 class WindowResources(Resources):
     """The resources of an adapter that runs the window loop.
 
-    `read_ahead_batches` bounds the batches read but not yet given to the model, and so
-    the memory that the readers hold. The readers can also hold one batch each. A reader
-    decodes the windows of its batch in blocks of at most `read_block_seconds`. A whole
-    number of seconds, such as 60, is accepted.
+    `read_threads` is the number of reader threads. Each reader reads one batch at a time,
+    with its own file handle. By default, two CPUs stay free for the model thread and the
+    engine (see `get_default_read_threads`). `read_ahead_batches` bounds the batches read
+    but not yet given to the model, and so the memory that the readers hold. The readers
+    can also hold one batch each. A reader decodes the windows of its batch in blocks of at
+    most `read_block_seconds`. A whole number of seconds, such as 60, is accepted.
     """
 
+    read_threads: PositiveInt = Field(default_factory=get_default_read_threads)
     read_ahead_batches: PositiveInt = 4
     read_block_seconds: float = Field(60.0, gt=0, allow_inf_nan=False)
 
@@ -95,7 +118,7 @@ class BatchPipeline:
     """Read one recording's batches on reader threads, and run the model on them on one
     model thread.
 
-    Each of up to `READERS` readers takes the next batch number, decodes that batch, and
+    Each of `read_threads` readers takes the next batch number, decodes that batch, and
     puts it in `_ready`. The model thread runs the batches in number order: a batch that
     arrives before its turn waits until the batches before it have run. `get_outputs`
     yields the outputs in window order. An error in any thread goes through the queues in
@@ -119,10 +142,11 @@ class BatchPipeline:
         self._width = width
         self._batch_size = resources.batch_size
         self._block_seconds = resources.read_block_seconds
+        self._read_threads = resources.read_threads
         self._read_block = read_block
         self._cut_window = cut_window
         self._run_batch = run_batch
-        self.seconds = _Seconds(reads=[0.0] * READERS)
+        self.seconds = _Seconds(reads=[0.0] * resources.read_threads)
         self._batch_count = math.ceil(len(bounds) / self._batch_size)
         # Each batch number is taken by one reader, in order.
         self._numbers: queue.SimpleQueue[int] = queue.SimpleQueue()
@@ -130,7 +154,7 @@ class BatchPipeline:
             self._numbers.put(number)
         # A reader takes a slot before it takes a batch, and the model gives the slot back
         # when it takes that batch. So the batches read but not yet taken stay bounded.
-        self._slots = threading.Semaphore(resources.read_ahead_batches + READERS)
+        self._slots = threading.Semaphore(resources.read_ahead_batches + resources.read_threads)
         # Each item is a batch number and its batch, or the error that its reader raised.
         self._ready: queue.Queue[tuple[int, _ReadBatch | _Failure]] = queue.Queue()
         # Each item is the outputs of one batch, the error that stopped the loop, or _END.
@@ -171,7 +195,7 @@ class BatchPipeline:
                 name=f"{THREAD_NAME_PREFIX}reader-{position}",
                 daemon=True,
             )
-            for position in range(READERS)
+            for position in range(self._read_threads)
         ]
         model = threading.Thread(
             target=self._score_batches, name=f"{THREAD_NAME_PREFIX}model", daemon=True
