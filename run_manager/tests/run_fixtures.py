@@ -66,7 +66,7 @@ KUBERNETES_SETTINGS = {
 
 
 def get_fixed_settings(settings) -> Callable[[ModelCard | HeadCard], ResolvedSettings]:
-    """A `get_resolved_settings` for `submit_run` that gives `settings` for every model."""
+    """A `resolve_run_settings` for `submit_run` that gives `settings` for every model."""
     compute = settings["compute"]
     resolved = ResolvedSettings(
         setup=settings["setup"],
@@ -152,7 +152,7 @@ def submit(
         preset=None,
         configuration=configuration,
         recordings=make_recording_manifest(values),
-        get_resolved_settings=get_fixed_settings(execution_settings),
+        resolve_run_settings=get_fixed_settings(execution_settings),
         actor=actor,
         release_versions=release_versions,
     ).run_id

@@ -1,7 +1,10 @@
 # The profile
 
 A profile is a folder with `config.yaml` and one file for each environment, such as
-`local.yaml`. Each `${NAME}` in a value becomes the environment variable `NAME`.
+`local.yaml`. Each `${NAME}` in a value becomes the environment variable `NAME`. If
+`NAME` is not set, `NAME_FILE` can give the path of a file that holds the value, such
+as a password file. Robin reads the file as UTF-8 and removes one final line ending.
+Set only one of `NAME` and `NAME_FILE`.
 Besides `database`, a profile has these sections:
 
 - `compute` says where runs execute. It has named `setups` and the `models` that runs
@@ -23,6 +26,7 @@ Besides `database`, a profile has these sections:
   `kind` for a built-in adapter, or `code: module:function` for an installed one.
   Its other fields are the adapter's settings. Robin fills in their `${NAME}` values
   only for `--selection`, so other commands work without the adapter's credentials.
+  This includes a `NAME_FILE`: Robin reads it only for `--selection`.
 
 The built-in catalog adapters:
 
@@ -138,7 +142,7 @@ compute:
     aws-cpu:
       kind: aws-batch
       job_queue: arn:aws:batch:us-west-2:<account>:job-queue/robin-cpu
-      job_definition: arn:aws:batch:us-west-2:<account>:job-definition/robin-worker:12
+      job_definition: robin-worker
       max_in_flight: 50
       max_request: {VCPU: "16", MEMORY: "65536"}
       request:
@@ -149,9 +153,12 @@ compute:
       request: {requests: {MEMORY: "32768"}}
 ```
 
-`job_queue` and `job_definition` are ARNs in the same partition, region, and account.
-The job definition ARN ends with its revision. The revision gives the image and the
-job role, and a run keeps the revision that it was submitted with.
+`job_queue` is a job queue ARN. `job_definition` is a job definition name, or an ARN
+that ends with its revision, in the queue's partition, region, and account. The
+revision gives the image and the job role. For a name, Robin finds the newest active
+revision in the queue's region at submit, and the run keeps that revision's ARN. That
+revision must have the queue's partition, region, and account, or the submit is
+refused. So a run keeps the revision that it was submitted with.
 
 `request.requests` takes only `VCPU`, `MEMORY` (in MiB), and `GPU`, each a whole
 number of at least 1, written as text. `limits` must be empty.

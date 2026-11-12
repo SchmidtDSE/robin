@@ -31,7 +31,7 @@ from robin_adapters.compute.kubernetes.settings import KubernetesSetup
 from robin_adapters.compute.local.settings import LocalSetup
 from robin_run_manager.profile import (
     Profile,
-    get_resolved_settings,
+    resolve_run_settings,
 )
 from robin_run_manager import launch, reconcile
 from robin_run_manager.reconcile import reconcile_once
@@ -100,7 +100,8 @@ def submit_here(database, profile, values, *, actor="ana"):
 
 def submit_settings(profile):
     """The settings that a run of the fixture model freezes with this profile."""
-    return get_resolved_settings(profile, read_pinned_model("owl-v4").card).execution_settings
+    card = read_pinned_model("owl-v4").card
+    return resolve_run_settings(profile, card, compute={}).execution_settings
 
 
 def with_setup(profile, **fields):
@@ -774,7 +775,7 @@ def submit_with_profile(database, profile, configuration=OWL_CONFIGURATION, valu
     return submit_run(
         database, preset=None, configuration=configuration,
         recordings=make_recording_manifest(list(values)),
-        get_resolved_settings=partial(get_resolved_settings, profile), actor="ana",
+        resolve_run_settings=partial(resolve_run_settings, profile, compute={}), actor="ana",
         release_versions=RELEASE_OUTPUT_VERSIONS,
     ).run_id
 

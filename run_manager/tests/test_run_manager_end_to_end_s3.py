@@ -19,7 +19,7 @@ from robin_run_manager.compose import compose
 from robin_run_manager.configuration import read_configuration
 from robin_run_manager.models import register_model
 from robin_run_manager.presets import create_preset
-from robin_run_manager.profile import Profile, get_resolved_settings
+from robin_run_manager.profile import Profile, resolve_run_settings
 from robin_run_manager.reconcile import reconcile_once
 from robin_run_manager.recording_inputs import read_uris_file
 from robin_run_manager.submit import submit_run
@@ -127,7 +127,7 @@ def test_a_run_on_s3_storage_ends_with_its_result_and_outputs(
             preset="e2e",
             configuration=None,
             recordings=read_uris_file(uris_path, "survey"),
-            get_resolved_settings=partial(get_resolved_settings, profile),
+            resolve_run_settings=partial(resolve_run_settings, profile, compute=services.compute),
             actor="ana",
             release_versions=VERSIONS,
         ).run_id

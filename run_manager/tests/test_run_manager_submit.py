@@ -20,12 +20,13 @@ from robin_run_manager.errors import (
     UNKNOWN_OUTPUT_VERSION,
     UNKNOWN_PRESET,
     UNSUPPORTED_LOCATION,
+    ComputeUnavailable,
     NotConfigured,
     Refused,
 )
 from robin_run_manager.models import register_model
 from robin_run_manager.presets import create_preset
-from robin_run_manager.profile import Profile, get_resolved_settings
+from robin_run_manager.profile import Profile, resolve_run_settings
 from robin_run_manager.recording_inputs import RecordingManifest
 from robin_run_manager.setup_targets import lock_setup_name
 from robin_run_manager.submit import submit_run
@@ -84,7 +85,7 @@ def test_a_run_from_a_preset_is_stored_preparing(registered):
         preset="owl",
         configuration=None,
         recordings=submitted_list,
-        get_resolved_settings=get_fixed_settings(LOCAL_SETTINGS),
+        resolve_run_settings=get_fixed_settings(LOCAL_SETTINGS),
         actor="ben",
     )
 
@@ -111,7 +112,7 @@ def test_a_preset_and_its_configuration_give_the_same_digest(registered):
         preset="owl",
         configuration=None,
         recordings=make_recording_manifest(),
-        get_resolved_settings=get_fixed_settings(LOCAL_SETTINGS),
+        resolve_run_settings=get_fixed_settings(LOCAL_SETTINGS),
         actor="ana",
     )
     from_file = submit_run(
@@ -119,7 +120,7 @@ def test_a_preset_and_its_configuration_give_the_same_digest(registered):
         preset=None,
         configuration=OWL_CONFIGURATION,
         recordings=make_recording_manifest(),
-        get_resolved_settings=get_fixed_settings(LOCAL_SETTINGS),
+        resolve_run_settings=get_fixed_settings(LOCAL_SETTINGS),
         actor="ana",
     )
 
@@ -132,7 +133,7 @@ def test_a_full_configuration_is_stored_for_later_heads(registered):
         preset=None,
         configuration=PERCH_CONFIGURATION,
         recordings=make_recording_manifest(),
-        get_resolved_settings=get_fixed_settings(LOCAL_SETTINGS),
+        resolve_run_settings=get_fixed_settings(LOCAL_SETTINGS),
         actor="ana",
     )
 
@@ -154,7 +155,7 @@ def test_both_or_neither_is_an_invalid_request(registered, both):
             preset="owl" if both else None,
             configuration=OWL_CONFIGURATION if both else None,
             recordings=make_recording_manifest(),
-            get_resolved_settings=get_fixed_settings(LOCAL_SETTINGS),
+            resolve_run_settings=get_fixed_settings(LOCAL_SETTINGS),
             actor="ana",
         )
 
@@ -166,7 +167,7 @@ def test_an_unknown_preset_is_refused(registered):
     with pytest.raises(Refused) as refused:
         submit_run(
             registered, preset="absent", configuration=None, recordings=make_recording_manifest(),
-            get_resolved_settings=get_fixed_settings(LOCAL_SETTINGS),
+            resolve_run_settings=get_fixed_settings(LOCAL_SETTINGS),
             actor="ana",
         )
 
@@ -187,7 +188,7 @@ def test_a_model_not_in_the_release_is_refused_and_nothing_is_stored(registered)
             preset=None,
             configuration=OWL_CONFIGURATION,
             recordings=make_recording_manifest(),
-            get_resolved_settings=get_fixed_settings(LOCAL_SETTINGS),
+            resolve_run_settings=get_fixed_settings(LOCAL_SETTINGS),
             actor="ana",
             release_versions=release_versions,
         )
@@ -208,7 +209,7 @@ def test_a_head_run_freezes_both_versions(registered):
         preset=None,
         configuration=HEAD_CONFIGURATION,
         recordings=make_recording_manifest(),
-        get_resolved_settings=get_fixed_settings(LOCAL_SETTINGS),
+        resolve_run_settings=get_fixed_settings(LOCAL_SETTINGS),
         actor="ana",
         release_versions=release_versions,
     )
@@ -227,7 +228,7 @@ def test_the_provenance_is_stored_with_the_recording_count(registered):
         preset=None,
         configuration=OWL_CONFIGURATION,
         recordings=make_recording_manifest(5),
-        get_resolved_settings=get_fixed_settings(LOCAL_SETTINGS),
+        resolve_run_settings=get_fixed_settings(LOCAL_SETTINGS),
         actor="ana",
     )
 
@@ -243,13 +244,13 @@ def test_the_same_submission_twice_makes_two_runs(registered):
     first = submit_run(
         registered, preset=None, configuration=OWL_CONFIGURATION,
         recordings=make_recording_manifest(),
-        get_resolved_settings=get_fixed_settings(LOCAL_SETTINGS),
+        resolve_run_settings=get_fixed_settings(LOCAL_SETTINGS),
         actor="ana",
     )
     second = submit_run(
         registered, preset=None, configuration=OWL_CONFIGURATION,
         recordings=make_recording_manifest(),
-        get_resolved_settings=get_fixed_settings(LOCAL_SETTINGS),
+        resolve_run_settings=get_fixed_settings(LOCAL_SETTINGS),
         actor="ana",
     )
 
@@ -263,7 +264,7 @@ def test_a_list_of_20000_recordings_is_stored(registered):
         preset=None,
         configuration=OWL_CONFIGURATION,
         recordings=make_recording_manifest(20000),
-        get_resolved_settings=get_fixed_settings(LOCAL_SETTINGS),
+        resolve_run_settings=get_fixed_settings(LOCAL_SETTINGS),
         actor="ana",
     )
 
@@ -289,7 +290,7 @@ def submit_configuration(
         preset=None,
         configuration=configuration,
         recordings=recordings,
-        get_resolved_settings=get_fixed_settings(execution_settings),
+        resolve_run_settings=get_fixed_settings(execution_settings),
         actor="ana",
     )
 
@@ -340,7 +341,7 @@ def submit_with_profile(database, profile, configuration):
         preset=None,
         configuration=configuration,
         recordings=make_recording_manifest(),
-        get_resolved_settings=partial(get_resolved_settings, profile),
+        resolve_run_settings=partial(resolve_run_settings, profile, compute={}),
         actor="ana",
     )
 
@@ -511,3 +512,50 @@ def test_a_robin_models_registry_is_accepted_under_kubernetes(migrated_database)
     submitted = submit_configuration(migrated_database, make_s3_manifest(), KUBERNETES_SETTINGS)
 
     assert submitted.recording_count == 3
+
+
+class FailingPin:
+    """A compute adapter whose `pin_settings` raises `error`."""
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def pin_settings(self, settings):
+        raise self.error
+
+
+@pytest.mark.parametrize(
+    ("compute", "raised"),
+    [
+        ({"aws-batch": FailingPin(ValueError("no active revision"))}, Refused),
+        ({"aws-batch": FailingPin(RuntimeError("expired login"))}, ComputeUnavailable),
+        ({}, NotConfigured),
+    ],
+    ids=["refused", "unavailable", "no-adapter"],
+)
+def test_a_pin_failure_stores_no_run(registered, compute, raised):
+    profile = Profile.model_validate({
+        "database": {"host": "localhost", "dbname": "robin", "user": "robin", "password": "x"},
+        "compute": {
+            "setups": {"gpu": {
+                "kind": "aws-batch",
+                "job_queue": "arn:aws:batch:us-west-2:123456789012:job-queue/robin-gpu",
+                "job_definition": "robin-worker-gpu",
+            }},
+            "models": {"owl/v4": {}},
+        },
+        "storage": {"kind": "s3", "root": "s3://robin/"},
+    })
+    before = count_rows(registered, "runs")
+
+    with pytest.raises(raised):
+        submit_run(
+            registered,
+            preset=None,
+            configuration=OWL_CONFIGURATION,
+            recordings=make_s3_manifest(),
+            resolve_run_settings=partial(resolve_run_settings, profile, compute=compute),
+            actor="ana",
+        )
+
+    assert count_rows(registered, "runs") == before

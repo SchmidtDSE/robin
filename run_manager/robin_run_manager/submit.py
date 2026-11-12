@@ -45,18 +45,18 @@ def submit_run(
     preset: str | None,
     configuration: UnresolvedConfiguration | None,
     recordings: RecordingManifest,
-    get_resolved_settings: Callable[[ModelCard | HeadCard], ResolvedSettings],
+    resolve_run_settings: Callable[[ModelCard | HeadCard], ResolvedSettings],
     actor: str,
     release_versions: Sequence[ModelOutputVersion] = RELEASE_OUTPUT_VERSIONS,
 ) -> Submitted:
     """Store a new run of `recordings` in `preparing`. Give a preset or a configuration.
 
     The run freezes its configuration, output versions, recording list, and the
-    settings that `get_resolved_settings` gives for the card of the configuration's model,
-    such as `partial(get_resolved_settings, profile)`. It claims nothing: preparation
-    does that later. Each recording and model file must have a location form that the
-    settings' compute kind can read. Raises `NotConfigured` if a run of the same setup
-    name still has work and was submitted with another target.
+    settings that `resolve_run_settings` gives for the card of the configuration's model,
+    such as `partial(resolve_run_settings, profile, compute=adapters)`. It claims
+    nothing: preparation does that later. Each recording and model file must have a
+    location form that the settings' compute kind can read. Raises `NotConfigured` if
+    a run of the same setup name still has work and was submitted with another target.
     """
     if (preset is None) == (configuration is None):
         raise Refused(INVALID_REQUEST, "Give a preset or a configuration, and not both.")
@@ -65,7 +65,7 @@ def submit_run(
         stored = get_stored_configuration(connection, digest)
         cards = _get_cards(connection, stored)
         versions = get_frozen_output_versions(cards, release_versions)
-        resolved = get_resolved_settings(cards[0])
+        resolved = resolve_run_settings(cards[0])
         settings = resolved.execution_settings
         _refuse_unsupported_locations(settings["compute"]["kind"], recordings, stored)
         # The lock holds until the run is committed, so a second submit of this setup

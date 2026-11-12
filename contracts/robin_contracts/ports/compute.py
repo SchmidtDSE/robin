@@ -14,6 +14,13 @@ The run manager gives each call a `ComputeTask`. An adapter promises this:
 - `stop` asks the execution to end. `release` frees what the compute service keeps for
   the task after its outcome is recorded. Both are safe to repeat. `release` never
   deletes `work.json`, `result.json`, or the task's outputs.
+- `pin_settings` gets a setup's fields from the profile, and returns the fields that a
+  new run stores. A run must always use the same settings, but some profile values
+  refer to something that can change. For example, a Batch job definition name
+  refers to the newest revision, and a new revision can be added at any time. For
+  such a value, `pin_settings` returns the exact item that it refers to now, such as
+  the ARN of that revision. It returns other values unchanged. If it cannot pin a
+  value, it raises `ValueError`. The message names the field, never its value.
 
 Robin reports an exception that is not `SubmissionRejected` by its type only, because its
 text can hold a credential.
@@ -91,6 +98,11 @@ class ComputeSetupSettings(BaseModel):
         the submits of that model. The message names the field, never its value.
         """
 
+    def is_pinning_required(self) -> bool:
+        """Returns True if a run cannot keep the setup's declared fields as the profile
+        gives them, so that a new run needs the adapter's `pin_settings`."""
+        return False
+
 
 class ComputeTask(BaseModel, frozen=True):
     """The task that a compute call acts on.
@@ -138,3 +150,4 @@ class ComputeAdapter(Protocol):
     def describe(self, task: ComputeTask) -> ComputeStatus: ...
     def stop(self, task: ComputeTask) -> None: ...
     def release(self, task: ComputeTask) -> None: ...
+    def pin_settings(self, settings: Mapping[str, JsonValue]) -> dict[str, JsonValue]: ...

@@ -10,16 +10,25 @@ task's name, and not only the one that the task stores.
 
 Credentials come from boto3's default chain, which is the operator's AWS login. The
 region comes from the queue ARN.
+
+A setup can name its job definition. At submit, `pin_settings` replaces the name with
+the ARN of its newest active revision, so each run keeps the revision that it was
+submitted with.
 """
 
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import boto3
 from botocore.exceptions import ClientError
+from pydantic import JsonValue
 
-from robin_adapters.compute.aws_batch.settings import get_job_queue_region
+from robin_adapters.compute.aws_batch.settings import (
+    get_job_queue_place,
+    get_job_queue_region,
+    get_revision_place,
+)
 from robin_contracts.ports.compute import ComputeStatus, ComputeTask, SubmissionRejected
 
 _WAITING_STATES = frozenset({"SUBMITTED", "PENDING", "RUNNABLE", "STARTING"})
@@ -42,6 +51,13 @@ class AwsBatchCompute:
         self._lock = threading.Lock()
 
     def submit(self, task: ComputeTask) -> str:
+        # A run keeps a pinned revision. A name here would take the revision that is
+        # active at launch, and not the one that the run was submitted with.
+        if get_revision_place(task.settings["job_definition"]) is None:
+            raise SubmissionRejected(
+                f"Task {task.task_id} has no job definition revision, so Robin did not "
+                "submit it."
+            )
         jobs = self._list_task_jobs(task)
         if jobs:
             return _get_newest(jobs)["jobId"]
@@ -50,7 +66,7 @@ class AwsBatchCompute:
         if deadline is not None:
             options["timeout"] = {"attemptDurationSeconds": deadline}
         try:
-            submitted = self._get_client(task).submit_job(
+            submitted = self._get_client(task.settings["job_queue"]).submit_job(
                 jobName=str(task.task_id),
                 jobQueue=task.settings["job_queue"],
                 jobDefinition=task.settings["job_definition"],
@@ -97,13 +113,45 @@ class AwsBatchCompute:
 
     def stop(self, task: ComputeTask) -> None:
         """Ends every job of the task that has not ended, also a second job of the task."""
-        client = self._get_client(task)
+        client = self._get_client(task.settings["job_queue"])
         for job in self._list_task_jobs(task):
             if job["status"] not in _ENDED_STATES:
                 client.terminate_job(jobId=job["jobId"], reason="Stopped by Robin")
 
     def release(self, task: ComputeTask) -> None:
         """Does nothing: Batch keeps a job's record for a time, and then removes it."""
+
+    def pin_settings(self, settings: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+        """Returns the settings with a job definition name replaced by the ARN of its
+        newest active revision, in the queue's region. A job definition ARN is kept,
+        with no call to Batch.
+
+        Raises `ValueError` if the name has no active revision, or if the revision's
+        partition, region, or account is not the queue's.
+        """
+        job_queue = settings["job_queue"]
+        job_definition = settings["job_definition"]
+        if get_revision_place(job_definition) is not None:
+            return dict(settings)
+        client = self._get_client(job_queue)
+        parameters = {"jobDefinitionName": job_definition, "status": "ACTIVE"}
+        newest: dict[str, Any] | None = None
+        while True:
+            page = client.describe_job_definitions(**parameters)
+            for definition in page["jobDefinitions"]:
+                if newest is None or definition["revision"] > newest["revision"]:
+                    newest = definition
+            if "nextToken" not in page:
+                break
+            parameters["nextToken"] = page["nextToken"]
+        if newest is None:
+            raise ValueError("job_definition has no active revision in the queue's region")
+        # A login to another account would find that account's job definition.
+        if get_revision_place(newest["jobDefinitionArn"]) != get_job_queue_place(job_queue):
+            raise ValueError(
+                "job_definition must have the partition, region, and account of job_queue"
+            )
+        return {**settings, "job_definition": newest["jobDefinitionArn"]}
 
     def _list_task_jobs(self, task: ComputeTask) -> list[dict[str, Any]]:
         """Every job of the task's name in the task's queue, and the job of its
@@ -113,7 +161,7 @@ class AwsBatchCompute:
         just made can be missing from it for a short time, so the stored job is also
         read with `DescribeJobs`.
         """
-        client = self._get_client(task)
+        client = self._get_client(task.settings["job_queue"])
         jobs: dict[str, dict[str, Any]] = {}
         parameters = {
             "jobQueue": task.settings["job_queue"],
@@ -130,8 +178,8 @@ class AwsBatchCompute:
             jobs.update((job["jobId"], job) for job in described)
         return list(jobs.values())
 
-    def _get_client(self, task: ComputeTask) -> Any:
-        region = get_job_queue_region(task.settings["job_queue"])
+    def _get_client(self, job_queue: str) -> Any:
+        region = get_job_queue_region(job_queue)
         with self._lock:
             if region not in self._clients:
                 self._clients[region] = self._make_client(region)

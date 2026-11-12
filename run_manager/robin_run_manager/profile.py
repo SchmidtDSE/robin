@@ -5,13 +5,14 @@ Loading, in `load_profile`:
 1. `_read_profile_file` reads `config.yaml` (if there is one) and `{environment}.yaml`.
    The environment file replaces whole top-level sections of `config.yaml`.
 2. `_resolve_variables` replaces each `${NAME}` in a text value with the environment
-   variable NAME (`_get_variable`). A variable that is not set stops loading. In the
-   catalog section, only `kind` and `code` are resolved now.
+   variable NAME, or else with the text of the file that `NAME_FILE` names
+   (`_get_variable`). A variable that is not set stops loading. In the catalog
+   section, only `kind` and `code` are resolved now.
 3. `Profile.model_validate` checks every section. The setup classes, `ComputeSettings`,
    and the storage settings classes check their own fields, and `Profile` checks that each
    setup's kind can use the storage root. A problem is `invalid_profile`.
 
-A submit, in `get_resolved_settings`, for the model of the configuration:
+A submit, in `resolve_run_settings`, for the model of the configuration:
 
 1. `get_compute_section` gives the `compute` section, or raises `NotConfigured`.
 2. `_get_model_key` finds the model's `compute.models` entry: its model ID, or for a
@@ -22,10 +23,13 @@ A submit, in `get_resolved_settings`, for the model of the configuration:
    only. A setup that the profile lacks is `invalid_request`.
 4. The setup's `check_new_run` checks the merged request against the rules of its
    kind. A problem is `invalid_profile`.
-5. `get_setup_target` gives the setup's target: its compute's `TARGET_FIELDS`, and
+5. `_pin_setup_fields` gives the setup's declared fields as the run keeps them. The
+   compute adapter of the setup's kind pins them, such as a job definition name to
+   the ARN of its newest revision.
+6. `get_setup_target` gives the setup's target: its compute's `TARGET_FIELDS`, and
    the storage section (`_get_declared_fields`).
-6. The result, `ResolvedSettings`, holds the run's `execution_settings` (the setup
-   name, the setup's declared fields, the storage section, and the merged request and
+7. The result, `ResolvedSettings`, holds the run's `execution_settings` (the setup
+   name, the setup's pinned fields, the storage section, and the merged request and
    resources) and the target that the submit's target check compares.
 
 A reconcile pass reads the profile live through `get_compute_section` (the setups and
@@ -56,7 +60,7 @@ from pydantic import (
 )
 
 from robin_contracts.cards import HeadCard, ModelCard, model_ref
-from robin_contracts.ports.compute import ComputeRequest, ComputeSetupSettings
+from robin_contracts.ports.compute import ComputeAdapter, ComputeRequest, ComputeSetupSettings
 from robin_contracts.protocols import JsonScalar
 from robin_contracts.text_formats import InvalidText, load_yaml
 from robin_contracts.work import FiniteScalarMap, NonEmptyText
@@ -65,6 +69,7 @@ from robin_run_manager.errors import (
     INVALID_PROFILE,
     INVALID_REQUEST,
     MODEL_NOT_IN_PROFILE,
+    ComputeUnavailable,
     NotConfigured,
     Refused,
 )
@@ -362,15 +367,21 @@ class ResolvedSettings:
     execution_settings: Mapping[str, Any]
 
 
-def get_resolved_settings(
+def resolve_run_settings(
     profile: Profile,
     card: ModelCard | HeadCard,
     *,
+    compute: Mapping[str, ComputeAdapter],
     setup: str | None = None,
     resources: Mapping[str, JsonScalar] | None = None,
 ) -> ResolvedSettings:
     """Returns the settings of a new run of the card's model: its `compute.models`
     entry merged over its setup, and the storage section.
+
+    `compute` holds a compute adapter for each kind that this version has. The adapter
+    of the setup's kind pins the setup's declared fields, which can make a request to
+    the compute service. The run keeps the pinned fields, and the target check uses the
+    profile's fields.
 
     `setup` and `resources` change this run only: `setup` replaces the entry's setup,
     and `resources` are merged over the result. Raises `Refused` with `invalid_request`
@@ -380,23 +391,26 @@ def get_resolved_settings(
     `head_runtime:<runtime>`. Raises `NotConfigured` if the profile has no `compute`
     section, `Refused` with `model_not_in_profile` if it has no entry for the model,
     and `Refused` with `invalid_profile` if the setup's kind cannot use the merged
-    request.
+    request. For the pin, see `_pin_setup_fields`.
     """
-    compute = get_compute_section(profile)
-    key = _get_model_key(compute, card)
-    if setup is not None and setup not in compute.setups:
+    section = get_compute_section(profile)
+    key = _get_model_key(section, card)
+    if setup is not None and setup not in section.setups:
         raise Refused(
             INVALID_REQUEST,
             f"The profile has no setup {setup!r}. Its setups are: "
-            f"{', '.join(sorted(compute.setups))}.",
-            details={"setup": setup, "setups": sorted(compute.setups)},
+            f"{', '.join(sorted(section.setups))}.",
+            details={"setup": setup, "setups": sorted(section.setups)},
         )
-    merged = get_merged_model_settings(compute, key, setup=setup, resources=resources)
-    _check_new_run(compute.setups[merged.setup], merged, model_ref(card).id)
+    merged = get_merged_model_settings(section, key, setup=setup, resources=resources)
+    model_id = model_ref(card).id
+    compute_setup = section.setups[merged.setup]
+    _check_new_run(compute_setup, merged, model_id)
+    pinned = _pin_setup_fields(compute_setup, merged.setup, model_id, compute)
     target_compute, storage = get_setup_target(profile, merged.setup)
     execution_settings = {
         "setup": merged.setup,
-        "compute": _get_declared_fields(compute.setups[merged.setup]),
+        "compute": pinned,
         "storage": storage,
         "request": merged.request.model_dump(mode="json"),
         "resources": dict(merged.resources),
@@ -418,10 +432,52 @@ def _check_new_run(setup: ComputeSetup, merged: MergedModelSettings, model_id: s
         problem = str(error)
     else:
         return
-    raise Refused(
+    raise _get_setup_refusal(model_id, merged.setup, problem)
+
+
+def _get_setup_refusal(model_id: str, setup: str, problem: object) -> Refused:
+    """The `invalid_profile` refusal of a model's new run on a setup."""
+    return Refused(
         INVALID_PROFILE,
-        f"The profile cannot run model {model_id} on setup {merged.setup}: {problem}.",
-        details={"model": model_id, "setup": merged.setup},
+        f"The profile cannot run model {model_id} on setup {setup}: {problem}.",
+        details={"model": model_id, "setup": setup},
+    )
+
+
+def _pin_setup_fields(
+    setup: ComputeSetup, name: str, model_id: str, compute: Mapping[str, ComputeAdapter]
+) -> dict[str, Any]:
+    """Returns the fields that a new run stores: the setup's fields from the profile,
+    after the adapter of its kind pins them.
+
+    With no adapter for the kind, the fields are kept as they are, or `NotConfigured`
+    is raised if the setup needs a pin. A `ValueError` of the adapter is `Refused` with
+    `invalid_profile`. Any other error is `ComputeUnavailable`, which names the error's
+    type only, because its text can hold a credential.
+    """
+    declared = _get_declared_fields(setup)
+    adapter = compute.get(setup.kind)
+    if adapter is None:
+        if setup.is_pinning_required():
+            raise NotConfigured(
+                f"Setup {name} requires its settings to be pinned, but no compute adapter "
+                f"is available for kind {setup.kind}.",
+                details={"setup": name},
+            )
+        return declared
+    try:
+        return adapter.pin_settings(declared)
+    except Exception as error:
+        failure = error
+    # Raised outside the handler, so that the error's text is not linked to the refusal.
+    if isinstance(failure, ValueError):
+        raise _get_setup_refusal(model_id, name, failure)
+    error_type = type(failure).__name__
+    raise ComputeUnavailable(
+        f"The compute adapter failed with {error_type} when Robin pinned the settings of "
+        f"setup {name}. Its message is not shown, because it can hold a credential. "
+        "Robin stored no run.",
+        details={"setup": name, "error_type": error_type},
     )
 
 
@@ -623,10 +679,44 @@ def _resolve_variables(
 
 
 def _get_variable(name: str, environ: Mapping[str, str], where: str) -> str:
-    if name not in environ:
+    """The value of the environment variable `name`, or else the text of the file that
+    `{name}_FILE` names. Raises `Refused` with `invalid_profile` if neither or both are
+    set, or if the file cannot be read."""
+    file_variable = f"{name}_FILE"
+    if name in environ and file_variable in environ:
         raise Refused(
             INVALID_PROFILE,
-            f"The profile value {where} needs the environment variable {name}, which is not set.",
+            f"The profile value {where} needs the variable {name}, and both {name} and "
+            f"{file_variable} are set. Set only one of {name} and {file_variable}.",
             details={"field": where, "variable": name},
         )
-    return environ[name]
+    if name in environ:
+        return environ[name]
+    if file_variable in environ:
+        return _read_variable_file(file_variable, environ[file_variable], where)
+    raise Refused(
+        INVALID_PROFILE,
+        f"The profile value {where} needs the environment variable {name}, which is not "
+        f"set. Set {name}, or set {file_variable} to the path of a file that holds the value.",
+        details={"field": where, "variable": name},
+    )
+
+
+def _read_variable_file(variable: str, path: str, where: str) -> str:
+    """The UTF-8 text of the file at `path`, without one final line ending."""
+    try:
+        # Read as bytes, so that a line ending inside the value is kept as it is.
+        text = Path(path).read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        text = None
+    if text is None:
+        # Raised outside the handler. A decode error quotes the bytes, which are a secret.
+        raise Refused(
+            INVALID_PROFILE,
+            f"The profile value {where} needs the file that {variable} names, and Robin "
+            "cannot read that file as UTF-8 text.",
+            details={"field": where, "variable": variable},
+        )
+    if text.endswith("\r\n"):
+        return text[:-2]
+    return text.removesuffix("\n")

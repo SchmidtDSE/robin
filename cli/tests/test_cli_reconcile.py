@@ -126,7 +126,11 @@ def get_secret_error() -> RuntimeError:
 
 
 class SecretCompute:
-    """A compute adapter whose every call raises an error that holds a secret."""
+    """A compute adapter whose every task call raises an error that holds a secret. Its
+    pin keeps the settings, so that a run can be submitted."""
+
+    def pin_settings(self, settings):
+        return dict(settings)
 
     def submit(self, task):
         raise get_secret_error()

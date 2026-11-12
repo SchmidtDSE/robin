@@ -10,6 +10,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from pydantic import JsonValue
+
 from robin_contracts.local_files import get_local_path, has_uri_scheme
 from robin_contracts.ports.compute import ComputeStatus, ComputeTask, SubmissionRejected
 
@@ -71,6 +73,10 @@ class LocalCompute:
         self._state_folder = get_state_folder() if state_folder is None else state_folder
         self._started: list[subprocess.Popen[bytes]] = []
         self._started_lock = threading.Lock()
+
+    def pin_settings(self, settings: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+        """Returns the settings unchanged: a local setup has nothing to pin."""
+        return dict(settings)
 
     def submit(self, task: ComputeTask) -> str:
         folder = self._get_task_folder(task)

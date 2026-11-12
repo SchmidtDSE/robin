@@ -5,10 +5,10 @@ import yaml
 
 from model_fixtures import read_pinned_model
 from robin_contracts.ports.compute import ComputeRequest
-from robin_run_manager.errors import NotConfigured, Refused
+from robin_run_manager.errors import ComputeUnavailable, NotConfigured, Refused
 from robin_run_manager.profile import (
     ResolvedSettings,
-    get_resolved_settings,
+    resolve_run_settings,
     get_merged_model_settings,
     get_resolved_catalog_settings,
     load_profile,
@@ -424,6 +424,70 @@ def test_get_resolved_catalog_settings_refuses_a_missing_variable(tmp_path):
     assert raised.value.details == {"field": "catalog.session_token", "variable": "SESSION_TOKEN"}
 
 
+FILE_DATABASE = {**DATABASE, "password": "${DB_PASSWORD}"}
+
+
+def test_a_variable_can_come_from_a_file(tmp_path):
+    secret_file = tmp_path / "db-password"
+    secret_file.write_text("the password\n")
+    write(tmp_path / "profile", "dev.yaml", {"database": FILE_DATABASE})
+
+    profile = load_profile(tmp_path / "profile", "dev", {"DB_PASSWORD_FILE": str(secret_file)})
+
+    assert profile.database.password.get_secret_value() == "the password"
+
+
+def test_a_variable_and_its_file_together_are_refused(tmp_path):
+    secret_file = tmp_path / "db-password"
+    secret_file.write_text(SECRET)
+    write(tmp_path / "profile", "dev.yaml", {"database": FILE_DATABASE})
+    environ = {"DB_PASSWORD": SECRET, "DB_PASSWORD_FILE": str(secret_file)}
+
+    refusal = invalid(tmp_path / "profile", environ)
+
+    assert "DB_PASSWORD_FILE" in refusal.message
+    assert SECRET not in shown(refusal)
+
+
+@pytest.mark.parametrize(
+    "content", [None, b"\xff" + SECRET.encode()], ids=["missing", "not-utf8"]
+)
+def test_a_variable_file_that_cannot_be_read_is_refused(tmp_path, content):
+    secret_file = tmp_path / "db-password"
+    if content is not None:
+        secret_file.write_bytes(content)
+    write(tmp_path / "profile", "dev.yaml", {"database": FILE_DATABASE})
+
+    refusal = invalid(tmp_path / "profile", {"DB_PASSWORD_FILE": str(secret_file)})
+
+    assert "DB_PASSWORD_FILE" in refusal.message
+    assert SECRET not in shown(refusal)
+    assert refusal.__context__ is None
+
+
+def test_a_catalog_variable_can_come_from_a_file(tmp_path):
+    token_file = tmp_path / "token"
+    token_file.write_text(ADAPTER_SECRET + "\r\n")
+    write(tmp_path / "profile", "dev.yaml", {"database": DATABASE, "catalog": CATALOG})
+    profile = load_profile(tmp_path / "profile", "dev", ENVIRON)
+
+    settings = get_resolved_catalog_settings(profile, {"SESSION_TOKEN_FILE": str(token_file)})
+
+    assert settings["session_token"] == ADAPTER_SECRET
+
+
+def test_profile_load_does_not_read_a_catalog_variable_file(tmp_path):
+    write(tmp_path, "dev.yaml", {"database": DATABASE, "catalog": CATALOG})
+    environ = {**ENVIRON, "SESSION_TOKEN_FILE": str(tmp_path / "absent")}
+
+    profile = load_profile(tmp_path, "dev", environ)
+
+    with pytest.raises(Refused) as raised:
+        get_resolved_catalog_settings(profile, environ)
+    assert raised.value.reason == "invalid_profile"
+    assert "SESSION_TOKEN_FILE" in raised.value.message
+
+
 @pytest.mark.parametrize(
     "catalog",
     [{"namespace": "lab"}, {"kind": "csv-list", "code": "lab.catalog:build_adapter"}],
@@ -623,7 +687,7 @@ def test_the_storage_repr_shows_no_endpoint(tmp_path):
         assert "storage.internal" not in text
 
 
-def test_get_resolved_settings_freezes_compute_and_storage(tmp_path):
+def test_resolve_run_settings_freezes_compute_and_storage(tmp_path):
     write(tmp_path, "dev.yaml", {
         "database": DATABASE,
         "compute": make_one_setup_compute(KUBERNETES_SETUP),
@@ -631,7 +695,7 @@ def test_get_resolved_settings_freezes_compute_and_storage(tmp_path):
     })
     profile = load_profile(tmp_path, "dev", {**ENVIRON, "LAB": "owls"})
 
-    settings = get_resolved_settings(profile, OWL_CARD).execution_settings
+    settings = resolve_run_settings(profile, OWL_CARD, compute={}).execution_settings
 
     assert settings["compute"] == {
         "kind": "kubernetes", "namespace": "robin", "s3_secret_name": "robin-s3",
@@ -639,11 +703,11 @@ def test_get_resolved_settings_freezes_compute_and_storage(tmp_path):
     assert settings["storage"] == {"kind": "s3", "root": "s3://lab/owls/", "endpoint": None}
 
 
-def test_get_resolved_settings_needs_compute(tmp_path):
+def test_resolve_run_settings_needs_compute(tmp_path):
     write(tmp_path, "dev.yaml", {"database": DATABASE})
 
     with pytest.raises(NotConfigured):
-        get_resolved_settings(load_profile(tmp_path, "dev", ENVIRON), OWL_CARD)
+        resolve_run_settings(load_profile(tmp_path, "dev", ENVIRON), OWL_CARD, compute={})
 
 
 def test_execution_settings_hold_the_model_setup_target_and_merged_request(tmp_path):
@@ -661,7 +725,7 @@ def test_execution_settings_hold_the_model_setup_target_and_merged_request(tmp_p
         }},
     }, S3_STORAGE)
 
-    resolved = get_resolved_settings(profile, OWL_CARD)
+    resolved = resolve_run_settings(profile, OWL_CARD, compute={})
 
     storage = {**S3_STORAGE, "endpoint": None}
     assert resolved == ResolvedSettings(
@@ -696,8 +760,8 @@ def test_a_submit_can_choose_the_setup_and_resources_of_one_run(tmp_path):
         }},
     }, S3_STORAGE)
 
-    resolved = get_resolved_settings(
-        profile, OWL_CARD, setup="b", resources={"batch_size": 8, "read_threads": 6}
+    resolved = resolve_run_settings(
+        profile, OWL_CARD, compute={}, setup="b", resources={"batch_size": 8, "read_threads": 6}
     )
 
     settings = resolved.execution_settings
@@ -713,7 +777,7 @@ def test_a_submit_that_names_a_setup_the_profile_lacks_is_refused(tmp_path):
     })
 
     with pytest.raises(Refused) as raised:
-        get_resolved_settings(profile, OWL_CARD, setup="c")
+        resolve_run_settings(profile, OWL_CARD, compute={}, setup="c")
 
     assert raised.value.reason == "invalid_request"
     assert "c" in raised.value.details["setup"]
@@ -722,7 +786,7 @@ def test_a_submit_that_names_a_setup_the_profile_lacks_is_refused(tmp_path):
 
 def not_in_profile(profile, card) -> Refused:
     with pytest.raises(Refused) as raised:
-        get_resolved_settings(profile, card)
+        resolve_run_settings(profile, card, compute={})
     assert raised.value.reason == "model_not_in_profile"
     return raised.value
 
@@ -737,7 +801,7 @@ def test_execution_settings_refuse_a_model_that_is_not_listed(tmp_path):
 
 
 def get_request(profile, card) -> dict:
-    return get_resolved_settings(profile, card).execution_settings["request"]["requests"]
+    return resolve_run_settings(profile, card, compute={}).execution_settings["request"]["requests"]
 
 
 def test_a_head_without_its_own_entry_uses_its_runtime_entry(tmp_path):
@@ -760,7 +824,7 @@ def test_a_head_entry_replaces_its_runtime_entry(tmp_path):
         "songbird-head/v1": {"request": {"requests": {"memory": "1Gi"}}},
     }))
 
-    settings = get_resolved_settings(profile, HEAD_CARD).execution_settings
+    settings = resolve_run_settings(profile, HEAD_CARD, compute={}).execution_settings
 
     assert settings["request"]["requests"] == {"memory": "1Gi"}
     assert settings["resources"] == {}
@@ -960,8 +1024,8 @@ def test_execution_settings_leave_out_the_launch_fields(tmp_path, setup):
     with_fields = load_with_compute(tmp_path, make_one_setup_compute({**setup, **LAUNCH_FIELDS}))
 
     assert (
-        get_resolved_settings(with_fields, OWL_CARD).execution_settings["compute"]
-        == get_resolved_settings(without, OWL_CARD).execution_settings["compute"]
+        resolve_run_settings(with_fields, OWL_CARD, compute={}).execution_settings["compute"]
+        == resolve_run_settings(without, OWL_CARD, compute={}).execution_settings["compute"]
     )
 
 
@@ -979,7 +1043,7 @@ def load_aws_batch(tmp_path, model=None, **setup):
 def refused_at_submit(profile) -> Refused:
     """The `invalid_profile` refusal of a new run of `owl/v4`."""
     with pytest.raises(Refused) as raised:
-        get_resolved_settings(profile, OWL_CARD)
+        resolve_run_settings(profile, OWL_CARD, compute={})
     assert raised.value.reason == "invalid_profile"
     assert "owl/v4" in raised.value.message
     assert "main" in raised.value.message
@@ -1035,7 +1099,7 @@ def test_an_aws_batch_queue_must_be_a_queue_arn(tmp_path, queue):
     ],
     ids=["no-revision", "text-revision", "other-type", "short-name"],
 )
-def test_a_job_definition_needs_an_arn_with_a_revision(tmp_path, job_definition):
+def test_a_job_definition_needs_a_name_or_an_arn_with_a_revision(tmp_path, job_definition):
     # Profile load does not check the job definition. A new run of a model on the setup
     # is refused.
     profile = load_aws_batch(tmp_path, job_definition=job_definition)
@@ -1074,7 +1138,9 @@ def test_an_aws_batch_request_of_vcpu_memory_and_gpu_is_frozen(tmp_path):
     request = {"requests": {"VCPU": "4", "MEMORY": "16384", "GPU": "1"},
                "active_deadline_seconds": 60}
 
-    resolved = get_resolved_settings(load_aws_batch(tmp_path, request=request), OWL_CARD)
+    resolved = resolve_run_settings(
+        load_aws_batch(tmp_path, request=request), OWL_CARD, compute={}
+    )
 
     assert resolved.execution_settings["request"] == {**request, "limits": {}}
 
@@ -1099,7 +1165,7 @@ def test_a_model_can_remove_gpu_with_null(tmp_path):
         request={"requests": {"VCPU": "4", "GPU": "1"}},
     )
 
-    resolved = get_resolved_settings(profile, OWL_CARD)
+    resolved = resolve_run_settings(profile, OWL_CARD, compute={})
 
     assert resolved.execution_settings["request"]["requests"] == {"VCPU": "4"}
 
@@ -1118,7 +1184,7 @@ def test_max_request_needs_each_named_resource_in_the_request(tmp_path, requests
     if not allowed:
         refused_at_submit(profile)
         return
-    resolved = get_resolved_settings(profile, OWL_CARD)
+    resolved = resolve_run_settings(profile, OWL_CARD, compute={})
     assert resolved.execution_settings["request"]["requests"] == requests
     # max_request is a check at submit, and the run does not freeze it.
     assert resolved.execution_settings["compute"] == AWS_BATCH_SETUP
@@ -1162,3 +1228,80 @@ def test_an_unquoted_date_is_text(tmp_path):
     profile = load_profile(tmp_path, "dev", ENVIRON)
 
     assert profile.catalog.model_extra == {"since": "2026-05-01"}
+
+
+PINNED_JOB_DEFINITION = "arn:aws:batch:us-west-2:123456789012:job-definition/robin-worker:7"
+
+
+class PinningCompute:
+    """A compute adapter whose `pin_settings` records its settings and then gives
+    `pinned` over them, or raises `error`."""
+
+    def __init__(self, pinned=None, error=None) -> None:
+        self.pinned = pinned or {}
+        self.error = error
+        self.calls: list[dict] = []
+
+    def pin_settings(self, settings):
+        self.calls.append(dict(settings))
+        if self.error is not None:
+            raise self.error
+        return {**settings, **self.pinned}
+
+
+def test_a_run_keeps_the_pinned_compute_settings(tmp_path):
+    profile = load_aws_batch(
+        tmp_path, job_definition="robin-worker", max_request={"VCPU": "8"},
+        request={"requests": {"VCPU": "4"}},
+    )
+    compute = PinningCompute(pinned={"job_definition": PINNED_JOB_DEFINITION})
+
+    resolved = resolve_run_settings(profile, OWL_CARD, compute={"aws-batch": compute})
+
+    named = {**AWS_BATCH_SETUP, "job_definition": "robin-worker"}
+    assert compute.calls == [named]
+    assert resolved.execution_settings["compute"] == {
+        **named, "job_definition": PINNED_JOB_DEFINITION,
+    }
+    assert resolved.target_compute == {"kind": "aws-batch", "job_queue": QUEUE}
+
+
+def test_a_setup_kind_with_no_adapter_and_nothing_to_pin_is_kept(tmp_path):
+    profile = load_with_compute(tmp_path, make_one_setup_compute(KUBERNETES_SETUP), S3_STORAGE)
+    local = PinningCompute(pinned={"namespace": "other"})
+
+    resolved = resolve_run_settings(profile, OWL_CARD, compute={"local": local})
+
+    assert resolved.execution_settings["compute"] == KUBERNETES_SETUP
+    assert local.calls == []
+
+
+def test_a_job_definition_name_with_no_adapter_is_not_configured(tmp_path):
+    profile = load_aws_batch(tmp_path, job_definition="robin-worker")
+
+    with pytest.raises(NotConfigured, match="aws-batch"):
+        resolve_run_settings(profile, OWL_CARD, compute={"local": PinningCompute()})
+
+
+def test_a_setting_that_cannot_be_pinned_is_invalid_profile(tmp_path):
+    profile = load_aws_batch(tmp_path, job_definition="robin-worker")
+    compute = PinningCompute(error=ValueError("job_definition has no active revision"))
+
+    with pytest.raises(Refused) as raised:
+        resolve_run_settings(profile, OWL_CARD, compute={"aws-batch": compute})
+
+    assert raised.value.reason == "invalid_profile"
+    for named in ("owl/v4", "main", "job_definition has no active revision"):
+        assert named in raised.value.message
+
+
+def test_a_pin_failure_is_compute_unavailable_and_names_only_the_error_type(tmp_path):
+    profile = load_aws_batch(tmp_path, job_definition="robin-worker")
+    compute = PinningCompute(error=RuntimeError(ADAPTER_SECRET))
+
+    with pytest.raises(ComputeUnavailable) as raised:
+        resolve_run_settings(profile, OWL_CARD, compute={"aws-batch": compute})
+
+    assert "RuntimeError" in raised.value.message
+    assert ADAPTER_SECRET not in f"{raised.value.message} {raised.value.details!r}"
+    assert raised.value.__context__ is None

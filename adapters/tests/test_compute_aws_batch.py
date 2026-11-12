@@ -16,6 +16,7 @@ from botocore.exceptions import ReadTimeoutError
 from botocore.stub import Stubber
 
 from robin_adapters.compute.aws_batch.adapter import AwsBatchCompute
+from robin_adapters.compute.aws_batch.settings import AwsBatchSetup
 from robin_contracts.ports.compute import (
     ComputeRequest,
     ComputeStatus,
@@ -347,3 +348,94 @@ def test_release_calls_nothing(stubbed):
     compute, _ = stubbed
 
     compute.release(make_task(compute_ref="job-a"))
+
+
+def test_a_task_with_an_unpinned_job_definition_is_rejected(stubbed):
+    # The Stubber has no response, so any call to Batch fails the test.
+    compute, _ = stubbed
+    task = make_task()
+    task = task.model_copy(update={"settings": {**task.settings, "job_definition": "robin-worker"}})
+
+    with pytest.raises(SubmissionRejected):
+        compute.submit(task)
+
+
+NAMED_SETUP = {"kind": "aws-batch", "job_queue": QUEUE, "job_definition": "robin-worker-gpu"}
+
+
+def get_revision_arn(revision: int, account: str = "123456789012") -> str:
+    return f"arn:aws:batch:{REGION}:{account}:job-definition/robin-worker-gpu:{revision}"
+
+
+class FakeJobDefinitions:
+    """A Batch client that gives `pages` of active job definitions, one page for each
+    `describe_job_definitions` call, and records each call and the client's region."""
+
+    def __init__(self, *pages: list[dict]) -> None:
+        self.pages = list(pages)
+        self.calls: list[dict] = []
+        self.regions: list[str] = []
+
+    def make_client(self, region: str):
+        self.regions.append(region)
+        return self
+
+    def describe_job_definitions(self, **parameters):
+        self.calls.append(parameters)
+        page = {"jobDefinitions": self.pages.pop(0)}
+        if self.pages:
+            page["nextToken"] = f"page-{len(self.calls) + 1}"
+        return page
+
+
+def make_definition(revision: int, account: str = "123456789012") -> dict:
+    return {
+        "jobDefinitionName": "robin-worker-gpu",
+        "jobDefinitionArn": get_revision_arn(revision, account),
+        "revision": revision,
+        "status": "ACTIVE",
+    }
+
+
+def test_a_setup_can_name_its_job_definition():
+    setup = AwsBatchSetup.model_validate(NAMED_SETUP)
+
+    setup.check_new_run(ComputeRequest())
+
+
+def test_a_job_definition_name_is_pinned_to_its_newest_active_revision():
+    batch = FakeJobDefinitions([make_definition(3)], [make_definition(5)])
+
+    pinned = AwsBatchCompute(make_client=batch.make_client).pin_settings(NAMED_SETUP)
+
+    assert pinned == {**NAMED_SETUP, "job_definition": get_revision_arn(5)}
+    assert batch.regions == [REGION]
+    assert [call["status"] for call in batch.calls] == ["ACTIVE", "ACTIVE"]
+    assert {call["jobDefinitionName"] for call in batch.calls} == {"robin-worker-gpu"}
+    assert batch.calls[1]["nextToken"] == "page-2"
+
+
+def test_a_job_definition_arn_is_kept_with_no_call():
+    batch = FakeJobDefinitions()
+    settings = {**NAMED_SETUP, "job_definition": JOB_DEFINITION}
+
+    assert AwsBatchCompute(make_client=batch.make_client).pin_settings(settings) == settings
+    assert batch.calls == []
+
+
+def test_a_job_definition_with_no_active_revision_is_refused():
+    batch = FakeJobDefinitions([])
+
+    with pytest.raises(ValueError, match="no active revision") as raised:
+        AwsBatchCompute(make_client=batch.make_client).pin_settings(NAMED_SETUP)
+
+    assert "robin-worker" not in str(raised.value)
+
+
+def test_a_pinned_job_definition_of_another_account_is_refused():
+    batch = FakeJobDefinitions([make_definition(5, account="210987654321")])
+
+    with pytest.raises(ValueError, match="job_definition") as raised:
+        AwsBatchCompute(make_client=batch.make_client).pin_settings(NAMED_SETUP)
+
+    assert "210987654321" not in str(raised.value)

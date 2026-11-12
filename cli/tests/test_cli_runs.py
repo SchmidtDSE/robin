@@ -1,8 +1,10 @@
 """`robin runs submit`, `list`, `show`, `recordings`, and `tasks`."""
 
+import dataclasses
 import json
 from pathlib import Path
 
+import ondio
 import pytest
 import yaml
 
@@ -450,3 +452,57 @@ def submit_with(robin, env, *options) -> str:
     ran = robin("--json", "runs", "submit", *options, env=env)
     assert ran.code == 0, ran.stderr
     return json.loads(ran.stdout)["run_id"]
+
+
+class RecordingPin:
+    """A compute adapter whose `pin_settings` records each call and gives `pinned` over
+    the settings."""
+
+    def __init__(self, **pinned) -> None:
+        self.pinned = pinned
+        self.calls: list[dict] = []
+
+    def pin_settings(self, settings):
+        self.calls.append(dict(settings))
+        return {**settings, **self.pinned}
+
+
+def test_submit_pins_with_the_adapter_of_the_models_default_setup(
+    robin, environ, s3_server, bucket, monkeypatch
+):
+    from robin_cli import main
+
+    endpoint = s3_server["endpoint"]
+    weights = f"s3://{bucket}/models/owl/v4/weights.h5"
+    ondio.create(weights, b"bytes that stand for the weights", endpoint_url=endpoint)
+    queue = "arn:aws:batch:us-west-2:123456789012:job-queue/robin-gpu"
+    pinned = "arn:aws:batch:us-west-2:123456789012:job-definition/robin-worker-gpu:7"
+    write_environment_file(environ, {
+        "storage": {"kind": "s3", "root": f"s3://{bucket}/robin/", "endpoint": endpoint},
+        "compute": {
+            "setups": {
+                "local": {"kind": "local"},
+                "gpu": {"kind": "aws-batch", "job_queue": queue,
+                        "job_definition": "robin-worker-gpu"},
+            },
+            "models": {"owl/v4": {"setup": "gpu"}},
+        },
+    })
+    assert robin("db", "migrate").code == 0
+    assert robin("models", "register", "owl/v4", "--file", f"weights={weights}").code == 0
+    assert robin("presets", "create", "owl", "--configuration", str(OWL_CONFIGURATION)).code == 0
+    local, batch = RecordingPin(), RecordingPin(job_definition=pinned)
+    real = main.compose
+    monkeypatch.setattr(main, "compose", lambda profile: dataclasses.replace(
+        real(profile), compute={"local": local, "aws-batch": batch}
+    ))
+
+    run_id = submit(robin, "--recordings", str(RECORDINGS), "--preset", "owl")["run_id"]
+
+    assert (len(local.calls), len(batch.calls)) == (0, 1)
+    settings = json.loads(robin("--json", "runs", "show", run_id).stdout)["execution_settings"]
+    assert settings["compute"]["job_definition"] == pinned
+
+    submit(robin, "--recordings", str(RECORDINGS), "--preset", "owl", "--setup", "local")
+
+    assert (len(local.calls), len(batch.calls)) == (1, 1)

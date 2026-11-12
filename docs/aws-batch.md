@@ -21,8 +21,9 @@ Terraform or the console:
 
 The AWS login of whoever runs `robin reconcile` must be able to call
 `batch:SubmitJob`, `batch:TagResource`, `batch:ListJobs`, `batch:DescribeJobs`, and
-`batch:TerminateJob`, and read and write under the storage root. Robin stores no
-credential.
+`batch:TerminateJob`, and read and write under the storage root. The AWS login of
+whoever runs `robin runs submit` must be able to call `batch:DescribeJobDefinitions`,
+if a setup names its job definition. Robin stores no credential.
 
 ## GPU
 
@@ -38,7 +39,7 @@ compute:
     aws-gpu:
       kind: aws-batch
       job_queue: arn:aws:batch:us-west-2:<account>:job-queue/robin-gpu
-      job_definition: arn:aws:batch:us-west-2:<account>:job-definition/robin-worker-gpu:1
+      job_definition: robin-worker-gpu
       request:
         requests: {VCPU: "4", MEMORY: "14336", GPU: "1"}
       resources: {device: gpu}
@@ -51,8 +52,9 @@ on the CPU only and refuse `device: gpu`: give `head_runtime:onnx` a CPU setup.
 
 ## The setup
 
-A setup names the queue and the job definition revision. The fields and their rules
-are in [the profile](profile.md#aws-batch-setups).
+A setup names the queue and the job definition: its name, or the ARN of one revision.
+For a name, Robin finds the newest active revision at submit. The fields and their
+rules are in [the profile](profile.md#aws-batch-setups).
 
 Each job has the tags `robin-run` and `robin-setup`, so that a cost report can split
 cost by run and by setup. Robin sends one attempt, and the run's deadline as the job
@@ -60,8 +62,10 @@ timeout.
 
 ## A new job definition revision
 
-To change the image or the job role, register a new revision of the job definition,
-and change `job_definition` in the profile to name it.
+To change the image or the job role, register a new revision of the job definition.
+If the setup names its job definition, the next submit uses the new revision, with no
+change to the profile. If the setup gives a revision ARN, change `job_definition` in
+the profile to name the new revision.
 
 - Runs that were submitted before the change keep the revision that they were
   submitted with. Their tasks that have not started yet also use it.

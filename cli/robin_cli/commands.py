@@ -16,7 +16,7 @@ from robin_run_manager.compose import Services
 from robin_run_manager.configuration import read_configuration
 from robin_run_manager.errors import OperationError
 from robin_run_manager.pages import Page
-from robin_run_manager.profile import get_compute_section, get_resolved_settings
+from robin_run_manager.profile import get_compute_section, resolve_run_settings
 from robin_run_manager.reconcile import ReconcileReport, StepFailure
 from robin_run_manager.recording_inputs import (
     RecordingManifest,
@@ -168,9 +168,10 @@ def submit_run(context: Context, arguments) -> Output:
         preset=arguments.preset,
         configuration=configuration,
         recordings=recordings,
-        get_resolved_settings=partial(
-            get_resolved_settings,
+        resolve_run_settings=partial(
+            resolve_run_settings,
             context.services.profile,
+            compute=context.services.compute,
             setup=arguments.setup,
             resources=dict(arguments.resources),
         ),
