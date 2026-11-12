@@ -19,6 +19,7 @@ from robin_models._adapter_support.adapter_setup import (
     get_resources,
     get_tf_device,
     refuse_a_card_the_model_does_not_follow,
+    refuse_audio_with_no_length,
     require_roles,
 )
 from robin_models.registration import WEIGHTS_ROLE
@@ -124,7 +125,9 @@ class OwlModel:
         return self._run_windows(input.path)
 
     def _run_windows(self, path: Path) -> Iterator[WindowOutput]:
-        bounds = window_bounds(sf.info(str(path)).duration, self._geometry)
+        info = sf.info(str(path))
+        refuse_audio_with_no_length(info.frames, path, OWNER)
+        bounds = window_bounds(info.duration, self._geometry)
         # An empty path list would reach TensorFlow as a float32 dataset, which it cannot read.
         if not bounds:
             return

@@ -164,6 +164,8 @@ class FakeRuntime:
 
     def __init__(self) -> None:
         self.duration = 36.0
+        # The frame count `info` gives. None gives the duration's count at 1,000 Hz.
+        self.frames: int | None = None
         self.loaded: list[str] = []
         self.load_error: Exception | None = None
         self.inspected: list[str] = []
@@ -195,7 +197,8 @@ class FakeRuntime:
 
     def info(self, path):
         self.inspected.append(str(path))
-        return types.SimpleNamespace(duration=self.duration)
+        frames = round(self.duration * 1000) if self.frames is None else self.frames
+        return types.SimpleNamespace(duration=self.duration, frames=frames)
 
     def render(self, path, *, start_time, duration, shape, dest):
         self.rendered.append(start_time)
@@ -515,4 +518,23 @@ def test_run_refuses_an_input_that_is_not_audio_before_reading_anything(runtime,
     with pytest.raises(TypeError, match="Embeddings"):
         list(model.run(embeddings))
     assert runtime.inspected == []
+    assert runtime.rendered == []
+
+
+def test_owl_refuses_a_flac_with_no_length_in_its_header(runtime, tmp_path, monkeypatch):
+    def window_bounds(duration, geometry):
+        # Bounds for a length this large fill all memory, so stop before they are made.
+        pytest.fail(f"the adapter made windows for a duration of {duration} s")
+
+    # What soundfile gives for a FLAC whose STREAMINFO gives 0 total samples.
+    runtime.frames = 2**63 - 1
+    runtime.duration = (2**63 - 1) / 48000
+    monkeypatch.setattr(runtime.adapter, "window_bounds", window_bounds)
+    model = runtime.adapter.build(owl_context(tmp_path))
+    path = tmp_path / "a.flac"
+
+    with pytest.raises(ValueError, match="no length") as raised:
+        list(model.run(AudioClip(path=path)))
+
+    assert str(path) in str(raised.value)
     assert runtime.rendered == []

@@ -15,6 +15,7 @@ from robin_contracts.protocols import Log
 from robin_contracts.records import WindowOutput
 from robin_contracts.specs import WindowGeometry, window_bounds
 
+from robin_models._adapter_support.adapter_setup import refuse_audio_with_no_length
 from robin_models._adapter_support.batch_pipeline import (
     BatchPipeline,
     BatchRunner,
@@ -62,6 +63,7 @@ def run_windows(
     with sf.SoundFile(str(path)) as audio:
         if audio.frames == 0:
             raise ValueError(f"{owner} cannot run {path}: it has no audio frames")
+        refuse_audio_with_no_length(audio.frames, path, owner)
         bounds = window_bounds(audio.frames / audio.samplerate, geometry)
     threads = resources.read_threads
     log(f"running {len(bounds)} windows of {path.name} on {threads} read threads")

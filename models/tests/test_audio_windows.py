@@ -141,6 +141,38 @@ def test_read_and_model_seconds_are_counted_apart(tmp_path, monkeypatch):
     assert get_seconds(timed[0], "model") == 20.0
 
 
+def write_flac_with_no_length(tmp_path):
+    """Write a 3-second FLAC whose STREAMINFO gives 0 total samples, which means "unknown".
+
+    The 36-bit total is the low 4 bits of byte 21 and bytes 22 to 25 of the file: 4 bytes
+    of "fLaC", 4 bytes of block header, then STREAMINFO from byte 8.
+    """
+    path = tmp_path / "no_length.flac"
+    soundfile.write(path, np.zeros(3 * RATE, dtype=np.float32), RATE, format="FLAC")
+    data = bytearray(path.read_bytes())
+    data[21] &= 0xF0
+    data[22:26] = bytes(4)
+    path.write_bytes(bytes(data))
+    # Without this count, the test would not show the problem it is for.
+    assert soundfile.info(str(path)).frames == 2**63 - 1
+    return path
+
+
+def test_a_flac_with_no_length_in_its_header_is_refused(tmp_path, monkeypatch):
+    def window_bounds(duration, geometry):
+        # Bounds for a length this large fill all memory, so stop before they are made.
+        pytest.fail(f"the loop made windows for a duration of {duration} s")
+
+    monkeypatch.setattr(audio_windows, "window_bounds", window_bounds)
+    path = write_flac_with_no_length(tmp_path)
+
+    with pytest.raises(ValueError, match="no length") as raised:
+        list(get_windows(path))
+
+    assert str(path) in str(raised.value)
+    assert not get_loop_threads()
+
+
 def test_windows_arrive_in_order_across_many_batches(tmp_path):
     windows = list(get_windows(write_seconds(tmp_path, 29), batch_size=3))
 

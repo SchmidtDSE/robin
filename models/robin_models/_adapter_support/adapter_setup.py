@@ -18,6 +18,9 @@ from robin_contracts.protocols import JsonScalar
 Device = Literal["cpu", "gpu"]
 # The TensorFlow device of each `device` resource.
 _TF_DEVICES = {"cpu": "/CPU:0", "gpu": "/GPU:0"}
+# The frame count that soundfile gives for a FLAC whose header gives 0 total samples, which
+# FLAC uses for "unknown". It is the largest 64-bit integer, not 0.
+UNKNOWN_FRAMES = 2**63 - 1
 
 
 @contextmanager
@@ -57,6 +60,16 @@ def require_roles(files: Mapping[str, Path], roles: Collection[str], owner: str)
                 f"{owner} needs a file under the role {role!r}, "
                 f"and got the roles {sorted(files)}"
             )
+
+
+def refuse_audio_with_no_length(frames: int, path: Path, owner: str) -> None:
+    """Refuse a file whose header gives no length.
+
+    `frames` is the file's frame count from soundfile. Windows for that count would fill
+    all memory, so the check must come before any window is made.
+    """
+    if frames == UNKNOWN_FRAMES:
+        raise ValueError(f"{owner} cannot run {path}: its header gives no length")
 
 
 class Resources(BaseModel):
