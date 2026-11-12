@@ -91,14 +91,14 @@ GPU only with `device: gpu`; ONNX heads run on the CPU only. See
 BirdNET and Perch read three more keys. They change speed and memory, but not results.
 
 - `read_threads`, a whole number above 0, is the number of threads that read audio. The
-  default is two fewer than the CPUs that the job can use, and at least 1. In a container
+  default is one fewer than the CPUs that the job can use, and at least 1. In a container
   with a CPU limit, the limit counts, not the host's CPUs. So a g4dn.xlarge (4 vCPUs) gets
-  2, and a g4dn.2xlarge (8 vCPUs) gets 6.
+  3, and a g4dn.2xlarge (8 vCPUs) gets 7.
 - `read_ahead_batches`, a whole number above 0 (default 4), limits how many batches of
   audio are read ahead of the model. The audio in memory is at most
   `read_ahead_batches + read_threads + 1` batches. Each window takes about 0.6 MB, so
-  with 2 read threads and `batch_size: 32`, the audio uses about 140 MB, and with 6 read
-  threads about 190 MB.
+  with 3 read threads and `batch_size: 32`, the audio uses about 150 MB, and with 7 read
+  threads about 230 MB.
 - `read_block_seconds`, a number above 0 (default 60), is the longest span of windows
   that a reader decodes at once, with every channel of the file. A block always holds at
   least one whole window, so a window longer than this is decoded alone. Perch also

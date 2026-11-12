@@ -35,6 +35,11 @@ ENV PATH=/usr/local/lib/python3.13/site-packages/nvidia/cuda_nvcc/bin:${PATH} \
 # The NVIDIA container runtime mounts nvidia-smi only for the `utility` capability.
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
+# Deterministic GPU operations: repeated runs of the same work give identical values.
+# Without this, values differ between runs at about 1e-6. Perch is about 8 % slower
+# with it; BirdNET is not slower.
+ENV TF_DETERMINISTIC_OPS=1
+
 # The entrypoint logs the GPU's use once every ROBIN_GPU_LOG_SECONDS (60 by default; 0
 # turns it off), as lines that start with `gpu:`. At the same interval, it logs the
 # container's memory in MiB, now and at its peak so far, as lines that start with

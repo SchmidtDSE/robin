@@ -481,16 +481,17 @@ def test_the_loop_reads_on_the_given_number_of_threads_with_the_same_windows(
 @pytest.mark.parametrize(
     ("cpu_max", "cpus", "expected"),
     [
-        pytest.param(None, 4, 2, id="no_cgroup_file"),
-        pytest.param("max 100000\n", 8, 6, id="no_limit"),
-        pytest.param("max 100000\n", 32, 30, id="no_cap"),
+        pytest.param(None, 4, 3, id="no_cgroup_file"),
+        pytest.param("max 100000\n", 8, 7, id="no_limit"),
+        pytest.param("max 100000\n", 32, 31, id="no_cap"),
         pytest.param("200000 100000\n", 64, 1, id="two_cpu_limit_on_a_large_host"),
-        pytest.param("650000 100000\n", 64, 4, id="part_of_a_cpu_is_not_counted"),
-        pytest.param("800000 100000\n", 4, 2, id="limit_above_the_hosts_cpus"),
+        pytest.param("100000 100000\n", 64, 1, id="one_cpu_limit_still_reads"),
+        pytest.param("650000 100000\n", 64, 5, id="part_of_a_cpu_is_not_counted"),
+        pytest.param("800000 100000\n", 4, 3, id="limit_above_the_hosts_cpus"),
         pytest.param(None, None, 1, id="cpu_count_unknown"),
     ],
 )
-def test_the_default_read_threads_leave_two_cpus_free(
+def test_the_default_read_threads_leave_one_cpu_free(
     tmp_path, monkeypatch, cpu_max, cpus, expected
 ):
     cpu_max_file = tmp_path / "cpu.max"

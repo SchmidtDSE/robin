@@ -45,6 +45,11 @@ values come from the container's cgroup, so they include the page cache that the
 container uses. Set `ROBIN_GPU_LOG_SECONDS` in the job definition to change the
 interval, or to `0` to turn both off.
 
+The GPU image sets `TF_DETERMINISTIC_OPS=1`, so repeated runs of the same work give
+identical values. Without it, values differ between runs at about 1e-6. Perch is about
+8 % slower with it; BirdNET is not slower. A job definition can set it to `0` to turn it
+off.
+
 On a Mac with Apple Silicon, these images run under emulation, which cannot run
 TensorFlow. To check that TensorFlow sees the GPU, run a task on a GPU queue (see
 [AWS Batch](../docs/aws-batch.md)), and look in the job's log for TensorFlow's

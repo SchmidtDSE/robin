@@ -4,6 +4,9 @@ and every model and head runtime that robin-models has.
 Robin's packages are not on PyPI, and each is version 0.0.0. If pip may choose a Robin
 package by name, a package of the same name published on PyPI at a higher version
 would replace Robin's own in the image, and run with the job role's access.
+
+The GPU image also turns on TensorFlow's deterministic GPU operations, so that repeated
+runs of the same work give identical values.
 """
 
 import re
@@ -12,6 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DOCKERFILE = ROOT / "docker" / "worker.Dockerfile"
+GPU_DOCKERFILE = ROOT / "docker" / "worker-gpu.Dockerfile"
 MODELS_PYPROJECT = ROOT / "models" / "pyproject.toml"
 ROBIN_PACKAGES = ("contracts", "inference_engine", "models", "adapters", "worker")
 
@@ -46,3 +50,11 @@ def test_the_image_installs_every_extra_of_robin_models():
     installed = re.search(r"robin_models-\*\.whl\)\[([^\]]*)\]", install)
     assert installed is not None, "the Dockerfile installs robin-models with no extras"
     assert set(installed.group(1).split(",")) == set(extras)
+
+
+def test_the_gpu_image_turns_on_deterministic_gpu_operations():
+    text = GPU_DOCKERFILE.read_text()
+
+    assert re.search(r"^ENV TF_DETERMINISTIC_OPS=1$", text, re.MULTILINE), (
+        "the GPU image does not set TF_DETERMINISTIC_OPS=1"
+    )

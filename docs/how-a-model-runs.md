@@ -39,7 +39,7 @@ compressed audio such as FLAC.
 1. **Plan.** The loop counts the frames of the file and makes the list of windows from
    the window geometry: the window length, the overlap, and the padding. It puts the
    windows into batches of `batch_size` windows, and numbers the batches from 0.
-2. **Read.** `read_threads` reader threads run. By default there are two fewer than the
+2. **Read.** `read_threads` reader threads run. By default there is one fewer than the
    CPUs that the process can use, and at least 1. In a container with a CPU limit, the
    limit counts, not the host's CPUs. Each reader opens its own handle on the file. A reader takes the next batch
    number, and decodes the batch's windows in blocks of at most `read_block_seconds`.

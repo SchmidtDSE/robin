@@ -36,8 +36,8 @@ THREAD_NAME_PREFIX = "robin-windows-"
 
 
 def get_default_read_threads() -> int:
-    """Return the CPUs that this process can use, less two, and at least 1."""
-    return max(1, get_cpu_count() - 2)
+    """Return the CPUs that this process can use, less one, and at least 1."""
+    return max(1, get_cpu_count() - 1)
 
 
 def get_cpu_count() -> int:
@@ -59,7 +59,7 @@ class WindowResources(Resources):
     """The resources of an adapter that runs the window loop.
 
     `read_threads` is the number of reader threads. Each reader reads one batch at a time,
-    with its own file handle. By default, two CPUs stay free for the model thread and the
+    with its own file handle. By default, one CPU stays free for the model thread and the
     engine (see `get_default_read_threads`). `read_ahead_batches` bounds the batches read
     but not yet given to the model, and so the memory that the readers hold. The readers
     can also hold one batch each. A reader decodes the windows of its batch in blocks of at
