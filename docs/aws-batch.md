@@ -21,7 +21,8 @@ Terraform or the console:
 
 The AWS login of whoever runs `robin reconcile` must be able to call
 `batch:SubmitJob`, `batch:TagResource`, `batch:ListJobs`, `batch:DescribeJobs`, and
-`batch:TerminateJob`, and read and write under the storage root. The AWS login of
+`batch:TerminateJob`, and read and write under the storage root. Robin tags each job,
+so Batch checks `batch:TagResource` on the job and on its job definition. The AWS login of
 whoever runs `robin runs submit` must be able to call `batch:DescribeJobDefinitions`,
 if a setup names its job definition. Robin stores no credential.
 
