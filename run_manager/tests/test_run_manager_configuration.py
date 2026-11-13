@@ -23,7 +23,7 @@ from model_fixtures import read_pinned_model
 
 FIXTURES = Path(__file__).parent / "fixtures"
 OWL = read_pinned_model("owl-v4")
-PERCH = read_pinned_model("perch-v8")
+PERCH = read_pinned_model("perch-v1p8")
 HEAD = read_pinned_model("songbird-head-v1")
 AUDIO = AudioInput()
 
@@ -55,7 +55,7 @@ def owl_file(**changes) -> UnresolvedConfiguration:
 
 
 def perch_configuration():
-    file = read_configuration(FIXTURES / "configuration-perch-v8.yaml")
+    file = read_configuration(FIXTURES / "configuration-perch-v1p8.yaml")
     return resolve_configuration(file, PERCH, AUDIO)
 
 
@@ -155,7 +155,7 @@ def test_a_file_that_breaks_a_work_rule_is_invalid(tmp_path, text):
     "text",
     [
         pytest.param("model: [unclosed", id="not_yaml"),
-        pytest.param(EXAMPLE_FILE + "model: perch/v8\n", id="a_repeated_key"),
+        pytest.param(EXAMPLE_FILE + "model: perch/v1p8\n", id="a_repeated_key"),
     ],
 )
 def test_a_file_that_is_not_yaml_is_an_invalid_request(tmp_path, text):
@@ -197,7 +197,7 @@ model: owl/v4
 def test_another_output_order_gives_the_same_digest():
     scores = {"kind": "scores", "contract_id": "robin.scores.parquet/1", "retention": "full"}
     embeddings = {"kind": "embeddings", "contract_id": "robin.embeddings.parquet/1"}
-    fields = {"model": "perch/v8", "input": {"kind": "audio"}}
+    fields = {"model": "perch/v1p8", "input": {"kind": "audio"}}
     one = UnresolvedConfiguration.model_validate(fields | {"outputs": [scores, embeddings]})
     other = UnresolvedConfiguration.model_validate(fields | {"outputs": [embeddings, scores]})
 
@@ -281,7 +281,7 @@ def test_a_head_resolves_from_its_backbone_configuration():
 
 
 def test_a_backbone_configuration_without_embeddings_is_refused():
-    scores_only = read_configuration(FIXTURES / "configuration-perch-v8.yaml")
+    scores_only = read_configuration(FIXTURES / "configuration-perch-v1p8.yaml")
     scores_only = UnresolvedConfiguration.model_validate(
         scores_only.model_dump() | {"outputs": [scores_only.model_dump()["outputs"][0]]}
     )
@@ -296,7 +296,7 @@ def make_other_backbone(**card_changes) -> tuple[Configuration, PinnedModel]:
     """A perch-like backbone model with a changed card, and its configuration."""
     card = PERCH.card.model_copy(update=card_changes)
     model = PERCH.model_copy(update={"card": card})
-    file = read_configuration(FIXTURES / "configuration-perch-v8.yaml")
+    file = read_configuration(FIXTURES / "configuration-perch-v1p8.yaml")
     file = UnresolvedConfiguration.model_validate(file.model_dump() | {"model": model_ref(card).id})
     return resolve_configuration(file, model, AUDIO), model
 
@@ -354,7 +354,7 @@ def valid_configurations():
     backbone = perch_configuration()
     return [
         (owl_file(), OWL, AUDIO),
-        (read_configuration(FIXTURES / "configuration-perch-v8.yaml"), PERCH, AUDIO),
+        (read_configuration(FIXTURES / "configuration-perch-v1p8.yaml"), PERCH, AUDIO),
         (
             read_configuration(FIXTURES / "configuration-songbird-head-v1.yaml"),
             HEAD,

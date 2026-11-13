@@ -1,4 +1,4 @@
-"""Perch v8: its bundled card and registry, and the adapter against a fake TensorFlow."""
+"""Perch v1p8: its bundled card and registry, and the adapter against a fake TensorFlow."""
 
 import contextlib
 import csv
@@ -51,7 +51,7 @@ REGISTRY_SHA256 = "ca28f370cb5924af9966fee9fcd0a12d57632bba85a01a3f5908f9011ef99
 def test_the_card_states_every_field():
     assert CARD.model_dump() == {
         "model_name": "perch",
-        "model_version": "v8",
+        "model_version": "v1p8",
         "runtime": "tensorflow",
         "window_duration": 5.0,
         "sample_rate": 32000,
@@ -73,8 +73,8 @@ def test_the_card_states_every_field():
     }
 
 
-def test_the_card_reads_as_perch_v8():
-    assert model_ref(CARD).id == "perch/v8"
+def test_the_card_reads_as_perch_v1p8():
+    assert model_ref(CARD).id == "perch/v1p8"
 
 
 def test_the_card_names_the_bundled_registry_by_its_digest():
@@ -416,7 +416,7 @@ def test_a_card_stating_what_perch_does_not_do_is_refused_before_the_model_loads
         runtime.adapter.build(perch_context(tmp_path, card=card))
     message = str(caught.value)
     assert repr(getattr(card, field)) in message
-    assert f"model perch/v8 does {runtime.adapter.BEHAVIOUR[field]!r}" in message
+    assert f"model perch/v1p8 does {runtime.adapter.BEHAVIOUR[field]!r}" in message
     assert runtime.loads == []
 
 

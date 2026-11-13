@@ -25,7 +25,7 @@ SAVED_MODEL_LAYOUT = {
 _BUILT_IN = {
     "owl/v4": ("owl", frozenset({WEIGHTS_ROLE})),
     "birdnet/v2p4": ("birdnet", frozenset(SAVED_MODEL_LAYOUT)),
-    "perch/v8": ("perch", frozenset(SAVED_MODEL_LAYOUT)),
+    "perch/v1p8": ("perch", frozenset(SAVED_MODEL_LAYOUT)),
 }
 _HEAD_RUNTIMES = {"onnx": frozenset({GRAPH_ROLE})}
 

@@ -245,7 +245,7 @@ def test_submit_without_compute_stops_before_the_catalog_step(robin, owl_preset,
 
 
 def test_submit_with_a_model_that_the_profile_does_not_list(robin, owl_preset, environ):
-    compute = {"setups": {"local": {"kind": "local"}}, "models": {"perch/v8": {}}}
+    compute = {"setups": {"local": {"kind": "local"}}, "models": {"perch/v1p8": {}}}
     write_environment_file(environ, {"compute": compute})
 
     ran = robin("--json", "runs", "submit", "--recordings", str(RECORDINGS), "--preset", "owl")

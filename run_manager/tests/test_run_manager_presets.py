@@ -33,13 +33,13 @@ from model_fixtures import read_pinned_model
 
 FIXTURES = Path(__file__).parent / "fixtures"
 OWL_CONFIGURATION = read_configuration(FIXTURES / "configuration-owl-v4.yaml")
-PERCH_CONFIGURATION = read_configuration(FIXTURES / "configuration-perch-v8.yaml")
+PERCH_CONFIGURATION = read_configuration(FIXTURES / "configuration-perch-v1p8.yaml")
 HEAD_CONFIGURATION = read_configuration(FIXTURES / "configuration-songbird-head-v1.yaml")
 
 
 @pytest.fixture
 def registered(migrated_database):
-    for name in ("owl-v4", "perch-v8", "songbird-head-v1"):
+    for name in ("owl-v4", "perch-v1p8", "songbird-head-v1"):
         register_model(migrated_database, read_pinned_model(name), actor="ana")
     return migrated_database
 

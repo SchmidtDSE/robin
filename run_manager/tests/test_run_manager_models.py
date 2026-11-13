@@ -231,7 +231,7 @@ def test_a_model_without_its_score_roles_is_prepared(tmp_path):
         (tmp_path / role).write_bytes(role.encode())
         layout[role] = str(tmp_path / role)
 
-    model = prepare_model(get_built_in_card("perch/v8"), layout)
+    model = prepare_model(get_built_in_card("perch/v1p8"), layout)
 
     assert set(model.files) == set(layout)
 
@@ -249,7 +249,7 @@ def perch_scores_files(tmp_path) -> dict[str, str]:
 def test_a_registry_alone_gives_perch_its_scores(tmp_path):
     layout = perch_scores_files(tmp_path)
 
-    model = prepare_model(get_built_in_card("perch/v8"), layout)
+    model = prepare_model(get_built_in_card("perch/v1p8"), layout)
 
     assert set(model.files) == set(layout)
 
@@ -259,7 +259,7 @@ def test_a_labels_file_is_a_role_perch_does_not_read(tmp_path):
     layout = perch_scores_files(tmp_path) | {"labels": str(tmp_path / "labels.csv")}
 
     with pytest.raises(Refused) as refused:
-        prepare_model(get_built_in_card("perch/v8"), layout)
+        prepare_model(get_built_in_card("perch/v1p8"), layout)
 
     assert refused.value.reason == INVALID_REQUEST
     assert refused.value.details["unknown_roles"] == ["labels"]

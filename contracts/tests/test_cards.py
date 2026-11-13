@@ -26,7 +26,7 @@ REGISTRY_DIGEST = "sha256:" + "a" * 64
 
 MODEL_CARD_FIELDS = {
     "model_name": "perch",
-    "model_version": "v8",
+    "model_version": "v1p8",
     "runtime": "tf-saved-model",
     "window_duration": 5.0,
     "sample_rate": 32000,
@@ -47,7 +47,7 @@ HEAD_CARD_FIELDS = {
     "model_name": "american-bullfrog-perch",
     "model_version": "v3w5",
     "runtime": "onnx",
-    "backbone": {"name": "perch", "version": "v8", "digest": CARD_DIGEST},
+    "backbone": {"name": "perch", "version": "v1p8", "digest": CARD_DIGEST},
     "embedding_dim": 1280,
     "min_detection_threshold": 0.0,
     "score_domain": "sigmoid",
@@ -68,7 +68,7 @@ def _yaml(fields: dict) -> str:
 
 
 def test_model_ref_has_a_stable_human_identifier():
-    assert ModelRef(name="perch", version="v8", digest=CARD_DIGEST).id == "perch/v8"
+    assert ModelRef(name="perch", version="v1p8", digest=CARD_DIGEST).id == "perch/v1p8"
 
 
 @pytest.mark.parametrize(
@@ -77,14 +77,14 @@ def test_model_ref_has_a_stable_human_identifier():
 )
 def test_model_ref_refuses_a_digest_it_could_not_have_produced(digest):
     with pytest.raises(ValidationError) as exc:
-        ModelRef(name="perch", version="v8", digest=digest)
+        ModelRef(name="perch", version="v1p8", digest=digest)
 
     assert exc.value.errors()[0]["loc"] == ("digest",)
 
 
 def test_model_ref_accepts_what_card_digest_produces():
     assert ModelRef(
-        name="perch", version="v8", digest=card_digest(_model_card())
+        name="perch", version="v1p8", digest=card_digest(_model_card())
     ).digest.startswith("sha256:v1:")
 
 
@@ -447,7 +447,7 @@ def test_reading_a_card_keeps_comments_and_layout_out_of_its_digest(tmp_path):
         tmp_path,
         "# a hand-written backbone card\n"
         "sample_rate: 32000   # Hz\n"
-        "model_version: v8\n"
+        "model_version: v1p8\n"
         "model_name: perch\n"
         "runtime: tf-saved-model\n"
         "window_duration: 5.0\n"

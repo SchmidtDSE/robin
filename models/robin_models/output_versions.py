@@ -12,6 +12,6 @@ from robin_contracts.tasks import ModelOutputVersion
 OUTPUT_VERSIONS: tuple[ModelOutputVersion, ...] = (
     ModelOutputVersion(model="model:owl/v4", version=1),
     ModelOutputVersion(model="model:birdnet/v2p4", version=1),
-    ModelOutputVersion(model="model:perch/v8", version=1),
+    ModelOutputVersion(model="model:perch/v1p8", version=1),
     ModelOutputVersion(model="head_runtime:onnx", version=1),
 )

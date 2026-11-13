@@ -1,4 +1,4 @@
-"""The Perch v8 adapter. Importing this module loads TensorFlow."""
+"""The Perch v1p8 adapter. Importing this module loads TensorFlow."""
 
 import math
 from collections.abc import Iterator, Mapping
@@ -19,7 +19,7 @@ from robin_models._adapter_support.adapter_setup import (
     require_roles,
 )
 
-OWNER = "model perch/v8"
+OWNER = "model perch/v1p8"
 _RUNTIME_MODULES = ("numpy", "scipy", "soundfile", "tensorflow")
 
 with explain_a_missing_runtime(OWNER, "perch", _RUNTIME_MODULES):

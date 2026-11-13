@@ -410,7 +410,7 @@ def test_a_withdrawn_backbone_run_is_ignored(registered):
 def test_a_backbone_result_at_another_version_is_ignored(registered):
     newer_perch = tuple(
         ModelOutputVersion(model=entry.model, version=2)
-        if entry.model == "model:perch/v8" else entry
+        if entry.model == "model:perch/v1p8" else entry
         for entry in RELEASE_OUTPUT_VERSIONS
     )
     add_backbone_with_files(registered, ["a"], release_versions=newer_perch)

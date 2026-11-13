@@ -1,7 +1,7 @@
 # A backbone registration: a model that can save embeddings for a head.
 card:
   model_name: perch
-  model_version: v8
+  model_version: v1p8
   runtime: tensorflow
   window_duration: 5.0
   sample_rate: 32000
@@ -24,18 +24,18 @@ card:
   embedding_dtype: float32
 files:
   saved_model:
-    uri: s3://robin-models/perch/v8/saved_model.pb
+    uri: s3://robin-models/perch/v1p8/saved_model.pb
     digest: sha256:2222222222222222222222222222222222222222222222222222222222222222
     size_bytes: 4194304
   variables_data:
-    uri: s3://robin-models/perch/v8/variables/variables.data-00000-of-00001
+    uri: s3://robin-models/perch/v1p8/variables/variables.data-00000-of-00001
     digest: sha256:2222222222222222222222222222222222222222222222222222222222222223
     size_bytes: 4194304
   variables_index:
-    uri: s3://robin-models/perch/v8/variables/variables.index
+    uri: s3://robin-models/perch/v1p8/variables/variables.index
     digest: sha256:2222222222222222222222222222222222222222222222222222222222222224
     size_bytes: 8192
   taxa_registry:
-    uri: s3://robin-models/perch/v8/taxa_registry.csv
+    uri: s3://robin-models/perch/v1p8/taxa_registry.csv
     digest: sha256:ca28f370cb5924af9966fee9fcd0a12d57632bba85a01a3f5908f9011ef99fd9
     size_bytes: 4096

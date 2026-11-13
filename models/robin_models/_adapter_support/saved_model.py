@@ -2,7 +2,7 @@
 pinned files, and checks the signature that it calls.
 
 The adapters load and call the SavedModel themselves. Each check takes `owner`, the name
-the error gives, such as "model perch/v8". Importing this module loads no ML runtime.
+the error gives, such as "model perch/v1p8". Importing this module loads no ML runtime.
 """
 
 import tempfile

@@ -792,7 +792,7 @@ def not_in_profile(profile, card) -> Refused:
 
 
 def test_execution_settings_refuse_a_model_that_is_not_listed(tmp_path):
-    profile = load_with_compute(tmp_path, make_one_setup_compute(LOCAL_SETUP, {"perch/v8": {}}))
+    profile = load_with_compute(tmp_path, make_one_setup_compute(LOCAL_SETUP, {"perch/v1p8": {}}))
 
     refusal = not_in_profile(profile, OWL_CARD)
 
@@ -864,13 +864,13 @@ def test_one_setup_needs_no_setup_in_a_model_entry(tmp_path):
 def test_two_setups_need_a_setup_in_each_model_entry(tmp_path, model):
     write_compute(tmp_path, {
         "setups": {"cpu": LOCAL_SETUP, "gpu": LOCAL_SETUP},
-        "models": {"owl/v4": {"setup": "cpu"}, "perch/v8": model},
+        "models": {"owl/v4": {"setup": "cpu"}, "perch/v1p8": model},
     })
 
     refusal = invalid(tmp_path)
 
     assert get_problem_fields(refusal) == ["compute"]
-    assert "perch/v8" in refusal.message
+    assert "perch/v1p8" in refusal.message
 
 
 def test_a_model_setup_must_be_a_listed_setup(tmp_path):
@@ -888,10 +888,10 @@ def test_a_model_setup_must_be_a_listed_setup(tmp_path):
 def test_a_model_gets_the_setup_that_it_names(tmp_path):
     profile = load_with_compute(tmp_path, {
         "setups": {"cpu": LOCAL_SETUP, "gpu": {**LOCAL_SETUP, "resources": {"device": "gpu"}}},
-        "models": {"owl/v4": {"setup": "cpu"}, "perch/v8": {"setup": "gpu"}},
+        "models": {"owl/v4": {"setup": "cpu"}, "perch/v1p8": {"setup": "gpu"}},
     })
 
-    merged = get_merged_model_settings(profile.compute, "perch/v8")
+    merged = get_merged_model_settings(profile.compute, "perch/v1p8")
 
     assert merged.setup == "gpu"
     assert merged.resources == {"device": "gpu"}

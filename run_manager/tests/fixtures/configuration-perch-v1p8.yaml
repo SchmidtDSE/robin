@@ -1,5 +1,5 @@
 # A backbone configuration that saves embeddings for heads.
-model: perch/v8
+model: perch/v1p8
 input:
   kind: audio
 settings:

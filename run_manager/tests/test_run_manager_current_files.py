@@ -87,19 +87,19 @@ def test_a_head_compares_both_versions(registered):
     submit(registered, ["b"], PERCH_CONFIGURATION)  # stores the backbone's configuration
     newer = submit(
         registered, ["a"], HEAD_CONFIGURATION,
-        release_versions=get_release({"head_runtime:onnx": 1, "model:perch/v8": 2}),
+        release_versions=get_release({"head_runtime:onnx": 1, "model:perch/v1p8": 2}),
     )
     add_covered_result(registered, newer, "a")
     older = submit(
         registered, ["a"], HEAD_CONFIGURATION,
-        release_versions=get_release({"head_runtime:onnx": 1, "model:perch/v8": 1}),
+        release_versions=get_release({"head_runtime:onnx": 1, "model:perch/v1p8": 1}),
     )
     add_covered_result(registered, older, "a")
 
     [row] = get_rows(registered)
 
     assert row["run_id"] == newer
-    assert row["output_versions"] == {"head_runtime:onnx": 1, "model:perch/v8": 2}
+    assert row["output_versions"] == {"head_runtime:onnx": 1, "model:perch/v1p8": 2}
     assert row["up_to_date"] is True
 
 

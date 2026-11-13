@@ -1,8 +1,8 @@
-# A head configuration. Its input is the digest of configuration-perch-v8.yaml.
+# A head configuration. Its input is the digest of configuration-perch-v1p8.yaml.
 model: songbird-head/v1
 input:
   kind: embedding_artifact
-  backbone_configuration: "sha256:v1:a71af6a010f74d8d068c00d28e6d6468c779636b2f372a480d192b90f44b7373"
+  backbone_configuration: "sha256:v1:bf7dbd1a56e5b02d5b6dfc7380b63059611eda21b7a9193ad31ef47096196eb4"
 outputs:
   - kind: scores
     contract_id: robin.scores.parquet/1

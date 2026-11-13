@@ -38,7 +38,7 @@ RUNTIME_MODULES = (
 MODELS = [
     pytest.param("owl", "owl/v4", id="owl"),
     pytest.param("birdnet", "birdnet/v2p4", id="birdnet"),
-    pytest.param("perch", "perch/v8", id="perch"),
+    pytest.param("perch", "perch/v1p8", id="perch"),
 ]
 
 
@@ -67,8 +67,8 @@ def test_birdnet_v2p4_is_installed():
     assert "birdnet/v2p4" in installed_models()
 
 
-def test_perch_v8_is_installed():
-    assert "perch/v8" in installed_models()
+def test_perch_v1p8_is_installed():
+    assert "perch/v1p8" in installed_models()
 
 
 def test_listing_models_imports_no_adapter_and_no_runtime():
@@ -76,7 +76,7 @@ def test_listing_models_imports_no_adapter_and_no_runtime():
         "from robin_inference_engine.construct_model import installed_models\n"
         "assert 'owl/v4' in installed_models()\n"
         "assert 'birdnet/v2p4' in installed_models()\n"
-        "assert 'perch/v8' in installed_models()"
+        "assert 'perch/v1p8' in installed_models()"
     )
     assert modules_loaded_after(code) == set()
 

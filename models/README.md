@@ -63,11 +63,11 @@ The model is for non-commercial use. Upstream states its licence as CC BY-NC 4.0
 record) and as CC BY-NC-SA 4.0 (BirdNET-Analyzer's README). It is not covered by robin's
 BSD-3-Clause licence.
 
-## Perch v8
+## Perch v1p8
 
 ### Where the files come from
 
-Perch v8's files are Google's bird vocalization classifier for TensorFlow 2, version 8, on Kaggle:
+Perch v1p8's files are Google's bird vocalization classifier for TensorFlow 2, version 8, on Kaggle:
 <https://www.kaggle.com/models/google/bird-vocalization-classifier/TensorFlow2/bird-vocalization-classifier/8>.
 Download its archive,
 `bird-vocalization-classifier-tensorflow2-bird-vocalization-classifier-v8.tar.gz`.
@@ -76,7 +76,8 @@ Download its archive,
 - sha256: `e58f0d9e73c34c4762f4c73d60716ebd0f26b61f35d9335a1141f7868f41d574`
 
 Kaggle's page now calls this "the Perch v1 model" and points to Perch 2. Perch 2 is a different
-model; this adapter runs version 8 only.
+model; this adapter runs version 8 only. The model version `v1p8` means Perch 1, version 8, so a
+later Perch 2 can be `perch/v2p0`.
 
 ### What a work pins
 
@@ -161,7 +162,7 @@ and size before the head is built.
 model_name: example-head
 model_version: "1"
 runtime: onnx
-backbone: {name: perch, version: v8, digest: 'sha256:v1:<the backbone card digest>'}
+backbone: {name: perch, version: v1p8, digest: 'sha256:v1:<the backbone card digest>'}
 embedding_dim: 1280
 min_detection_threshold: 0.0
 score_domain: sigmoid

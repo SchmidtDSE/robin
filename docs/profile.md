@@ -67,7 +67,7 @@ compute:
       resources: {batch_size: 32}   # given to the model's code in each task's work file
   models:                       # the models that runs can use
     owl/v4: {}
-    perch/v8:                   # changes to the setup's values for this model
+    perch/v1p8:                   # changes to the setup's values for this model
       request: {requests: {memory: 20Gi, cpu: null}}
       resources: {batch_size: 16}
     head_runtime:onnx: {}       # every head on the onnx runtime without its own entry
@@ -79,7 +79,7 @@ entry of its runtime, so a new trained head needs no profile change. With one se
 every model uses it. With two or more, each model entry names its setup, as
 `setup: NAME`. A model's `request` and `resources` change the setup's values key by
 key: a key that the model gives replaces the setup's key, and `null` removes
-it. In the example, `perch/v8` asks for `memory: 20Gi` and the limits and deadline of
+it. In the example, `perch/v1p8` asks for `memory: 20Gi` and the limits and deadline of
 the setup, with no `cpu` request. `active_deadline_seconds: null` removes the setup's
 deadline.
 

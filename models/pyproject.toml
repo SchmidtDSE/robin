@@ -41,7 +41,7 @@ onnx-head = [
 [project.entry-points."robin.models"]
 "owl/v4" = "robin_models.owl.adapter:build"
 "birdnet/v2p4" = "robin_models.birdnet.adapter:build"
-"perch/v8" = "robin_models.perch.adapter:build"
+"perch/v1p8" = "robin_models.perch.adapter:build"
 
 [project.entry-points."robin.head_runtimes"]
 onnx = "robin_models.onnx_head.adapter:build"

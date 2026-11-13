@@ -1,8 +1,8 @@
-# Perch v8: Google's bird vocalization classifier, version 8 of its Kaggle release, run from
-# its SavedModel on TensorFlow. It scores 10,932 eBird 2021 species codes and also returns
-# an embedding of each window.
+# Perch v1p8: Perch 1, Google's bird vocalization classifier, version 8 of its Kaggle
+# release, run from its SavedModel on TensorFlow. It scores 10,932 eBird 2021 species
+# codes and also returns an embedding of each window.
 model_name: perch
-model_version: v8
+model_version: v1p8
 runtime: tensorflow
 
 # The network takes 5 seconds of raw audio at 32 kHz, 160,000 samples, and makes its own

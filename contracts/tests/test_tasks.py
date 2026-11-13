@@ -162,7 +162,7 @@ def test_a_task_refuses_an_empty_output_root():
 
 def test_a_task_whose_version_names_another_model_still_parses():
     # The worker refuses it with its own code; the parser must not hide that.
-    task = build_task(output_version=ModelOutputVersion(model="model:perch/v8", version=3))
+    task = build_task(output_version=ModelOutputVersion(model="model:perch/v1p8", version=3))
 
     assert output_version_id(task.work.model.card) != task.output_version.model
 

@@ -37,7 +37,7 @@ from run_fixtures import KUBERNETES_SETTINGS, LOCAL_SETTINGS, get_fixed_settings
 
 FIXTURES = Path(__file__).parent / "fixtures"
 OWL_CONFIGURATION = read_configuration(FIXTURES / "configuration-owl-v4.yaml")
-PERCH_CONFIGURATION = read_configuration(FIXTURES / "configuration-perch-v8.yaml")
+PERCH_CONFIGURATION = read_configuration(FIXTURES / "configuration-perch-v1p8.yaml")
 HEAD_CONFIGURATION = read_configuration(FIXTURES / "configuration-songbird-head-v1.yaml")
 PROVENANCE = {
     "input": "uris",
@@ -62,7 +62,7 @@ def make_recording_manifest(count: int = 3) -> RecordingManifest:
 
 @pytest.fixture
 def registered(migrated_database):
-    for name in ("owl-v4", "perch-v8", "songbird-head-v1"):
+    for name in ("owl-v4", "perch-v1p8", "songbird-head-v1"):
         register_model(migrated_database, read_pinned_model(name), actor="ana")
     return migrated_database
 
@@ -219,7 +219,7 @@ def test_a_head_run_freezes_both_versions(registered):
         "SELECT output_versions FROM inference_runs WHERE run_id = %s",
         submitted.run_id,
     )
-    assert run["output_versions"] == {"head_runtime:onnx": 3, "model:perch/v8": 1}
+    assert run["output_versions"] == {"head_runtime:onnx": 3, "model:perch/v1p8": 1}
 
 
 def test_the_provenance_is_stored_with_the_recording_count(registered):
@@ -352,8 +352,8 @@ def get_frozen_settings(database, run_id) -> dict:
 
 
 def test_submit_freezes_the_settings_of_the_configurations_model(registered):
-    # The head's backbone, perch/v8, has another setup.
-    profile = make_profile({"perch/v8": {"setup": "b"}, "songbird-head/v1": {"setup": "a"}})
+    # The head's backbone, perch/v1p8, has another setup.
+    profile = make_profile({"perch/v1p8": {"setup": "b"}, "songbird-head/v1": {"setup": "a"}})
 
     backbone = submit_with_profile(registered, profile, PERCH_CONFIGURATION)
     head = submit_with_profile(registered, profile, HEAD_CONFIGURATION)
@@ -489,7 +489,7 @@ def test_a_local_recording_under_kubernetes_is_refused_and_no_run_is_stored(regi
 
 
 def test_a_local_model_file_under_kubernetes_is_refused(migrated_database):
-    register_model(migrated_database, read_pinned_model("perch-v8"), actor="ana")
+    register_model(migrated_database, read_pinned_model("perch-v1p8"), actor="ana")
     register_with_files(migrated_database, "songbird-head-v1", graph="file:///models/head.onnx")
     create_preset(migrated_database, "perch", PERCH_CONFIGURATION, actor="ana")
 

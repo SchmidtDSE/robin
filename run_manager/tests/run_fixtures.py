@@ -44,7 +44,7 @@ from model_fixtures import read_pinned_model
 
 FIXTURES = Path(__file__).parent / "fixtures"
 OWL_CONFIGURATION = read_configuration(FIXTURES / "configuration-owl-v4.yaml")
-PERCH_CONFIGURATION = read_configuration(FIXTURES / "configuration-perch-v8.yaml")
+PERCH_CONFIGURATION = read_configuration(FIXTURES / "configuration-perch-v1p8.yaml")
 HEAD_CONFIGURATION = read_configuration(FIXTURES / "configuration-songbird-head-v1.yaml")
 NAMESPACE = "survey"
 # A request that gives nothing, as a run stores it.
@@ -97,7 +97,7 @@ def get_task_setup(database, task_id):
     }
 # The models of the fixture configurations.
 # The fixture head has no entry of its own; its runtime entry covers it.
-FIXTURE_MODELS = {"owl/v4": {}, "perch/v8": {}, "head_runtime:onnx": {}}
+FIXTURE_MODELS = {"owl/v4": {}, "perch/v1p8": {}, "head_runtime:onnx": {}}
 
 
 def make_compute_section(models=None, **setup):
@@ -125,7 +125,7 @@ def get_local_setup(root):
 
 
 def register_fixture_models(database: Database) -> None:
-    for name in ("owl-v4", "perch-v8", "songbird-head-v1"):
+    for name in ("owl-v4", "perch-v1p8", "songbird-head-v1"):
         register_model(database, read_pinned_model(name), actor="ana")
 
 

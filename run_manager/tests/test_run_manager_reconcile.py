@@ -793,16 +793,16 @@ def test_a_bad_new_model_entry_refuses_its_submit_and_not_the_pass(
     registered, database_settings, s3_bucket
 ):
     run_id = submit_with_profile(registered, get_aws_batch_profile(database_settings))
-    # The new entry for perch/v8 breaks the request rules of aws-batch. Profile load does
+    # The new entry for perch/v1p8 breaks the request rules of aws-batch. Profile load does
     # not check them.
     profile = get_aws_batch_profile(database_settings, models={
-        "owl/v4": {}, "perch/v8": {"request": {"requests": {"GPU": "0"}}},
+        "owl/v4": {}, "perch/v1p8": {"request": {"requests": {"GPU": "0"}}},
     })
 
     with pytest.raises(Refused) as raised:
         submit_with_profile(registered, profile, PERCH_CONFIGURATION, ["b"])
     assert raised.value.reason == "invalid_profile"
-    assert "perch/v8" in raised.value.message
+    assert "perch/v1p8" in raised.value.message
     compute = ScriptedCompute()
 
     report = reconcile_once(get_aws_batch_services(registered, profile, compute), actor="ana")

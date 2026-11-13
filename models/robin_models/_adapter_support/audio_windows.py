@@ -2,7 +2,7 @@
 them in batches, and makes one output for each window.
 
 Each adapter keeps its own block reader, window cutter and network call, and passes them
-in. Each check takes `owner`, the name the error gives, such as "model perch/v8".
+in. Each check takes `owner`, the name the error gives, such as "model perch/v1p8".
 Importing this module loads NumPy and soundfile, but no ML runtime.
 """
 

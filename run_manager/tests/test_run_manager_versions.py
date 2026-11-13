@@ -13,7 +13,7 @@ from robin_run_manager.versions import (
 from model_fixtures import read_pinned_model
 
 OWL = read_pinned_model("owl-v4")
-PERCH = read_pinned_model("perch-v8")
+PERCH = read_pinned_model("perch-v1p8")
 HEAD = read_pinned_model("songbird-head-v1")
 
 
@@ -28,7 +28,7 @@ def test_an_audio_run_freezes_its_model_version():
 def test_a_head_run_freezes_the_head_runtime_and_the_backbone():
     assert get_frozen_output_versions([HEAD.card, PERCH.card], RELEASE_OUTPUT_VERSIONS) == {
         "head_runtime:onnx": 1,
-        "model:perch/v8": 1,
+        "model:perch/v1p8": 1,
     }
 
 
@@ -42,24 +42,24 @@ def test_a_model_that_the_release_does_not_have_is_refused():
 
 
 def test_a_head_whose_backbone_the_release_does_not_have_is_refused():
-    release_versions = get_release_versions_without("model:perch/v8")
+    release_versions = get_release_versions_without("model:perch/v1p8")
 
     with pytest.raises(Refused) as refused:
         get_frozen_output_versions([HEAD.card, PERCH.card], release_versions)
 
     assert refused.value.reason == "unknown_output_version"
-    assert refused.value.details == {"output_version_id": "model:perch/v8"}
+    assert refused.value.details == {"output_version_id": "model:perch/v1p8"}
 
 
 def test_get_outdated_versions_lists_each_changed_and_missing_version():
     release_versions = (
-        ModelOutputVersion(model="model:perch/v8", version=2),
+        ModelOutputVersion(model="model:perch/v1p8", version=2),
         ModelOutputVersion(model="model:owl/v4", version=1),
     )
-    run = {"model:perch/v8": 1, "head_runtime:onnx": 1, "model:owl/v4": 1}
+    run = {"model:perch/v1p8": 1, "head_runtime:onnx": 1, "model:owl/v4": 1}
 
     assert get_outdated_versions(run, release_versions) == {
-        "model:perch/v8": {"run": 1, "release": 2},
+        "model:perch/v1p8": {"run": 1, "release": 2},
         "head_runtime:onnx": {"run": 1, "release": None},
     }
     assert get_outdated_versions({"model:owl/v4": 1}, release_versions) == {}

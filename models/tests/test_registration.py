@@ -19,7 +19,7 @@ def test_a_head_reads_the_roles_of_its_runtime():
             "model_name": "songbird-head",
             "model_version": "v1",
             "runtime": "onnx",
-            "backbone": {"name": "perch", "version": "v8", "digest": "sha256:v1:" + "8" * 64},
+            "backbone": {"name": "perch", "version": "v1p8", "digest": "sha256:v1:" + "8" * 64},
             "embedding_dim": 1280,
             "min_detection_threshold": 0.0,
             "score_domain": "sigmoid",
