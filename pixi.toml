@@ -71,7 +71,7 @@ python -m build --wheel --outdir .worker-image/dist inference_engine &&
 python -m build --wheel --outdir .worker-image/dist models &&
 python -m build --wheel --outdir .worker-image/dist adapters &&
 python -m build --wheel --outdir .worker-image/dist worker &&
-docker build --platform linux/amd64 -f docker/worker.Dockerfile -t robin-worker:dev .
+docker build --platform linux/amd64 --build-arg ROBIN_RELEASE -f docker/worker.Dockerfile -t robin-worker:dev .
 """
 
 [tasks.worker-image-gpu]

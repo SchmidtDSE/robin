@@ -25,6 +25,11 @@ RUN pip install --no-cache-dir \
     && pip check \
     && rm -rf /tmp/robin-wheels
 
+# The Robin release that each task's result names. `worker-push` sets it to the commit
+# that the image is built from. Any other build names "unreleased".
+ARG ROBIN_RELEASE=unreleased
+ENV ROBIN_RELEASE=${ROBIN_RELEASE}
+
 # The worker writes its scratch files here.
 WORKDIR /work
 

@@ -65,7 +65,9 @@ check is a real task, not a separate `python` command.
 `worker-push` builds both images from the current commit and pushes them as
 `<commit>` and `<commit>-gpu`, so that each job definition revision names one image.
 It refuses a working tree with uncommitted changes, because the tag would then not
-name the code in the image.
+name the code in the image. Both images set `ROBIN_RELEASE` to the full commit, so each
+task's result names the code that made it. An image from `worker-image` names
+`unreleased`.
 
 Give the repository once, as a line in `.env` (git-ignored). The task reads only this
 line:

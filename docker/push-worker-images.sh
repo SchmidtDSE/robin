@@ -28,6 +28,9 @@ if ! git diff --quiet HEAD; then
   exit 1
 fi
 tag=$(git rev-parse --short HEAD)
+# Each task's result names this release. The image build reads it from the environment.
+export ROBIN_RELEASE
+ROBIN_RELEASE=$(git rev-parse HEAD)
 
 registry=${repository%%/*}
 if [[ $registry == *.dkr.ecr.*.amazonaws.com ]]; then
@@ -38,6 +41,13 @@ if [[ $registry == *.dkr.ecr.*.amazonaws.com ]]; then
 fi
 
 pixi run -e test worker-image-gpu
+for image in robin-worker:dev robin-worker:dev-gpu; do
+  if ! docker image inspect "$image" --format '{{range .Config.Env}}{{println .}}{{end}}' |
+    grep -qx "ROBIN_RELEASE=$ROBIN_RELEASE"; then
+    echo "$image does not name the release $ROBIN_RELEASE. Nothing was pushed." >&2
+    exit 1
+  fi
+done
 
 docker tag robin-worker:dev "$repository:$tag"
 docker push "$repository:$tag"
