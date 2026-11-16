@@ -1374,6 +1374,54 @@ def test_an_input_the_port_cannot_fetch_fails_the_recording_at_acquisition(rig):
     assert_failed_cleanly(rig, result)
 
 
+def test_each_recordings_coverage_names_the_checksum_of_the_audio_it_read(rig):
+    work = rig.work(recordings=2)
+
+    result = success_of(rig, rig.run(work, rig.model(script(1, 1))), work)
+
+    assert [row.input_checksum for row in result.coverage] == [
+        checksum_file(rig.build.audio_paths[one.audio_uri]) for one in work.recordings
+    ]
+
+
+def test_an_input_that_cannot_be_read_after_its_fetch_fails_the_recording(rig, tmp_path):
+    work = rig.work()
+    missing = tmp_path / "fetched-but-gone.flac"
+    inputs = rig.files("audio", {work.recordings[0].audio_uri: missing})
+
+    result = rig.run(work, rig.model(script(1)), inputs=inputs)
+
+    failure = recording_failure_of(
+        result, work, value="0", code=errors.INPUT_UNAVAILABLE, stage=errors.ACQUIRE_INPUT
+    )
+    assert "FileNotFoundError" in failure.detail
+    assert rig.calls.count(("audio", "release", missing)) == 1
+    assert ("run", missing) not in rig.calls
+
+
+def test_a_failed_release_after_a_failed_checksum_is_logged_and_changes_nothing(rig, tmp_path):
+    work = rig.work()
+    missing = tmp_path / "fetched-but-gone.flac"
+    inputs = rig.files(
+        "audio",
+        {work.recordings[0].audio_uri: missing},
+        fail_release=OSError("the scratch disk is gone"),
+    )
+    lines: list[str] = []
+
+    result = rig.run(work, rig.model(script(1)), inputs=inputs, log=lines.append)
+
+    failure = recording_failure_of(
+        result, work, value="0", code=errors.INPUT_UNAVAILABLE, stage=errors.ACQUIRE_INPUT
+    )
+    assert "FileNotFoundError" in failure.detail
+    assert rig.calls.count(("audio", "release", missing)) == 1
+    assert (
+        "cleanup: releasing the input of recording ('test', '0') raised OSError: "
+        "the scratch disk is gone"
+    ) in lines
+
+
 # ---------------------------------------------------------------------------
 # The lifecycle, read from one call log.
 # ---------------------------------------------------------------------------

@@ -163,9 +163,9 @@ a recording gives the number of read threads.
 
 The engine then writes its own line for the recording, with the seconds of its stages:
 fetch, engine, detections, and publish. `fetch` is the time that the recording waited
-for its input. The engine fetches each input while the recording before it runs, so
-`fetch` is near 0 when the fetch finished in that time. The first recording waits for
-the whole of its fetch.
+for its input, and for the checksum of its audio. The engine fetches each input while
+the recording before it runs, so `fetch` is near 0 when the fetch finished in that time.
+The first recording waits for the whole of its fetch.
 
 ## What still runs one after another
 
@@ -175,6 +175,12 @@ because a long recording can be large on disk. If the next recording never runs,
 the work stops, the engine releases its input. If a fetch fails, only the recording that
 it was for fails. The model is built once for each work, and it stays loaded for all the
 recordings.
+
+The same thread computes the `sha256:` checksum of each audio file that it fetches. The
+result names it as the recording's `input_checksum` in `coverage`, so that a later change
+to the audio can be found. Saved embeddings get none: the work pins their checksum
+already. A file that cannot be read for its checksum fails its recording with
+`input_unavailable`.
 
 ## OWL and the ONNX heads
 

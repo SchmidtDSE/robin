@@ -137,26 +137,40 @@ class _StageSeconds:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class _FetchedInput:
+    """A recording's fetched input, and the checksum of its audio (None for embeddings)."""
+
+    path: Path
+    checksum: str | None
+
+
 class _InputPrefetcher:
     """Fetches the recordings' inputs in order, in one background thread.
 
     Taking a recording's input starts the fetch of the next recording's input. So at most
     one input is fetched ahead of the recording that runs. Only the background thread
-    calls `fetch`. The caller releases each input it takes.
+    calls `fetch`, and it also computes each audio file's checksum, so that work overlaps
+    the recording that runs. The caller releases each input it takes.
     """
 
     def __init__(
-        self, inputs: FileProvider, recordings: Sequence[RecordingRef], executor: ThreadPoolExecutor
+        self,
+        inputs: FileProvider,
+        recordings: Sequence[RecordingRef],
+        executor: ThreadPoolExecutor,
+        log: Log,
     ) -> None:
         self._inputs = inputs
         self._recordings = recordings
         self._executor = executor
+        self._log = log
         # The input that is fetched next, or is being fetched now, and is not yet taken.
         # The first fetch starts when the first input is taken, so it is timed as a wait.
         self._next_position = 0
-        self._next_fetch: Future[Path] | None = None
+        self._next_fetch: Future[_FetchedInput] | None = None
 
-    def take_input(self, position: int) -> Path:
+    def take_input(self, position: int) -> _FetchedInput:
         """Wait for the input of the recording at `position`, then fetch the next one.
 
         Raises the recording's `input_unavailable` failure if its fetch failed.
@@ -179,7 +193,9 @@ class _InputPrefetcher:
         """Start fetching the input at `position`. After the last recording, fetch nothing."""
         self._next_position = position
         self._next_fetch = (
-            self._executor.submit(_fetch_input, self._inputs, self._recordings[position])
+            self._executor.submit(
+                _fetch_input, self._inputs, self._recordings[position], self._log
+            )
             if position < len(self._recordings)
             else None
         )
@@ -194,10 +210,10 @@ class _InputPrefetcher:
         if future is None or future.cancel():
             return
         try:
-            path = future.result()
+            fetched = future.result()
         except errors.EngineError:
             return
-        self._inputs.release(path)
+        self._inputs.release(fetched.path)
 
 
 def run_work(
@@ -309,7 +325,9 @@ def _build_model(
 def _start_input_prefetcher(context: _WorkContext, cleanup: _Cleanup) -> _InputPrefetcher:
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=PREFETCH_THREAD_NAME)
     cleanup.add("stopping the input prefetch thread", executor.shutdown)
-    prefetcher = _InputPrefetcher(context.inputs, context.work.recordings, executor)
+    prefetcher = _InputPrefetcher(
+        context.inputs, context.work.recordings, executor, context.log
+    )
     cleanup.add("releasing the prefetched input", prefetcher.release_prefetched_input)
     return prefetcher
 
@@ -435,12 +453,14 @@ class _RecordingProcessor:
         self._coverage.begin_recording(position)
         seconds = _StageSeconds()
         with _Cleanup(self._context.log) as cleanup:
-            path = self._take_input(position, recording, cleanup, seconds)
-            model_input = self._prepare_input(recording, path)
+            fetched = self._take_input(position, recording, cleanup, seconds)
+            model_input = self._prepare_input(recording, fetched.path)
             with _report_local_write_errors(recording):
                 window_files = self._run_model(position, recording, model_input, seconds)
                 detections = self._stage_detections(window_files.files, seconds)
-            self._end_coverage(recording, window_files.accepted_windows, detections)
+            self._end_coverage(
+                recording, window_files.accepted_windows, detections, fetched.checksum
+            )
             self._records += self._publish_files((*window_files.files, *detections), seconds)
         self._log_recording(recording, window_files.accepted_windows, seconds)
 
@@ -450,16 +470,16 @@ class _RecordingProcessor:
         recording: RecordingRef,
         cleanup: _Cleanup,
         seconds: _StageSeconds,
-    ) -> Path:
+    ) -> _FetchedInput:
         """Wait for the recording's input, and add the steps that run after the recording."""
         with seconds.measure("fetch"):
-            path = self._prefetcher.take_input(position)
+            fetched = self._prefetcher.take_input(position)
         name = errors.get_recording_name(recording)
-        release = partial(self._context.inputs.release, path)
+        release = partial(self._context.inputs.release, fetched.path)
         cleanup.add(f"releasing the input of recording {name}", release)
         # Added last so that it runs first: the model may still hold the input file.
         cleanup.add(f"after_recording for recording {name}", self._model.after_recording)
-        return path
+        return fetched
 
     def _prepare_input(self, recording: RecordingRef, path: Path) -> Input:
         """Return the audio as fetched, or for a head, the recording's checked embeddings.
@@ -480,6 +500,7 @@ class _RecordingProcessor:
         recording: RecordingRef,
         accepted_windows: int,
         detections: tuple[StagedArtifact, ...],
+        input_checksum: str | None,
     ) -> None:
         reason = (
             None
@@ -487,7 +508,9 @@ class _RecordingProcessor:
             else _get_zero_window_reason(recording, self._recipe.audio.geometry)
         )
         self._coverage.end_recording(
-            zero_window_reason=reason, detection_rows=sum(one.rows for one in detections)
+            zero_window_reason=reason,
+            detection_rows=sum(one.rows for one in detections),
+            input_checksum=input_checksum,
         )
 
     def _publish_files(
@@ -620,9 +643,35 @@ def _publish(artifacts: ArtifactWriter, staged: StagedArtifact) -> ArtifactRecor
         ) from exc
 
 
-def _fetch_input(inputs: FileProvider, recording: RecordingRef) -> Path:
-    """The recording's embeddings file when it names one, and its audio otherwise."""
-    uri = recording.embeddings.uri if recording.embeddings is not None else recording.audio_uri
+def _fetch_input(inputs: FileProvider, recording: RecordingRef, log: Log) -> _FetchedInput:
+    """Fetch the recording's embeddings file when it names one, and its audio otherwise.
+
+    For audio, it also returns the checksum of the fetched file. Saved embeddings get no
+    checksum here: their reader checks the one that the work pins. If the checksum cannot
+    be read, the file is released, and a release that fails is only logged.
+    """
+    if recording.embeddings is not None:
+        path = _fetch(inputs, recording.embeddings.uri, recording)
+        return _FetchedInput(path=path, checksum=None)
+    uri = recording.audio_uri
+    path = _fetch(inputs, uri, recording)
+    try:
+        checksum = checksum_file(path)
+    except Exception as exc:
+        # The read failure is the one the recording reports, not a failed release.
+        with _Cleanup(log) as cleanup:
+            name = errors.get_recording_name(recording)
+            cleanup.add(f"releasing the input of recording {name}", partial(inputs.release, path))
+        raise errors.EngineError(
+            errors.INPUT_UNAVAILABLE,
+            errors.ACQUIRE_INPUT,
+            f"reading {uri} after its fetch raised {type(exc).__name__}: {exc}",
+            recording=recording,
+        ) from exc
+    return _FetchedInput(path=path, checksum=checksum)
+
+
+def _fetch(inputs: FileProvider, uri: str, recording: RecordingRef) -> Path:
     try:
         return inputs.fetch(uri)
     except Exception as exc:

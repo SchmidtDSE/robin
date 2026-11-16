@@ -521,6 +521,14 @@ def test_a_head_work_scores_every_window_of_its_input(rig):
         assert set(table.column("label").to_pylist()) == set(HEAD_LABELS)
 
 
+def test_a_head_works_coverage_names_no_input_checksum(rig):
+    # The embeddings a head reads are pinned by their checksum in the work already.
+    result = rig.run(full_head_work(rig))
+
+    assert isinstance(result, InferenceCompleted), result
+    assert [row.input_checksum for row in result.coverage] == [None, None]
+
+
 def test_a_head_works_result_carries_its_backbones_recipe_and_names_the_head(rig):
     work = full_head_work(rig)
 

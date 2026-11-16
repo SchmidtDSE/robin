@@ -69,11 +69,16 @@ class CoverageBuilder:
         )
 
     def end_recording(
-        self, *, zero_window_reason: ZeroWindowReason | None = None, detection_rows: int = 0
+        self,
+        *,
+        zero_window_reason: ZeroWindowReason | None = None,
+        detection_rows: int = 0,
+        input_checksum: str | None = None,
     ) -> None:
         """Close the open recording and build its row, refusing an unexplained zero.
 
         `detection_rows` is passed in: detections are counted after the windows, not per window.
+        `input_checksum` is the checksum of the audio that was read, or None.
         """
         if self._open_recording is None:
             raise RuntimeError("no recording is open to end")
@@ -102,6 +107,7 @@ class CoverageBuilder:
             first_window_start_s=self._first_start,
             last_window_end_s=self._greatest_end,
             zero_window_reason=zero_window_reason,
+            input_checksum=input_checksum,
         )
         self._open_recording = None
 

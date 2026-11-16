@@ -262,6 +262,14 @@ def test_a_recording_with_no_windows_carries_no_rows(overrides):
         )
 
 
+def test_coverage_names_the_checksum_of_the_audio_it_read():
+    assert build_coverage().input_checksum is None
+    assert build_coverage(input_checksum=FILE_DIGEST).input_checksum == FILE_DIGEST
+
+    with pytest.raises(ValidationError, match="input_checksum"):
+        build_coverage(input_checksum="md5:abc")
+
+
 def test_detection_rows_are_required():
     fields = build_coverage().model_dump()
     del fields["detection_rows"]

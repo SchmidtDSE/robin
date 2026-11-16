@@ -80,6 +80,9 @@ class RecordingCoverage(BaseModel, frozen=True, extra="forbid"):
     """What one recording finished, counted in windows; rows only check them.
 
     The recording is named by its `namespace` and `value`, as in its artifact records.
+    `input_checksum` is the checksum of the audio file that the engine read, so that a
+    later change to the audio can be found. It is None when the input is saved
+    embeddings, which the work already pins by their checksum.
     """
 
     namespace: NonEmptyText
@@ -91,6 +94,7 @@ class RecordingCoverage(BaseModel, frozen=True, extra="forbid"):
     first_window_start_s: _Seconds | None = None
     last_window_end_s: _Seconds | None = None
     zero_window_reason: ZeroWindowReason | None = None
+    input_checksum: BytesDigest | None = None
 
     def _name(self) -> str:
         return _named(self.namespace, self.value)
