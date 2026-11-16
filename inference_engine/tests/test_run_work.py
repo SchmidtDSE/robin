@@ -676,6 +676,27 @@ def test_the_model_is_built_from_the_verified_files_and_the_work(rig):
     assert not context.scratch_dir.exists()
 
 
+@pytest.mark.parametrize(
+    ("outputs", "emit_scores"),
+    [
+        pytest.param((embeddings_request(),), False, id="embeddings only"),
+        pytest.param((scores_request(),), True, id="scores"),
+        pytest.param((scores_request(), embeddings_request()), True, id="both"),
+    ],
+)
+def test_the_model_is_asked_for_scores_only_when_the_work_asks_for_them(
+    rig, outputs, emit_scores
+):
+    work = rig.work(outputs=outputs)
+
+    rig.run(work, rig.model(script(1, scores=emit_scores, embedding=True)))
+
+    (context,) = rig.contexts
+    assert context.emit_scores is emit_scores
+    # The pinned registry is still loaded and checked.
+    assert context.registry is not None
+
+
 # ---------------------------------------------------------------------------
 # What the request keeps, and what the card says the model emits.
 # ---------------------------------------------------------------------------

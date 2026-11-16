@@ -1037,15 +1037,22 @@ def test_asking_for_embeddings_does_not_change_a_score(runtime, tmp_path):
     )
 
 
-def test_with_a_registry_scores_are_computed_even_when_only_embeddings_are_asked_for(
-    runtime, tmp_path
-):
+def test_with_a_registry_one_pass_gives_both_scores_and_embeddings(runtime, tmp_path):
     model, _, path = model_and_noise(runtime, tmp_path, WINDOW, emit_embeddings=True)
     [window] = run(model, path)
     assert len(runtime.calls_to("embeddings")) == 1
     assert len(runtime.matmuls) == 1
     assert runtime.calls_to("scores") == []
     assert len(window.scores) == 6522
+
+
+def test_not_asked_for_scores_no_scores_are_computed_even_with_a_registry(runtime, tmp_path):
+    context = birdnet_context(tmp_path, emit_embeddings=True, emit_scores=False)
+    model = runtime.adapter.build(context)
+    windows = run(model, write_audio(tmp_path / "a.wav", noise(2 * WINDOW), 48000))
+    assert runtime.matmuls == []
+    assert [window.scores for window in windows] == [None, None]
+    assert all(window.embedding is not None for window in windows)
 
 
 def test_without_a_registry_no_scores_are_computed(runtime, tmp_path):

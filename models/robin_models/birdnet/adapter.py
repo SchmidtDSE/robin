@@ -87,7 +87,7 @@ def build(context: ModelContext) -> "BirdnetModel":
     require_input(embeddings, SIGNATURE, round(card.window_duration * card.sample_rate), OWNER)
     require_output(embeddings, SIGNATURE, "embeddings", card.embedding_dim, OWNER)
     labels = kernel = bias = None
-    if context.registry is not None:
+    if context.registry is not None and context.emit_scores:
         kernel, bias = _get_classifier_layer(
             loaded, card.embedding_dim, len(context.registry.entries)
         )

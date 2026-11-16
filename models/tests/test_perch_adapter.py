@@ -981,11 +981,23 @@ def test_asking_for_embeddings_does_not_change_a_score(runtime, tmp_path):
     )
 
 
-def test_with_a_registry_scores_come_even_when_only_embeddings_are_asked_for(runtime, tmp_path):
+def test_with_a_registry_scores_come_beside_embeddings(runtime, tmp_path):
     model, _, path = model_and_noise(runtime, tmp_path, WINDOW, emit_embeddings=True)
     [window] = run(model, path)
     assert len(window.scores) == 10932
     assert window.embedding is not None
+
+
+def test_not_asked_for_scores_the_label_output_is_not_read_even_with_a_registry(
+    runtime, tmp_path
+):
+    runtime.logits = lambda batch: np.full((len(batch), 10932), np.nan, dtype=np.float32)
+    context = perch_context(tmp_path, emit_embeddings=True, emit_scores=False)
+    model = runtime.adapter.build(context)
+    windows = run(model, write_audio(tmp_path / "a.wav", noise(2 * WINDOW), 32000))
+    assert [window.scores for window in windows] == [None, None]
+    assert all(window.embedding is not None for window in windows)
+    assert "label" not in runtime.read
 
 
 def test_without_a_registry_no_scores_come_and_the_label_output_is_not_read(runtime, tmp_path):

@@ -43,3 +43,7 @@ class ModelContext:
     scratch_dir: Path
     emit_embeddings: bool
     log: Log = discard_log_line
+    # False when the work asks for no scores. A model that makes its scores in a separate
+    # step, given a registry, can then skip that step. A model that cannot skip it may
+    # still return scores, and the engine does not keep them.
+    emit_scores: bool = True

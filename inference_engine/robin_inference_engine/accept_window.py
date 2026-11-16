@@ -141,8 +141,8 @@ class AcceptanceBoundary:
         self._check_order(window)
         self._check_geometry(window)
         self._check_within_recording(window)
-        # A model is never told whether scores are wanted, so producing unrequested
-        # ones is not a defect: they are dropped before any score check applies.
+        # A model that cannot skip its scores may return them when none are wanted. That
+        # is not a defect: they are dropped before any score check applies.
         if self._scores is None:
             scores, positions = _NO_SCORES, _NO_POSITIONS
         else:

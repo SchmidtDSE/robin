@@ -297,6 +297,8 @@ def _build_model(
         resources=work.resources,
         scratch_dir=scratch_dir,
         emit_embeddings=embeddings_request(work) is not None,
+        # A detections request always has a scores request beside it.
+        emit_scores=scores_request(work) is not None,
         log=context.log,
     )
     if isinstance(card, HeadCard):

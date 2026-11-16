@@ -86,7 +86,7 @@ def build(context: ModelContext) -> "PerchModel":
     require_input(serving, SIGNATURE, round(card.window_duration * card.sample_rate), OWNER)
     require_output(serving, SIGNATURE, "embedding", card.embedding_dim, OWNER)
     labels = None
-    if context.registry is not None:
+    if context.registry is not None and context.emit_scores:
         require_output(serving, SIGNATURE, "label", len(context.registry.entries), OWNER)
         labels = tuple(entry.label for entry in context.registry.entries)
     return PerchModel(
