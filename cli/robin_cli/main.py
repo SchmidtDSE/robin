@@ -304,6 +304,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_model_commands(nouns)
     _add_preset_commands(nouns)
     _add_run_commands(nouns)
+    _add_file_commands(nouns)
     _add_reconcile_command(nouns)
     return parser
 
@@ -674,6 +675,36 @@ def _add_run_commands(nouns) -> None:
         note="REASON is why a failed task failed, or - for any other task. --json also\n"
         "gives each task's execution times, its release, and the failure's detail.",
     ).add_argument("run_id", metavar="RUN", help=RUN_HELP)
+
+
+# ---------------------------------------------------------------------------
+# robin files
+# ---------------------------------------------------------------------------
+
+
+FILES_EXPORT_EPILOG = """\
+Writes the current files index: one Parquet file with one row for each file in
+the current_files view, with the file's model, preset names, size, and row
+count. The file is <storage root>/index/current_files.parquet, in the profile's
+storage. Each export also keeps a dated copy under <storage root>/index/history/.
+
+The index changes only when this command runs, so run it after each run ends.
+Only one export runs at a time; a second one is refused with export_in_progress.
+A change to the columns gives a new file name.
+
+Example:
+
+  robin files export
+"""
+
+
+def _add_file_commands(nouns) -> None:
+    file_commands = _add_group(nouns, "files", "the current output files")
+    _add_command(
+        file_commands, "export", commands.export_files,
+        "write the current files index to the profile's storage",
+        epilog=FILES_EXPORT_EPILOG,
+    )
 
 
 # ---------------------------------------------------------------------------

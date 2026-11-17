@@ -28,6 +28,8 @@ MIGRATION_LOCK = 1
 LAUNCH_LOCK = 2
 # With the hashtext of a setup name, as two numbers. See `robin_run_manager.setup_targets`.
 SETUP_LOCK = 4
+# A session lock, which one export of the current files index holds from start to end.
+INDEX_EXPORT_LOCK = 5
 
 # The channel of the notice that a submit sends at commit. A reconcile loop listens on
 # it, so that it starts a pass without waiting for its interval.
@@ -296,6 +298,43 @@ def lock_task(database: Database, task_id: UUID) -> Iterator[psycopg.Connection 
                 _unlock_task(connection, task_id)
     finally:
         _give_back(database, connection)
+
+
+@contextmanager
+def lock_index_export(database: Database) -> Iterator[psycopg.Connection | None]:
+    """Hold the lock of the current files index export for the block.
+
+    Gives the connection that holds the lock, or None if another session holds it. The
+    block runs its queries on that connection with `transaction_on`, so the export needs
+    only one pooled connection.
+
+    Raises `Unavailable` if the lock cannot be taken.
+    """
+    try:
+        connection = database.pool.getconn()
+    except psycopg.OperationalError as error:
+        raise Unavailable("Robin could not connect to its database. Nothing changed.") from error
+    try:
+        with transaction_on(connection, read_only=True):
+            locked = connection.execute(
+                "SELECT pg_try_advisory_lock(%s) AS locked", (INDEX_EXPORT_LOCK,)
+            ).fetchone()["locked"]
+        try:
+            yield connection if locked else None
+        finally:
+            if locked:
+                _unlock_index_export(connection)
+    finally:
+        _give_back(database, connection)
+
+
+def _unlock_index_export(connection: psycopg.Connection) -> None:
+    try:
+        connection.execute("SELECT pg_advisory_unlock(%s)", (INDEX_EXPORT_LOCK,))
+        connection.commit()
+    except psycopg.Error:
+        # The session ends, and its locks end with it.
+        connection.close()
 
 
 def _unlock_task(connection: psycopg.Connection, task_id: UUID) -> None:

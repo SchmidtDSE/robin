@@ -4,6 +4,7 @@ Each handler takes a `Context` and the parsed arguments, and returns an `Output`
 """
 
 import json
+from datetime import UTC, datetime
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -14,7 +15,13 @@ from robin_cli.catalog import get_manifest_from_catalog, parse_selection
 from robin_run_manager import migrations, models, presets, reconcile, runs, submit
 from robin_run_manager.compose import Services
 from robin_run_manager.configuration import read_configuration
-from robin_run_manager.errors import OperationError
+from robin_run_manager.errors import (
+    INVALID_PROFILE,
+    INVALID_REQUEST,
+    OperationError,
+    Refused,
+)
+from robin_run_manager.files_index import export_index
 from robin_run_manager.pages import Page
 from robin_run_manager.profile import get_compute_section, resolve_run_settings
 from robin_run_manager.reconcile import ReconcileReport, StepFailure
@@ -245,6 +252,36 @@ def list_run_tasks(context: Context, arguments) -> Output:
             "-" if item["failure"] is None else item["failure"]["reason"],
         ),
     )
+
+
+def export_files(context: Context, arguments) -> Output:
+    storage = context.services.profile.storage
+    if storage is None:
+        raise Refused(
+            INVALID_PROFILE,
+            "The profile has no storage section, so there is nowhere to write the "
+            "current files index. Add a storage section, then run the command again.",
+        )
+    task_storage = context.services.task_storage["local" if storage.kind == "local" else "s3"]
+    try:
+        exported = export_index(
+            context.services.database, task_storage, storage.root, datetime.now(UTC)
+        )
+    except FileExistsError:
+        raise Refused(
+            INVALID_REQUEST,
+            "An index with this time exists already. Robin did not change the current "
+            "index file. Run the command again.",
+        ) from None
+    data = {
+        "uri": exported.uri,
+        "dated_uri": exported.dated_uri,
+        "rows": exported.rows,
+        "checksum": exported.checksum,
+    }
+    rows = "1 row" if exported.rows == 1 else f"{exported.rows} rows"
+    text = f"Wrote {rows} to {exported.uri}.\nThe dated copy is {exported.dated_uri}."
+    return Output(data=data, text=text)
 
 
 def reconcile_once(

@@ -18,6 +18,8 @@ dependencies = [
   "pydantic>=2.12,<3",
   "psycopg[binary]>=3.2,<4",
   "psycopg-pool>=3.3,<4",
+  # `robin files export` writes the current files index as Parquet.
+  "pyarrow>=23.0.1,<24",
 ]
 
 [project.optional-dependencies]

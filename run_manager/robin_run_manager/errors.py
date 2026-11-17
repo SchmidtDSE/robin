@@ -26,6 +26,7 @@ UNSUPPORTED_LOCATION = "unsupported_location"
 INVALID_SELECTION = "invalid_selection"
 SOURCE_REFUSED = "source_refused"
 MODEL_NOT_IN_PROFILE = "model_not_in_profile"
+EXPORT_IN_PROGRESS = "export_in_progress"
 
 REFUSAL_REASONS = (
     NOT_AUTHENTICATED,
@@ -50,6 +51,7 @@ REFUSAL_REASONS = (
     INVALID_SELECTION,
     SOURCE_REFUSED,
     MODEL_NOT_IN_PROFILE,
+    EXPORT_IN_PROGRESS,
 )
 
 
@@ -126,7 +128,8 @@ class CatalogFailed(OperationError):
 
 class OutcomeUncertain(OperationError):
     """The change may or may not have been made: the connection failed during commit,
-    or the compute adapter failed after it may have started a task."""
+    the compute adapter failed after it may have started a task, or the task storage
+    failed during a write that it may have made."""
 
     reason = "outcome_uncertain"
 

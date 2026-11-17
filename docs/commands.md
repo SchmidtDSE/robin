@@ -18,6 +18,7 @@
 | `robin runs show RUN` | Show one run, with its status and counts. |
 | `robin runs recordings RUN` | List the recordings of a run. Filter with `--state` and `--skip-reason`. |
 | `robin runs tasks RUN` | List the tasks of a run. |
+| `robin files export` | Write the current files index, a Parquet file in the profile's storage. See [The current files](current-files.md). |
 | `robin reconcile` | Do one pass: prepare submitted runs, start queued tasks, and record the results of tasks that ended. |
 | `robin reconcile --loop` | Do passes until Ctrl-C or SIGTERM. A new pass starts when a run is submitted, or after `--interval` seconds (default 30). |
 

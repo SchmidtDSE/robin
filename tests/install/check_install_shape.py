@@ -123,11 +123,12 @@ _register(
 _register(
     "run-manager",
     install=("robin-run-manager",),
-    required=("robin_run_manager", "robin_run_manager.reconcile", "robin_contracts",
+    required=("robin_run_manager", "robin_run_manager.reconcile",
+              "robin_run_manager.files_index", "robin_contracts",
               "robin_models", "robin_models.output_versions",
               "robin_adapters", "robin_adapters.compute.local.adapter",
               "robin_adapters.storage.local.adapter", "robin_adapters.storage.location"),
-    runtimes=("psycopg", "boto3", "ondio", "soundfile"),
+    runtimes=("psycopg", "boto3", "ondio", "soundfile", "pyarrow"),
 )
 _register(
     "run-manager-rds",
@@ -135,7 +136,7 @@ _register(
     required=("robin_run_manager", "robin_contracts",
               "robin_models", "robin_models.output_versions",
               "robin_adapters", "robin_adapters.storage.location"),
-    runtimes=("psycopg", "boto3", "ondio", "soundfile"),
+    runtimes=("psycopg", "boto3", "ondio", "soundfile", "pyarrow"),
 )
 _register(
     "cli",
@@ -146,7 +147,7 @@ _register(
         "robin_adapters", "robin_adapters.catalog.folder_layout",
         "robin_adapters.compute.aws_batch.adapter",
     ),
-    runtimes=("psycopg", "boto3", "ondio", "soundfile"),
+    runtimes=("psycopg", "boto3", "ondio", "soundfile", "pyarrow"),
 )
 _register(
     "worker",

@@ -14,6 +14,10 @@ WorkContractId = Literal["robin.inference-work/1"]
 ResultContractId = Literal["robin.inference-result/1"]
 TaskContractId = Literal["robin.inference-task/1"]
 TaskResultContractId = Literal["robin.inference-task-result/1"]
+CurrentFilesContractId = Literal["robin.current-files.parquet/1"]
+
+# The contract of the current files index that `robin files export` writes.
+CURRENT_FILES_CONTRACT_ID: CurrentFilesContractId = "robin.current-files.parquet/1"
 
 
 def _check_finite(value: float) -> float:
