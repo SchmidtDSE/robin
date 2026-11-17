@@ -313,6 +313,36 @@ def get_outcomes(database: Database, run_id: UUID) -> dict[str, dict]:
     return {row["value"]: row for row in rows}
 
 
+def get_output_file_facts(
+    database: Database, task_id: UUID
+) -> dict[tuple[str, str], tuple[int | None, int | None]]:
+    """The size and row count of each output file of the task, by value and kind."""
+    with transaction(database, read_only=True) as connection:
+        rows = connection.execute(
+            "SELECT value, kind, size_bytes, rows FROM output_files WHERE task_id = %s",
+            (task_id,),
+        ).fetchall()
+    return {(row["value"], row["kind"]): (row["size_bytes"], row["rows"]) for row in rows}
+
+
+def get_coverage_facts(database: Database, task_id: UUID) -> dict[str, tuple]:
+    """The window facts and audio checksum of each recording of the task, by value:
+    windows completed, first window start, last window end, and input checksum."""
+    with transaction(database, read_only=True) as connection:
+        rows = connection.execute(
+            "SELECT value, windows_completed, first_window_start_s, last_window_end_s, "
+            "input_checksum FROM recording_outcomes WHERE task_id = %s",
+            (task_id,),
+        ).fetchall()
+    return {
+        row["value"]: (
+            row["windows_completed"], row["first_window_start_s"], row["last_window_end_s"],
+            row["input_checksum"],
+        )
+        for row in rows
+    }
+
+
 def get_run_row(database: Database, run_id: UUID) -> dict:
     with transaction(database, read_only=True) as connection:
         return connection.execute(
@@ -380,9 +410,12 @@ def get_work_file(database: Database, task_id: UUID) -> WorkFile:
         return build_work_file(connection, task_id)
 
 
-def build_completed(work_file: WorkFile, failed=()) -> InferenceCompleted:
+def build_completed(
+    work_file: WorkFile, failed=(), input_checksum: str | None = None
+) -> InferenceCompleted:
     """A completed result of the work file's task. Each recording whose value is not in
-    `failed` is covered, with one scores file under the task's output root."""
+    `failed` is covered, with one scores file under the task's output root. Each
+    covered recording has `input_checksum` as its audio checksum."""
     task = work_file.task
     covered = [one for one in task.work.recordings if one.value not in failed]
     return InferenceCompleted(
@@ -409,7 +442,7 @@ def build_completed(work_file: WorkFile, failed=()) -> InferenceCompleted:
             RecordingCoverage(
                 namespace=one.namespace, value=one.value, windows_completed=3, score_rows=3,
                 embedding_rows=0, detection_rows=0, first_window_start_s=0.0,
-                last_window_end_s=9.0,
+                last_window_end_s=9.0, input_checksum=input_checksum,
             )
             for one in covered
         ),

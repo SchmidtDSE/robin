@@ -455,13 +455,24 @@ def _fail_recordings_with_task(
 def _write_recording_outcomes(
     connection: psycopg.Connection, task_id: UUID, run_id: UUID, completed: InferenceCompleted
 ) -> None:
-    """Record the outcome of each recording of a completed result: cover each finished
-    recording, fail each failed one, and write one `output_files` row for each file."""
+    """Record the outcome of each recording of a completed result.
+
+    Each finished recording is covered, with its windows and audio checksum. Each failed
+    recording is failed. Each file gets one `output_files` row, with its size and row count.
+    """
     with connection.cursor() as cursor:
         cursor.executemany(
-            "UPDATE recording_outcomes SET state = 'covered' "
+            "UPDATE recording_outcomes SET state = 'covered', windows_completed = %s, "
+            "first_window_start_s = %s, last_window_end_s = %s, input_checksum = %s "
             "WHERE task_id = %s AND namespace = %s AND value = %s AND state = 'pending'",
-            [(task_id, covered.namespace, covered.value) for covered in completed.coverage],
+            [
+                (
+                    covered.windows_completed, covered.first_window_start_s,
+                    covered.last_window_end_s, covered.input_checksum,
+                    task_id, covered.namespace, covered.value,
+                )
+                for covered in completed.coverage
+            ],
         )
         cursor.executemany(
             "UPDATE recording_outcomes SET state = 'failed', failure = %s "
@@ -483,11 +494,12 @@ def _write_recording_outcomes(
         )
         cursor.executemany(
             "INSERT INTO output_files (run_id, task_id, namespace, value, kind, contract_id, "
-            "uri, checksum) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            "uri, checksum, size_bytes, rows) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             [
                 (
                     run_id, task_id, artifact.namespace, artifact.value, artifact.kind,
                     artifact.contract_id, artifact.uri, artifact.checksum,
+                    artifact.size_bytes, artifact.rows,
                 )
                 for artifact in completed.artifacts
             ],

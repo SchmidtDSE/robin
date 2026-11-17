@@ -25,7 +25,9 @@ from run_fixtures import (
     build_task_result,
     update_task,
     count_in_flight,
+    get_coverage_facts,
     get_current_files,
+    get_output_file_facts,
     get_outcomes,
     get_task,
     get_work_file,
@@ -290,6 +292,41 @@ def test_a_result_where_every_recording_failed_is_succeeded(registered, root):
     assert get_task(registered, task_id)["state"] == "succeeded"
     assert {state for state, _ in get_recordings(registered, task_id).values()} == {"failed"}
     assert count_output_files(registered, task_id) == 0
+
+
+def test_a_completed_result_stores_each_file_size_and_row_count(registered, root):
+    task_id, work_file = add_finalizing_task(registered, root)
+    completed = build_completed(work_file)
+    write_task_result(work_file, build_task_result(work_file, completed))
+
+    assert store_outcome(registered, task_id) == "recorded"
+
+    assert get_output_file_facts(registered, task_id) == {
+        ("a", "scores"): (100, 3), ("b", "scores"): (100, 3),
+    }
+
+
+def test_a_covered_recording_stores_its_windows_and_audio_checksum(registered, root):
+    task_id, work_file = add_finalizing_task(registered, root)
+    completed = build_completed(work_file, input_checksum="sha256:" + "c" * 64)
+    write_task_result(work_file, build_task_result(work_file, completed))
+
+    assert store_outcome(registered, task_id) == "recorded"
+
+    assert get_coverage_facts(registered, task_id) == {
+        "a": (3, 0.0, 9.0, "sha256:" + "c" * 64),
+        "b": (3, 0.0, 9.0, "sha256:" + "c" * 64),
+    }
+
+
+def test_a_failed_recording_stores_no_window_facts(registered, root):
+    task_id, work_file = add_finalizing_task(registered, root)
+    completed = build_completed(work_file, failed=("b",))
+    write_task_result(work_file, build_task_result(work_file, completed))
+
+    assert store_outcome(registered, task_id) == "recorded"
+
+    assert get_coverage_facts(registered, task_id)["b"] == (None, None, None, None)
 
 
 def test_a_missing_result_after_the_end_is_no_result(registered, root):
