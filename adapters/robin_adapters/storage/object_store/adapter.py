@@ -127,9 +127,9 @@ class ObjectStoreTaskStorage:
     """Writes and reads task files under `root`, such as `work.json`, through ondio.
 
     It builds one ondio backend for `root`, with `backend_options`, on the first
-    `create` or `read`, and uses it for every call after that. It does not build the
-    backend in `__init__`, so a command that never reads or writes a task file needs no
-    storage credentials.
+    `create`, `replace`, or `read`, and uses it for every call after that. It does not
+    build the backend in `__init__`, so a command that never reads or writes a task file
+    needs no storage credentials.
     """
 
     def __init__(self, root: str, **backend_options: Any) -> None:
@@ -146,6 +146,10 @@ class ObjectStoreTaskStorage:
             ondio.create(uri, data, backend=self._get_backend())
         except ondio.ObjectExistsError as exc:
             raise FileExistsError(f"{uri} already exists") from exc
+
+    def replace(self, uri: str, data: bytes) -> None:
+        # An object store PUT replaces the whole object in one step.
+        ondio.write(uri, data, backend=self._get_backend())
 
     def read(self, uri: str) -> bytes | None:
         try:

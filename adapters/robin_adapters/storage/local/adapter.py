@@ -76,8 +76,9 @@ class LocalArtifactWriter:
 class LocalTaskStorage:
     """Writes and reads task files at a local path or a `file://` URI.
 
-    `create` writes a hidden temporary file in the same folder and then hard-links it to
-    the final name, so no reader sees a partial file.
+    `create` and `replace` write a hidden temporary file in the same folder. `create`
+    then hard-links it to the final name, and `replace` renames it over the final name.
+    So no reader sees a partial file.
     """
 
     def create(self, uri: str, data: bytes) -> None:
@@ -86,6 +87,13 @@ class LocalTaskStorage:
             with open(temporary, "xb") as staged:
                 staged.write(data)
             os.link(temporary, final)
+
+    def replace(self, uri: str, data: bytes) -> None:
+        final = get_local_path(uri)
+        with _temporary_beside(final) as temporary:
+            with open(temporary, "xb") as staged:
+                staged.write(data)
+            os.replace(temporary, final)
 
     def read(self, uri: str) -> bytes | None:
         try:

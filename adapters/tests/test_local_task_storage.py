@@ -2,6 +2,7 @@ import os
 
 import pytest
 
+from robin_adapters.storage.local import adapter
 from robin_adapters.storage.local.adapter import LocalTaskStorage
 
 
@@ -60,3 +61,38 @@ def test_create_leaves_no_temporary_file(tmp_path):
         storage.create(str(path), b"second")
 
     assert [entry.name for entry in tmp_path.iterdir()] == ["work.json"]
+
+
+def test_replace_writes_a_new_file(tmp_path):
+    path = tmp_path / "index" / "current.parquet"
+
+    LocalTaskStorage().replace(str(path), b"one")
+
+    assert path.read_bytes() == b"one"
+
+
+def test_replace_writes_over_a_file_that_exists(tmp_path):
+    path = tmp_path / "index" / "current.parquet"
+    storage = LocalTaskStorage()
+    storage.create(str(path), b"one")
+
+    storage.replace(str(path), b"two")
+
+    assert path.read_bytes() == b"two"
+
+
+def test_a_failed_replace_keeps_the_old_file(tmp_path, monkeypatch):
+    path = tmp_path / "index" / "current.parquet"
+    storage = LocalTaskStorage()
+    storage.create(str(path), b"old")
+
+    def fail(source, target):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(adapter.os, "replace", fail)
+
+    with pytest.raises(OSError):
+        storage.replace(str(path), b"new")
+
+    assert path.read_bytes() == b"old"
+    assert [entry.name for entry in path.parent.iterdir()] == ["current.parquet"]

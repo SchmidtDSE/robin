@@ -54,11 +54,15 @@ class TaskStorage(Protocol):
     `create` writes `data` once at `uri` and makes missing folders. It raises
     `FileExistsError` if something is already there. A reader never sees part of a file.
 
+    `replace` writes `data` at `uri` whether or not a file is there, and makes missing
+    folders. A reader sees the old file or the new file, never part of one.
+
     `read` returns the bytes at `uri`, or None only when the file is confirmed absent.
     It raises for any other failure.
     """
 
     def create(self, uri: str, data: bytes) -> None: ...
+    def replace(self, uri: str, data: bytes) -> None: ...
     def read(self, uri: str) -> bytes | None: ...
 
 

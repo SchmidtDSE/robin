@@ -70,3 +70,20 @@ def test_the_worker_environment_carries_the_options_and_builds_no_backend(monkey
     )
     assert environment != {}
     assert calls == []
+
+
+def test_replace_writes_a_new_object(s3_bucket):
+    storage = ObjectStoreTaskStorage(ROOT)
+
+    storage.replace(f"{ROOT}/index/current.parquet", b"one")
+
+    assert storage.read(f"{ROOT}/index/current.parquet") == b"one"
+
+
+def test_replace_writes_over_an_object_that_exists(s3_bucket):
+    storage = ObjectStoreTaskStorage(ROOT)
+    storage.create(f"{ROOT}/index/current.parquet", b"one")
+
+    storage.replace(f"{ROOT}/index/current.parquet", b"two")
+
+    assert storage.read(f"{ROOT}/index/current.parquet") == b"two"
