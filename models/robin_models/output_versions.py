@@ -10,7 +10,7 @@ from robin_contracts.tasks import ModelOutputVersion
 # leaves the outputs the same keeps the version. Every head on one runtime shares that
 # runtime's version.
 OUTPUT_VERSIONS: tuple[ModelOutputVersion, ...] = (
-    ModelOutputVersion(model="model:owl/v4", version=1),
+    ModelOutputVersion(model="model:owl/v4", version=2),
     ModelOutputVersion(model="model:birdnet/v2p4", version=1),
     ModelOutputVersion(model="model:perch/v1p8", version=1),
     ModelOutputVersion(model="head_runtime:onnx", version=1),

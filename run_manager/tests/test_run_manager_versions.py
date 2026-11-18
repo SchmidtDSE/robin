@@ -11,6 +11,7 @@ from robin_run_manager.versions import (
 )
 
 from model_fixtures import read_pinned_model
+from run_fixtures import OWL_VERSION
 
 OWL = read_pinned_model("owl-v4")
 PERCH = read_pinned_model("perch-v1p8")
@@ -22,7 +23,9 @@ def get_release_versions_without(model_id: str) -> tuple[ModelOutputVersion, ...
 
 
 def test_an_audio_run_freezes_its_model_version():
-    assert get_frozen_output_versions([OWL.card], RELEASE_OUTPUT_VERSIONS) == {"model:owl/v4": 1}
+    assert get_frozen_output_versions([OWL.card], RELEASE_OUTPUT_VERSIONS) == {
+        "model:owl/v4": OWL_VERSION
+    }
 
 
 def test_a_head_run_freezes_the_head_runtime_and_the_backbone():

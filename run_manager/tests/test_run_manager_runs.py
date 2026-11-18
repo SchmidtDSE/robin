@@ -15,6 +15,7 @@ from robin_run_manager.runs import list_run_recordings, list_run_tasks, list_run
 from robin_run_manager.versions import RELEASE_OUTPUT_VERSIONS
 from psycopg.types.json import Json
 from run_fixtures import (
+    OWL_VERSION,
     LOCAL_SETTINGS,
     TASK_FAILURE,
     add_finished_run,
@@ -218,7 +219,7 @@ def test_show_run_gives_the_counts_the_provenance_and_the_settings(registered):
     assert shown["run_id"] == str(run_id)
     assert shown["status"] == "queued"
     assert shown["recording_count"] == 3
-    assert shown["output_versions"] == {"model:owl/v4": 1}
+    assert shown["output_versions"] == {"model:owl/v4": OWL_VERSION}
     assert shown["provenance"]["recording_count"] == 3
     assert shown["provenance"]["input"] == "recordings"
     assert shown["execution_settings"] == LOCAL_SETTINGS
@@ -252,7 +253,8 @@ def test_show_run_reads_its_counts_in_one_snapshot(registered, monkeypatch):
 def test_show_run_gives_the_preparation_failure(registered):
     run_id = submit(registered, ["a"])
     newer = tuple(
-        ModelOutputVersion(model=entry.model, version=2) for entry in RELEASE_OUTPUT_VERSIONS
+        ModelOutputVersion(model=entry.model, version=entry.version + 1)
+        for entry in RELEASE_OUTPUT_VERSIONS
     )
     prepare_run(registered, run_id, recordings_per_task=1, release_versions=newer)
 

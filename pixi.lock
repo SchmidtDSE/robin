@@ -2531,7 +2531,6 @@ packages:
   - robin-contracts>=0.0,<0.1
   - sox-tensorflow>=0.1.3,<0.2 ; extra == 'owl'
   - soundfile>=0.13.1,<0.14 ; extra == 'owl'
-  - pillow>=10,<13 ; extra == 'owl'
   - tensorflow>=2.21,<2.22 ; extra == 'owl'
   - tf-keras>=2.21,<2.22 ; extra == 'owl'
   - numpy>=2.1,<3 ; extra == 'owl'

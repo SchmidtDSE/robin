@@ -234,7 +234,6 @@ _register(
         "tf_keras",
         "sox_tensorflow",
         "soundfile",
-        "PIL",
         "pyarrow",
         "duckdb",
     ),

@@ -5,6 +5,7 @@ import pytest
 from robin_contracts.tasks import ModelOutputVersion
 from robin_run_manager.versions import RELEASE_OUTPUT_VERSIONS
 from run_fixtures import (
+    OWL_VERSION,
     HEAD_CONFIGURATION,
     NAMESPACE,
     OWL_CONFIGURATION,
@@ -54,7 +55,7 @@ def test_a_covered_recording_is_current_with_each_of_its_files(registered):
             "kind", "contract_id", "uri", "checksum", "run_id",
         }
         assert (row["namespace"], row["value"], row["run_id"]) == (NAMESPACE, "a", run_id)
-        assert row["output_versions"] == {"model:owl/v4": 1}
+        assert row["output_versions"] == {"model:owl/v4": OWL_VERSION}
         assert row["up_to_date"] is True
         assert row["contract_id"] == f"robin.{kind}.parquet/1"
         assert row["uri"] == f"s3://out/{run_id}/a.{kind}.parquet"
@@ -65,7 +66,7 @@ def test_a_covered_recording_is_current_with_each_of_its_files(registered):
 def test_a_withdrawn_run_is_not_current_and_an_older_version_returns(registered):
     older = submit(registered, ["a"])
     add_covered_result(registered, older, "a")
-    newer = submit(registered, ["a"], release_versions=get_release({"model:owl/v4": 2}))
+    newer = submit(registered, ["a"], release_versions=get_release({"model:owl/v4": OWL_VERSION + 1}))
     add_covered_result(registered, newer, "a")
     assert get_current(registered) == [("a", newer, True, "scores")]
 
@@ -75,7 +76,7 @@ def test_a_withdrawn_run_is_not_current_and_an_older_version_returns(registered)
 
 
 def test_the_newest_versions_are_current(registered):
-    newer = submit(registered, ["a"], release_versions=get_release({"model:owl/v4": 2}))
+    newer = submit(registered, ["a"], release_versions=get_release({"model:owl/v4": OWL_VERSION + 1}))
     add_covered_result(registered, newer, "a")
     older = submit(registered, ["a"])
     add_covered_result(registered, older, "a")
@@ -113,7 +114,7 @@ def test_up_to_date_is_false_once_a_higher_version_is_recorded_for_the_model(
     older = submit(registered, ["a"])
     add_covered_result(registered, older, "a")
     higher = submit(
-        registered, ["a"], other_configuration, release_versions=get_release({"model:owl/v4": 2})
+        registered, ["a"], other_configuration, release_versions=get_release({"model:owl/v4": OWL_VERSION + 1})
     )
     add_covered_result(registered, higher, "a")
     if higher_state == "withdrawn":

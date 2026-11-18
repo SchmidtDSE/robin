@@ -47,6 +47,15 @@ OWL_CONFIGURATION = read_configuration(FIXTURES / "configuration-owl-v4.yaml")
 PERCH_CONFIGURATION = read_configuration(FIXTURES / "configuration-perch-v1p8.yaml")
 HEAD_CONFIGURATION = read_configuration(FIXTURES / "configuration-songbird-head-v1.yaml")
 NAMESPACE = "survey"
+
+
+def get_release_version(model: str) -> int:
+    """Return the output version of `model` in this release."""
+    return next(entry.version for entry in RELEASE_OUTPUT_VERSIONS if entry.model == model)
+
+
+OWL_VERSION = get_release_version("model:owl/v4")
+
 # A request that gives nothing, as a run stores it.
 NO_REQUEST = {"requests": {}, "limits": {}, "active_deadline_seconds": None}
 LOCAL_SETTINGS = {

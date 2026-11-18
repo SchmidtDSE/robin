@@ -12,6 +12,7 @@ from robin_run_manager.database import transaction
 from robin_run_manager.preparation import Prepared, get_runs_to_prepare, prepare_run
 from robin_run_manager.versions import RELEASE_OUTPUT_VERSIONS
 from run_fixtures import (
+    OWL_VERSION,
     HEAD_CONFIGURATION,
     KUBERNETES_SETTINGS,
     OWL_CONFIGURATION,
@@ -30,7 +31,9 @@ from run_fixtures import (
 
 VALUES = [f"r{index:03}" for index in range(250)]
 NEWER_OWL = tuple(
-    ModelOutputVersion(model=entry.model, version=2) if entry.model == "model:owl/v4" else entry
+    ModelOutputVersion(model=entry.model, version=OWL_VERSION + 1)
+    if entry.model == "model:owl/v4"
+    else entry
     for entry in RELEASE_OUTPUT_VERSIONS
 )
 
@@ -128,7 +131,7 @@ def test_outdated_versions_fail_preparation_and_create_nothing(registered):
     assert run["state"] == "preparation_failed"
     assert run["preparation_failure"]["reason"] == "output_version_not_current"
     assert run["preparation_failure"]["details"] == {
-        "output_versions": {"model:owl/v4": {"run": 1, "release": 2}}
+        "output_versions": {"model:owl/v4": {"run": OWL_VERSION, "release": OWL_VERSION + 1}}
     }
     assert "new run" in run["preparation_failure"]["message"]
     assert (get_outcomes(registered, run_id), get_tasks(registered, run_id)) == ({}, [])

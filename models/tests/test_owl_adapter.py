@@ -1,10 +1,12 @@
-"""The OWL adapter: its bundled card and registry, and the adapter against a fake runtime."""
+"""The OWL adapter: its bundled card and registry, and the adapter against a fake runtime
+on real audio files."""
 
 import contextlib
 import csv
 import hashlib
 import importlib
 import sys
+import threading
 import types
 from collections import Counter
 from importlib.resources import as_file, files
@@ -12,6 +14,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import soundfile
 
 import robin_models.owl
 from robin_contracts.cards import ModelCard, read_card
@@ -154,77 +157,139 @@ def test_a_recording_shorter_than_one_window_yields_no_windows():
     assert window_bounds(5.0, GEOMETRY) == []
 
 
-# The adapter, run against stand-ins for its runtime.
+# The adapter, run against stand-ins for its runtime, on real audio files.
 
 ADAPTER = "robin_models.owl.adapter"
+SHAPE = (257, 1000)
+# The test files hold a ramp: frame n has the value n / RAMP_SCALE, exact in float64.
+RAMP_SCALE = 2**24
+# The fake spectrogram writes a window's first frame into its first pixels, in this base.
+DIGIT_BASE = 250
+DIGITS = 3
+
+
+def get_real_palette() -> list[int]:
+    """sox_tensorflow's palette: 4 fixed colours, then 251 grays, as flat RGB triples."""
+    palette = [0, 0, 0, 255, 255, 255, 191, 191, 191, 127, 127, 127]
+    for i in range(251):
+        gray = int(0.5 + 255 * i / 250)
+        palette.extend([gray, gray, gray])
+    return palette
+
+
+PALETTE = get_real_palette()
+
+
+def get_gray(index: int) -> np.float32:
+    """The value the network gets for a palette index: its gray, divided by 255."""
+    return np.float32(PALETTE[3 * index]) / np.float32(255)
+
+
+def get_first_frame_pixels(first_frame: int) -> list[int]:
+    """The pixels that the fake spectrogram writes first: the frame number's digits, plus 4."""
+    digits = []
+    for _ in range(DIGITS):
+        first_frame, digit = divmod(first_frame, DIGIT_BASE)
+        digits.append(4 + digit)
+    return digits
+
+
+def get_first_frame(scores: np.ndarray) -> int:
+    """The first frame of the window whose scores the fake network made from its pixels."""
+    grays = {get_gray(index): index for index in range(4, 255)}
+    digits = [grays[np.float32(value)] - 4 for value in scores[:DIGITS]]
+    return sum(digit * DIGIT_BASE**place for place, digit in enumerate(digits))
+
+
+class FakeTensor:
+    def __init__(self, values: np.ndarray) -> None:
+        self.values = values
+
+    def numpy(self) -> np.ndarray:
+        return self.values
+
+
+class FakeNetwork:
+    """Scores each row with its first pixel values, so that each score shows its window."""
+
+    def __init__(self, runtime: "FakeRuntime") -> None:
+        self.runtime = runtime
+        self.input_shape = runtime.input_shape
+
+    def __call__(self, images: FakeTensor) -> FakeTensor:
+        values = images.values
+        rows = values.reshape(len(values), -1)
+        self.runtime.batches.append(
+            {"shape": values.shape, "dtype": values.dtype, "device": self.runtime.device,
+             "first_pixels": rows[:, :DIGITS + 4].copy()}
+        )
+        return FakeTensor(rows[:, : self.runtime.score_count].copy())
 
 
 class FakeRuntime:
-    """Records what the adapter asked of its runtime, and fails where told to."""
+    """Records what the adapter asked of its runtime, and fails where told to.
+
+    The device scope is kept for each thread, as TensorFlow keeps it.
+    """
 
     def __init__(self) -> None:
-        self.duration = 36.0
-        # The frame count `info` gives. None gives the duration's count at 1,000 Hz.
-        self.frames: int | None = None
         self.loaded: list[str] = []
         self.load_error: Exception | None = None
-        self.inspected: list[str] = []
         self.input_shape = (None, 257, 1000, 1)
-        self.rendered: list[float] = []
-        self.fail_render_at: float | None = None
-        self.predicted: list[list[str]] = []
-        self.batch_sizes: list[int] = []
-        self.score_count = 51
-        self.device: str | None = None
         self.load_devices: list[str | None] = []
-        self.predict_devices: list[str] = []
         self.gpus: list[str] = []
+        self.score_count = 51
+        # One entry for each spectrogram call: its samples, rate, shape, and device.
+        self.rendered: list[dict] = []
+        self.fail_render_at_frame: int | None = None
+        # Returns the pixels for one window's samples. None gives the frame-number pixels.
+        self.pixels = None
+        self.batches: list[dict] = []
+        self.palette = list(PALETTE)
+        self._local = threading.local()
+
+    @property
+    def device(self) -> str | None:
+        return getattr(self._local, "device", None)
 
     def load_model(self, path):
         self.load_devices.append(self.device)
         self.loaded.append(str(path))
         if self.load_error is not None:
             raise self.load_error
-        return types.SimpleNamespace(input_shape=self.input_shape)
+        return FakeNetwork(self)
 
     @contextlib.contextmanager
     def on_device(self, name: str):
-        previous, self.device = self.device, name
+        previous, self._local.device = self.device, name
         try:
             yield
         finally:
-            self.device = previous
-
-    def info(self, path):
-        self.inspected.append(str(path))
-        frames = round(self.duration * 1000) if self.frames is None else self.frames
-        return types.SimpleNamespace(duration=self.duration, frames=frames)
-
-    def render(self, path, *, start_time, duration, shape, dest):
-        self.rendered.append(start_time)
-        if start_time == self.fail_render_at:
-            raise RuntimeError(f"the clip at {start_time} s could not be decoded")
-        Path(dest).write_bytes(b"png")
-        return dest
+            self._local.device = previous
 
     def list_physical_devices(self, kind: str) -> list[str]:
         return list(self.gpus) if kind == "GPU" else ["CPU:0"]
 
-    def predict(self, network, paths, batch_size, device):
-        self.predict_devices.append(device)
-        self.predicted.append(list(paths))
-        self.batch_sizes.append(batch_size)
-        for index, path in enumerate(paths):
-            assert Path(path).exists()
-            yield index, np.array(fake_scores(index)[: self.score_count], dtype=np.float32)
+    def convert_to_tensor(self, value, dtype=None):
+        assert dtype is None or dtype == "float32"
+        return FakeTensor(np.asarray(value))
 
+    def spectrogram(self, audio_array, shape, sample_rate=None):
+        first_frame = round(float(audio_array[0]) * RAMP_SCALE)
+        self.rendered.append(
+            {"samples": np.array(audio_array, copy=True), "rate": sample_rate,
+             "shape": tuple(shape), "device": self.device, "first_frame": first_frame}
+        )
+        if first_frame == self.fail_render_at_frame:
+            raise RuntimeError(f"the clip from frame {first_frame} could not be rendered")
+        if self.pixels is not None:
+            return FakeTensor(self.pixels(audio_array))
+        pixels = np.full(shape, 4, dtype=np.uint8)
+        pixels.reshape(-1)[:DIGITS] = get_first_frame_pixels(first_frame)
+        return FakeTensor(pixels)
 
-def fake_scores(index: int) -> list[float]:
-    """52 distinct scores in [0, 1] that differ from window to window, unsorted.
-
-    The network gives 51; the extra one lets a test give one too many.
-    """
-    return [((label * 7 + index) % 52) / 51 for label in range(52)]
+    def create_palette_flat(self, spectrum_points: int = 251) -> list[int]:
+        return list(self.palette)
 
 
 @pytest.fixture
@@ -237,14 +302,14 @@ def runtime(monkeypatch):
     )
     tensorflow.device = fake.on_device
     tensorflow.config = types.SimpleNamespace(list_physical_devices=fake.list_physical_devices)
-    soundfile = types.ModuleType("soundfile")
-    soundfile.info = fake.info
+    tensorflow.convert_to_tensor = fake.convert_to_tensor
+    tensorflow.float32 = "float32"
     processor = types.ModuleType("sox_tensorflow.processor")
-    processor.spectrogram_from_flac = fake.render
+    processor.spectrogram = fake.spectrogram
+    processor._create_palette_flat = fake.create_palette_flat
     stubs = {
         "tensorflow": tensorflow,
         "tf_keras": types.ModuleType("tf_keras"),
-        "soundfile": soundfile,
         "sox_tensorflow": types.ModuleType("sox_tensorflow"),
         "sox_tensorflow.processor": processor,
     }
@@ -252,7 +317,6 @@ def runtime(monkeypatch):
         monkeypatch.setitem(sys.modules, name, module)
     sys.modules.pop(ADAPTER, None)
     fake.adapter = importlib.import_module(ADAPTER)
-    monkeypatch.setattr(fake.adapter, "_predict", fake.predict)
     yield fake
     sys.modules.pop(ADAPTER, None)
     if hasattr(robin_models.owl, "adapter"):
@@ -275,19 +339,29 @@ def owl_context(tmp_path, **changes) -> ModelContext:
     return ModelContext(**fields)
 
 
+def write_ramp(tmp_path, seconds: float = 36.0, rate: int = 1000, channels: int = 1) -> Path:
+    """Write a WAV file whose frame n holds n / RAMP_SCALE on channel 0.
+
+    Channel 1, if any, holds the negative, so a mix of the channels is all zeros.
+    """
+    frames = round(seconds * rate)
+    ramp = np.arange(frames, dtype=np.float64) / RAMP_SCALE
+    samples = np.stack([ramp, -ramp][:channels], axis=1)
+    path = tmp_path / f"ramp-{seconds}s-{rate}hz-{channels}ch.wav"
+    soundfile.write(path, samples, rate, subtype="DOUBLE")
+    return path
+
+
+def run(model, path) -> list:
+    return list(model.run(AudioClip(path=path)))
+
+
 def test_a_built_model_satisfies_the_protocol(runtime, tmp_path):
     model = runtime.adapter.build(owl_context(tmp_path))
     assert isinstance(model, Model)
 
 
 # Resources. The checks of each value are tested once, in test_adapter_setup.
-
-
-@pytest.mark.parametrize(("resources", "expected"), [({}, 64), ({"batch_size": 8}, 8)])
-def test_the_batch_size_reaches_the_network(runtime, tmp_path, resources, expected):
-    model = runtime.adapter.build(owl_context(tmp_path, resources=resources))
-    list(model.run(AudioClip(path=tmp_path / "a.flac")))
-    assert runtime.batch_sizes == [expected]
 
 
 @pytest.mark.parametrize(("name", "value"), [("batch_size", 0), ("device", "tpu")])
@@ -317,29 +391,19 @@ def test_device_gpu_is_refused_before_the_weights_load_when_tensorflow_sees_no_g
     assert runtime.loaded == []
 
 
-@pytest.mark.parametrize("device", ["/CPU:0", "/GPU:0"])
-def test_each_batch_is_scored_on_its_device_and_the_scope_ends_with_it(runtime, device):
-    seen = []
-
-    def network(images):
-        seen.append(runtime.device)
-        return types.SimpleNamespace(numpy=lambda: images)
-
-    assert runtime.adapter._score_batch(network, "images", device) == "images"
-    assert seen == [device]
-    assert runtime.device is None
-
-
 @pytest.mark.parametrize(
     ("resources", "gpus", "device"),
     [({}, [], "/CPU:0"), ({"device": "gpu"}, ["GPU:0"], "/GPU:0")],
     ids=["cpu", "gpu"],
 )
-def test_a_recording_is_scored_on_the_built_device(runtime, tmp_path, resources, gpus, device):
+def test_each_spectrogram_is_made_on_the_cpu_and_each_batch_on_the_built_device(
+    runtime, tmp_path, resources, gpus, device
+):
     runtime.gpus = gpus
-    model = runtime.adapter.build(owl_context(tmp_path, resources=resources))
-    list(model.run(AudioClip(path=tmp_path / "a.flac")))
-    assert runtime.predict_devices == [device]
+    model = runtime.adapter.build(owl_context(tmp_path, resources={**resources, "batch_size": 2}))
+    run(model, write_ramp(tmp_path))
+    assert [call["device"] for call in runtime.rendered] == ["/CPU:0"] * 3
+    assert [batch["device"] for batch in runtime.batches] == [device] * 2
 
 
 # What OWL does, whatever its card says.
@@ -390,6 +454,17 @@ def test_a_spectrogram_shape_the_loaded_network_does_not_take_is_refused(
         runtime.adapter.build(owl_context(tmp_path, card=card))
 
 
+@pytest.mark.parametrize(
+    "palette",
+    [PALETTE[:-3], PALETTE[:12] + [1, 2, 3] + PALETTE[15:]],
+    ids=["one_entry_short", "not_gray"],
+)
+def test_a_palette_that_is_not_255_grays_is_refused(runtime, tmp_path, palette):
+    runtime.palette = palette
+    with pytest.raises(ValueError, match="palette"):
+        runtime.adapter.build(owl_context(tmp_path))
+
+
 # Building and running.
 
 
@@ -415,34 +490,77 @@ def test_weights_that_fail_to_load_fail_construction(runtime, tmp_path):
 def test_the_weights_load_once_at_construction_and_not_per_recording(runtime, tmp_path):
     model = runtime.adapter.build(owl_context(tmp_path))
     assert runtime.loaded == [str(tmp_path / "weights.h5")]
-    for name in ("a.flac", "b.flac"):
-        list(model.run(AudioClip(path=tmp_path / name)))
+    path = write_ramp(tmp_path)
+    for _ in range(2):
+        run(model, path)
         model.after_recording()
     assert len(runtime.loaded) == 1
 
 
 def test_run_yields_every_window_with_every_label_scored_in_output_order(runtime, tmp_path):
     model = runtime.adapter.build(owl_context(tmp_path))
-    windows = list(model.run(AudioClip(path=tmp_path / "a.flac")))
-    labels = [entry.label for entry in REGISTRY.entries]
+    windows = run(model, write_ramp(tmp_path))
     assert [(window.start, window.end) for window in windows] == [
         (0.0, 12.0),
         (12.0, 24.0),
         (24.0, 36.0),
     ]
-    for index, window in enumerate(windows):
-        expected = np.array(fake_scores(index)[: len(labels)], dtype=np.float32)
-        assert np.array_equal(window.scores, expected)
+    for window in windows:
+        assert window.scores.shape == (len(REGISTRY.entries),)
+        assert get_first_frame(window.scores) == round(window.start * 1000)
         assert window.embedding is None
-    scores = windows[0].scores.tolist()
-    assert scores != sorted(scores, reverse=True)
 
 
-def test_overlapping_windows_are_rendered_from_where_each_one_starts(runtime, tmp_path):
-    model = runtime.adapter.build(owl_context(tmp_path, settings={"window_overlap": 6.0}))
-    windows = list(model.run(AudioClip(path=tmp_path / "a.flac")))
-    assert runtime.rendered == [0.0, 6.0, 12.0, 18.0, 24.0]
-    assert [window.start for window in windows] == runtime.rendered
+def test_each_windows_samples_are_cut_from_its_block_at_the_files_rate(runtime, tmp_path):
+    rate = 1000
+    path = write_ramp(tmp_path, seconds=60.0, rate=rate)
+    context = owl_context(
+        tmp_path, settings={"window_overlap": 6.0}, resources={"read_block_seconds": 30}
+    )
+    model = runtime.adapter.build(context)
+    windows = run(model, path)
+    starts = [window.start for window in windows]
+    assert starts == [6.0 * n for n in range(9)]
+    calls = sorted(runtime.rendered, key=lambda call: call["first_frame"])
+    assert len(calls) == len(starts)
+    for start, call in zip(starts, calls, strict=True):
+        first = round(start * rate)
+        expected = np.arange(first, first + 12 * rate, dtype=np.float64) / RAMP_SCALE
+        assert call["samples"].dtype == np.float64
+        assert np.array_equal(call["samples"], expected)
+        assert call["rate"] == rate
+        assert call["shape"] == SHAPE
+
+
+def test_only_the_first_channel_reaches_the_spectrogram(runtime, tmp_path):
+    model = runtime.adapter.build(owl_context(tmp_path))
+    run(model, write_ramp(tmp_path, seconds=12.0, channels=2))
+    [call] = runtime.rendered
+    assert np.array_equal(call["samples"], np.arange(12000, dtype=np.float64) / RAMP_SCALE)
+
+
+def test_the_network_gets_each_windows_gray_values_divided_by_255(runtime, tmp_path):
+    indices = np.full(SHAPE, 100, dtype=np.uint8)
+    indices.reshape(-1)[:4] = [4, 254, 5, 129]
+    runtime.pixels = lambda samples: indices
+    model = runtime.adapter.build(owl_context(tmp_path))
+    run(model, write_ramp(tmp_path, seconds=24.0))
+    [batch] = runtime.batches
+    assert batch["shape"] == (2, 257, 1000, 1)
+    assert batch["dtype"] == np.float32
+    expected = np.array([get_gray(int(i)) for i in [4, 254, 5, 129, 100, 100, 100]])
+    for row in batch["first_pixels"]:
+        assert np.array_equal(row, expected)
+    assert expected[0] == 0.0 and expected[1] == 1.0
+
+
+def test_the_last_batch_reaches_the_network_with_only_its_windows(runtime, tmp_path):
+    model = runtime.adapter.build(owl_context(tmp_path))
+    windows = run(model, write_ramp(tmp_path, seconds=131 * 12 + 7.3))
+    assert [batch["shape"][0] for batch in runtime.batches] == [64, 64, 3]
+    assert [window.start for window in windows] == [12.0 * n for n in range(131)]
+    for window in windows:
+        assert get_first_frame(window.scores) == round(window.start * 1000)
 
 
 @pytest.mark.parametrize("count", [50, 52], ids=["one_too_few", "one_too_many"])
@@ -451,55 +569,45 @@ def test_a_network_giving_a_score_count_other_than_the_registrys_is_refused(
 ):
     runtime.score_count = count
     model = runtime.adapter.build(owl_context(tmp_path))
-    with pytest.raises(ValueError):
-        list(model.run(AudioClip(path=tmp_path / "a.flac")))
+    with pytest.raises(ValueError, match="scores"):
+        run(model, write_ramp(tmp_path))
 
 
 def test_run_renders_nothing_until_it_is_iterated(runtime, tmp_path):
     model = runtime.adapter.build(owl_context(tmp_path))
-    windows = model.run(AudioClip(path=tmp_path / "a.flac"))
+    windows = model.run(AudioClip(path=write_ramp(tmp_path)))
     assert runtime.rendered == []
     next(windows)
-    assert runtime.rendered == [0.0, 12.0, 24.0]
+    assert runtime.rendered != []
+    windows.close()
 
 
-def test_a_window_that_fails_to_render_fails_the_recording(runtime, tmp_path):
-    runtime.fail_render_at = 12.0
-    model = runtime.adapter.build(owl_context(tmp_path))
-    with pytest.raises(RuntimeError, match="the clip at 12.0 s could not be decoded"):
-        list(model.run(AudioClip(path=tmp_path / "a.flac")))
-    assert runtime.rendered == [0.0, 12.0]
-    assert runtime.predicted == []
-
-
-def test_after_a_rendering_failure_the_recordings_spectrograms_are_removed(runtime, tmp_path):
-    runtime.fail_render_at = 12.0
-    context = owl_context(tmp_path)
-    unrelated = context.scratch_dir / "unrelated.txt"
-    unrelated.write_text("kept")
-    model = runtime.adapter.build(context)
-    with pytest.raises(RuntimeError):
-        list(model.run(AudioClip(path=tmp_path / "a.flac")))
-    assert list(context.scratch_dir.rglob("*.png")) != []
-    model.after_recording()
-    assert list(context.scratch_dir.iterdir()) == [unrelated]
-    model.after_recording()
-
-
-def test_a_recording_shorter_than_one_window_is_not_rendered_or_scored(
-    runtime, tmp_path, monkeypatch
+def test_a_window_that_fails_to_render_fails_the_recording_after_the_batches_before_it(
+    runtime, tmp_path
 ):
-    def fail(*args, **kwargs):
-        raise AssertionError("called for a recording with no windows")
+    runtime.fail_render_at_frame = 4 * 12000
+    model = runtime.adapter.build(owl_context(tmp_path, resources={"batch_size": 2}))
+    windows = model.run(AudioClip(path=write_ramp(tmp_path, seconds=72.0)))
+    yielded = []
+    with pytest.raises(RuntimeError, match="from frame 48000 could not be rendered"):
+        for window in windows:
+            yielded.append(window.start)
+    assert yielded == [0.0, 12.0, 24.0, 36.0]
 
-    runtime.duration = 5.0
-    monkeypatch.setattr(runtime.adapter, "spectrogram_from_flac", fail)
-    monkeypatch.setattr(runtime.adapter, "_predict", fail)
-    context = owl_context(tmp_path)
-    model = runtime.adapter.build(context)
-    assert list(model.run(AudioClip(path=tmp_path / "a.flac"))) == []
-    assert list(context.scratch_dir.iterdir()) == []
-    model.after_recording()
+
+def test_a_recording_shorter_than_one_window_is_not_rendered_or_scored(runtime, tmp_path):
+    model = runtime.adapter.build(owl_context(tmp_path))
+    assert run(model, write_ramp(tmp_path, seconds=5.0)) == []
+    assert runtime.rendered == []
+    assert runtime.batches == []
+
+
+def test_a_file_with_no_audio_frames_is_refused(runtime, tmp_path):
+    path = tmp_path / "empty.wav"
+    soundfile.write(path, np.zeros((0, 1)), 1000, subtype="DOUBLE")
+    model = runtime.adapter.build(owl_context(tmp_path))
+    with pytest.raises(ValueError, match="no audio frames"):
+        run(model, path)
 
 
 def test_after_recording_is_safe_before_any_run(runtime, tmp_path):
@@ -517,24 +625,23 @@ def test_run_refuses_an_input_that_is_not_audio_before_reading_anything(runtime,
     )
     with pytest.raises(TypeError, match="Embeddings"):
         list(model.run(embeddings))
-    assert runtime.inspected == []
     assert runtime.rendered == []
 
 
-def test_owl_refuses_a_flac_with_no_length_in_its_header(runtime, tmp_path, monkeypatch):
-    def window_bounds(duration, geometry):
-        # Bounds for a length this large fill all memory, so stop before they are made.
-        pytest.fail(f"the adapter made windows for a duration of {duration} s")
-
-    # What soundfile gives for a FLAC whose STREAMINFO gives 0 total samples.
-    runtime.frames = 2**63 - 1
-    runtime.duration = (2**63 - 1) / 48000
-    monkeypatch.setattr(runtime.adapter, "window_bounds", window_bounds)
+def test_owl_refuses_a_flac_with_no_length_in_its_header(runtime, tmp_path):
+    # A FLAC whose STREAMINFO gives 0 total samples, which means "unknown". The 36-bit
+    # total is the low 4 bits of byte 21 and bytes 22 to 25 of the file.
+    path = tmp_path / "no_length.flac"
+    soundfile.write(path, np.zeros(36 * 8000, dtype=np.float32), 8000, format="FLAC")
+    data = bytearray(path.read_bytes())
+    data[21] &= 0xF0
+    data[22:26] = bytes(4)
+    path.write_bytes(bytes(data))
+    assert soundfile.info(str(path)).frames == 2**63 - 1
     model = runtime.adapter.build(owl_context(tmp_path))
-    path = tmp_path / "a.flac"
 
     with pytest.raises(ValueError, match="no length") as raised:
-        list(model.run(AudioClip(path=path)))
+        run(model, path)
 
     assert str(path) in str(raised.value)
     assert runtime.rendered == []

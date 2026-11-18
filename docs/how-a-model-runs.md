@@ -16,9 +16,8 @@ in [the profile](profile.md).
   the adapter reads audio or calls its network.
 - The **window loop** cuts a recording into windows, decodes their audio, and runs the
   network on them in batches. It is meant for every backbone model: a model that runs
-  directly on audio. Today BirdNET and Perch use it. OWL does not use it yet: a later
-  change will move OWL onto it. The ONNX heads are not backbones, so they do not use it.
-  See [OWL and the ONNX heads](#owl-and-the-onnx-heads).
+  directly on audio. BirdNET, Perch, and OWL use it. The ONNX heads are not backbones,
+  so they do not use it. See [OWL and the ONNX heads](#owl-and-the-onnx-heads).
 
 ## Why reading and scoring overlap
 
@@ -184,7 +183,21 @@ already. A file that cannot be read for its checksum fails its recording with
 
 ## OWL and the ONNX heads
 
-- **OWL** is a full model that works from audio, but it does not use the window loop yet. A later change will move it onto the window loop. Today it first makes a spectrogram image of each window, and then runs its network on the images in batches. So its reading and its scoring do not overlap.
+- **OWL** uses the window loop, but its network takes a spectrogram, not samples. So
+  its window cutter does more than the others:
+  - It makes the window's spectrogram from the window's samples. It writes no image
+    file.
+  - It makes the spectrogram on the CPU, also on a GPU worker. Most of this work is
+    NumPy work on the CPU in any case. On the GPU, it would take GPU time from the
+    network and save nothing. The reader threads make the spectrograms of the next
+    batches while the network runs on the current one.
+  - It changes each pixel to the gray value that the network expects, and puts the
+    spectrogram into one batch row.
+
+  OWL's batch runner does not give the zero rows of the last batch to the network. The
+  network gets only the real windows. The rows that are in a batch change the scores a
+  little, at the level of float32 rounding. Without the zero rows, OWL's scores on the
+  CPU are exactly the same as before OWL used the window loop.
 - **An ONNX head** reads no audio. It runs on the embeddings that a backbone model has
   already made, in batches, and only on the CPU.
 
@@ -199,5 +212,6 @@ already. A file that cannot be read for its checksum fails its recording with
     thread.
   - `adapter_setup.py` reads the resources, and checks the card and the files.
   - `saved_model.py` loads and checks a TensorFlow SavedModel.
-- `models/robin_models/birdnet/` and `models/robin_models/perch/` each give the window
-  loop its three functions: the block reader, the window cutter, and the batch runner.
+- `models/robin_models/birdnet/`, `models/robin_models/perch/`, and
+  `models/robin_models/owl/` each give the window loop its three functions: the block
+  reader, the window cutter, and the batch runner.
