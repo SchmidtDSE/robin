@@ -51,7 +51,7 @@ def test_the_schema_folder_holds_the_release_migrations():
 
     assert [migration.name for migration in found] == [
         "0001_models_and_presets", "0002_runs", "0003_launch_and_outcomes",
-        "0004_output_facts",
+        "0004_output_facts", "0005_current_files_once",
     ]
 
 
