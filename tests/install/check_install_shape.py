@@ -58,7 +58,7 @@ _ROBIN_COMPONENTS = (
 _HEAVY_RUNTIMES = (
     "tensorflow",
     "tf_keras",
-    "sox_tensorflow",
+    "sox_numpy",
     "soundfile",
     "scipy",
     "PIL",
@@ -232,7 +232,7 @@ _register(
     runtimes=(
         "tensorflow",
         "tf_keras",
-        "sox_tensorflow",
+        "sox_numpy",
         "soundfile",
         "pyarrow",
         "duckdb",

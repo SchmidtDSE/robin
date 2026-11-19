@@ -22,27 +22,27 @@ from robin_models.registration import WEIGHTS_ROLE
 
 # Must be set before TensorFlow is imported: the weights are a Keras 2 file.
 os.environ.setdefault("TF_USE_LEGACY_KERAS", "1")
+# soxr resamples with OpenMP threads, which use much more CPU than they save. The reader
+# threads are limited by the CPU, so soxr gets one thread unless the caller set a number.
+# OpenMP reads this value when it loads, so it must be set before sox_numpy loads soxr.
+os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 OWNER = "model owl/v4"
-_RUNTIME_MODULES = ("numpy", "soundfile", "tensorflow", "tf_keras", "sox_tensorflow")
+_RUNTIME_MODULES = ("numpy", "soundfile", "tensorflow", "tf_keras", "sox_numpy")
 
 with explain_a_missing_runtime(OWNER, "owl", _RUNTIME_MODULES):
     import numpy as np
     import soundfile as sf
     import tensorflow as tf
     import tf_keras  # noqa: F401  Legacy Keras runs from it.
-    # spectrogram() returns palette indices, and _create_palette_flat() returns the
-    # palette that gives each index its gray. See _get_grays.
-    from sox_tensorflow.processor import _create_palette_flat, spectrogram
+    # spectrogram() returns palette indices, and get_palette() returns the palette that
+    # gives each index its gray. See _get_grays.
+    from sox_numpy import get_palette, spectrogram
 
 from robin_models._adapter_support.audio_windows import get_window_outputs, run_windows
 from robin_models._adapter_support.batch_pipeline import Bounds, WindowResources
 
-# The spectrograms are made on the CPU on every worker. Most of the work is NumPy, and
-# the few TensorFlow steps would take GPU time from the network.
-_RENDER_DEVICE = "/CPU:0"
-
-# What OWL does whatever its card says. sox_tensorflow renders at 8 kHz from the first
+# What OWL does whatever its card says. sox_numpy renders at 8 kHz from the first
 # channel, resampled by soxr at its high-quality setting, and renders only full windows.
 # The network was trained on 12-second clips, ends in a sigmoid for each class, and has no
 # embedding output.
@@ -71,7 +71,7 @@ def build(context: ModelContext) -> "OwlModel":
     if context.registry is None:
         raise ValueError(f"{OWNER} needs a registry to name its outputs, and got none")
     require_roles(context.files, [WEIGHTS_ROLE], OWNER)
-    grays = _get_grays(_create_palette_flat())
+    grays = _get_grays(get_palette())
     with tf.device(device):
         network = tf.keras.models.load_model(str(context.files[WEIGHTS_ROLE]))
     _refuse_a_spectrogram_shape_the_network_does_not_take(card, network)
@@ -90,7 +90,7 @@ def build(context: ModelContext) -> "OwlModel":
 def _get_grays(palette: list[int]) -> "np.ndarray":
     """Return a table of the network's input value for each palette index.
 
-    Each pixel that sox_tensorflow's `spectrogram()` returns is a palette index, not a
+    Each pixel that sox_numpy's `spectrogram()` returns is a palette index, not a
     brightness. Indices 0 to 3 are sox's chart colours, which a spectrogram does not use.
     Indices 4 to 254 are the loudness, from quiet to loud. The palette gives each index a
     colour, and every colour is a gray from 0 (black) to 255 (white).
@@ -176,7 +176,7 @@ class OwlModel:
         )
 
     def _get_frame_span(self, rate: int, start: float) -> tuple[int, int]:
-        """Return the window's first frame and its number of frames, as sox_tensorflow's
+        """Return the window's first frame and its number of frames, as sox_numpy's
         `load_audio` counts them."""
         return round(start * rate), round(self._geometry.window_duration * rate)
 
@@ -193,15 +193,15 @@ class OwlModel:
     def _cut_window(self, block: _Block, start: float, end: float) -> "np.ndarray":
         """Return the window's spectrogram as one row of the network's input values.
 
-        The window is resampled on its own, as sox_tensorflow's `spectrogram_from_flac`
-        does, so the block changes only how the audio is decoded.
+        The window is resampled on its own, as sox_numpy's `spectrogram_from_flac` does,
+        so the block changes only how the audio is decoded. sox_numpy uses no TensorFlow,
+        so the spectrogram is made on the CPU, in the reader thread.
         """
         window_first, count = self._get_frame_span(block.rate, start)
         at = window_first - block.first
         samples = block.samples[at : at + count]
         # A render failure raises: skipping the window would leave a hole in the recording.
-        with tf.device(_RENDER_DEVICE):
-            indices = spectrogram(samples, self._shape, sample_rate=block.rate).numpy()
+        indices = spectrogram(samples, self._shape, sample_rate=block.rate)
         # Change each palette index to the value that the network expects.
         return self._grays[indices].reshape(-1)
 

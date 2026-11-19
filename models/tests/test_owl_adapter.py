@@ -5,6 +5,7 @@ import contextlib
 import csv
 import hashlib
 import importlib
+import os
 import sys
 import threading
 import types
@@ -169,7 +170,7 @@ DIGITS = 3
 
 
 def get_real_palette() -> list[int]:
-    """sox_tensorflow's palette: 4 fixed colours, then 251 grays, as flat RGB triples."""
+    """sox_numpy's palette: 4 fixed colours, then 251 grays, as flat RGB triples."""
     palette = [0, 0, 0, 255, 255, 255, 191, 191, 191, 127, 127, 127]
     for i in range(251):
         gray = int(0.5 + 255 * i / 250)
@@ -246,6 +247,8 @@ class FakeRuntime:
         self.pixels = None
         self.batches: list[dict] = []
         self.palette = list(PALETTE)
+        # OMP_NUM_THREADS each time the adapter took a name from sox_numpy.
+        self.omp_threads_at_import: list[str | None] = []
         self._local = threading.local()
 
     @property
@@ -283,13 +286,21 @@ class FakeRuntime:
         if first_frame == self.fail_render_at_frame:
             raise RuntimeError(f"the clip from frame {first_frame} could not be rendered")
         if self.pixels is not None:
-            return FakeTensor(self.pixels(audio_array))
+            return self.pixels(audio_array)
         pixels = np.full(shape, 4, dtype=np.uint8)
         pixels.reshape(-1)[:DIGITS] = get_first_frame_pixels(first_frame)
-        return FakeTensor(pixels)
+        return pixels
 
-    def create_palette_flat(self, spectrum_points: int = 251) -> list[int]:
+    def get_palette(self, spectrum_points: int = 251) -> list[int]:
         return list(self.palette)
+
+    def get_sox_numpy_attribute(self, name: str):
+        """Give the adapter a name from sox_numpy, and record OMP_NUM_THREADS as it was then."""
+        self.omp_threads_at_import.append(os.environ.get("OMP_NUM_THREADS"))
+        names = {"spectrogram": self.spectrogram, "get_palette": self.get_palette}
+        if name not in names:
+            raise AttributeError(name)
+        return names[name]
 
 
 @pytest.fixture
@@ -304,23 +315,29 @@ def runtime(monkeypatch):
     tensorflow.config = types.SimpleNamespace(list_physical_devices=fake.list_physical_devices)
     tensorflow.convert_to_tensor = fake.convert_to_tensor
     tensorflow.float32 = "float32"
-    processor = types.ModuleType("sox_tensorflow.processor")
-    processor.spectrogram = fake.spectrogram
-    processor._create_palette_flat = fake.create_palette_flat
+    # No attributes of its own, so each name the adapter takes goes through __getattr__.
+    sox_numpy = types.ModuleType("sox_numpy")
+    sox_numpy.__getattr__ = fake.get_sox_numpy_attribute
     stubs = {
         "tensorflow": tensorflow,
         "tf_keras": types.ModuleType("tf_keras"),
-        "sox_tensorflow": types.ModuleType("sox_tensorflow"),
-        "sox_tensorflow.processor": processor,
+        "sox_numpy": sox_numpy,
     }
     for name, module in stubs.items():
         monkeypatch.setitem(sys.modules, name, module)
-    sys.modules.pop(ADAPTER, None)
-    fake.adapter = importlib.import_module(ADAPTER)
+    # The adapter sets OMP_NUM_THREADS. monkeypatch puts back the value from before the test.
+    monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
+    fake.adapter = import_adapter()
     yield fake
     sys.modules.pop(ADAPTER, None)
     if hasattr(robin_models.owl, "adapter"):
         delattr(robin_models.owl, "adapter")
+
+
+def import_adapter():
+    """Import the adapter again, against the runtime that sys.modules holds now."""
+    sys.modules.pop(ADAPTER, None)
+    return importlib.import_module(ADAPTER)
 
 
 def owl_context(tmp_path, **changes) -> ModelContext:
@@ -396,14 +413,32 @@ def test_device_gpu_is_refused_before_the_weights_load_when_tensorflow_sees_no_g
     [({}, [], "/CPU:0"), ({"device": "gpu"}, ["GPU:0"], "/GPU:0")],
     ids=["cpu", "gpu"],
 )
-def test_each_spectrogram_is_made_on_the_cpu_and_each_batch_on_the_built_device(
+def test_each_spectrogram_is_made_outside_any_device_scope_and_each_batch_on_the_built_device(
     runtime, tmp_path, resources, gpus, device
 ):
     runtime.gpus = gpus
     model = runtime.adapter.build(owl_context(tmp_path, resources={**resources, "batch_size": 2}))
     run(model, write_ramp(tmp_path))
-    assert [call["device"] for call in runtime.rendered] == ["/CPU:0"] * 3
+    assert [call["device"] for call in runtime.rendered] == [None] * 3
     assert [batch["device"] for batch in runtime.batches] == [device] * 2
+
+
+# soxr's OpenMP threads, set by the adapter before sox_numpy loads soxr.
+
+
+def test_importing_the_adapter_sets_omp_num_threads_to_1(runtime):
+    assert os.environ["OMP_NUM_THREADS"] == "1"
+
+
+def test_importing_the_adapter_keeps_an_omp_num_threads_the_caller_set(runtime, monkeypatch):
+    monkeypatch.setenv("OMP_NUM_THREADS", "3")
+    import_adapter()
+    assert os.environ["OMP_NUM_THREADS"] == "3"
+
+
+def test_omp_num_threads_is_set_before_sox_numpy_is_imported(runtime):
+    assert runtime.omp_threads_at_import
+    assert set(runtime.omp_threads_at_import) == {"1"}
 
 
 # What OWL does, whatever its card says.

@@ -169,7 +169,7 @@ def test_output_versions_prints_the_real_table(tmp_path):
 NO_ML_RUNTIME_CHECK = """
 import sys
 
-RUNTIMES = {"tensorflow", "onnxruntime", "sox_tensorflow"}
+RUNTIMES = {"tensorflow", "onnxruntime", "sox_numpy"}
 attempted = []
 
 

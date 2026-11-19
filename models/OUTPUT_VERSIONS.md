@@ -12,6 +12,22 @@ the cause, how the outputs changed and by how much, and what the change means fo
 outputs made under the version before. Entries are newest first for each model, and the
 models are in the table's order.
 
+## model:owl/v4 version 3
+
+- **Date:** 2026-11-19
+- **Commit:** this change (the hash goes here after the commit)
+- **Cause:** a dependency. OWL makes its spectrograms with sox_numpy 0.1 in place of
+  sox_tensorflow 0.1.3. sox_numpy keeps 0.1.3's algorithm, with NumPy's rfft in place of
+  TensorFlow's. Its pixels differ from 0.1.3's in about 0.002% of its test pixels, always
+  by one level. Its agreement with the `sox` binary is as good as 0.1.3's or better (see
+  sox_numpy's README). The adapter also sets `OMP_NUM_THREADS=1` unless it is set, which
+  does not change the pixels.
+- **Outputs:** on the CPU, in the 14 cases of the check (worker image, linux/amd64), the
+  windows and labels are the same. Most scores change, by at most 8.4e-4 on the 3 real
+  recordings (3,969 windows) and at most 4.7e-6 on the 11 made files. No window's top
+  label changes. Silence gives the same scores.
+- **Old outputs:** version 2 scores differ from version 3 scores by the amounts above.
+
 ## model:owl/v4 version 2
 
 - **Date:** 2026-11-18

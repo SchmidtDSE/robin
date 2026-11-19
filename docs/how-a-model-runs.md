@@ -187,10 +187,13 @@ already. A file that cannot be read for its checksum fails its recording with
   its window cutter does more than the others:
   - It makes the window's spectrogram from the window's samples. It writes no image
     file.
-  - It makes the spectrogram on the CPU, also on a GPU worker. Most of this work is
-    NumPy work on the CPU in any case. On the GPU, it would take GPU time from the
-    network and save nothing. The reader threads make the spectrograms of the next
-    batches while the network runs on the current one.
+  - It makes the spectrogram with sox_numpy, which uses NumPy and no TensorFlow. So the
+    spectrogram is made on the CPU, also on a GPU worker, and takes no GPU time from the
+    network. The reader threads make the spectrograms of the next batches while the
+    network runs on the current one.
+  - sox_numpy resamples with soxr, whose OpenMP threads use much more CPU than they
+    save. The reader threads are limited by the CPU, so the adapter sets
+    `OMP_NUM_THREADS=1` before it loads sox_numpy, unless the caller has set it.
   - It changes each pixel to the gray value that the network expects, and puts the
     spectrogram into one batch row.
 

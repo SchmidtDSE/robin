@@ -29,7 +29,7 @@ RUNTIME_MODULES = (
     "robin_models.perch.adapter",
     "robin_models.onnx_head.adapter",
     "tensorflow",
-    "sox_tensorflow",
+    "sox_numpy",
     "scipy",
     "soundfile",
     "onnxruntime",
