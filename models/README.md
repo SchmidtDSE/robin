@@ -140,7 +140,8 @@ version.
 
 Increase a version in the change that changes that model's outputs. The cause can be the
 adapter, the engine, preprocessing, or a locked dependency such as TensorFlow or soxr. A
-change that leaves the outputs the same keeps the version. A new entry point needs an entry
+change that leaves the outputs the same keeps the version. Each increase adds an entry to
+`OUTPUT_VERSIONS.md`, in the same change. A new entry point needs an entry
 in the table; a test refuses an entry point without one.
 
 ## Running more than one model

@@ -8,7 +8,7 @@ from robin_contracts.tasks import ModelOutputVersion
 # Increase a version in the change that changes that model's outputs, whatever the
 # cause: the adapter, the engine, preprocessing, or a locked dependency. A change that
 # leaves the outputs the same keeps the version. Every head on one runtime shares that
-# runtime's version.
+# runtime's version. Each increase adds an entry to models/OUTPUT_VERSIONS.md.
 OUTPUT_VERSIONS: tuple[ModelOutputVersion, ...] = (
     ModelOutputVersion(model="model:owl/v4", version=2),
     ModelOutputVersion(model="model:birdnet/v2p4", version=1),
