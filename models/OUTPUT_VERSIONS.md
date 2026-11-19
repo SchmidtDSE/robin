@@ -15,7 +15,7 @@ models are in the table's order.
 ## model:owl/v4 version 3
 
 - **Date:** 2026-11-19
-- **Commit:** this change (the hash goes here after the commit)
+- **Commit:** 563149d
 - **Cause:** a dependency. OWL makes its spectrograms with sox_numpy 0.1 in place of
   sox_tensorflow 0.1.3. sox_numpy keeps 0.1.3's algorithm, with NumPy's rfft in place of
   TensorFlow's. Its pixels differ from 0.1.3's in about 0.002% of its test pixels, always
